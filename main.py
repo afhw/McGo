@@ -1,39 +1,69 @@
-
 import asyncio
 import configparser
 import os
 import threading
 
 import flet as ft
+import requests
 
-from downloader import download_game_files,  download_version_json
+from downloader import download_game_files, extract_natives
 from java_utils import find_java_paths, get_java_version
-from launcher import (
-    launch_minecraft,
-    get_local_versions,
-    get_remote_versions,
-    get_version_url,
-)
+from launcher import launch_minecraft, get_local_versions
+
+# 镜像源配置
+MIRROR_SOURCES = {
+    "official": "https://launchermeta.mojang.com",
+    "bmclapi": "https://bmclapi2.bangbang93.com",
+    # 更多镜像源...
+}
 
 # 全局变量
 java_path = ""
 game_directory = ".minecraft"
 config_file = "launcher_config.ini"
-# use_mirror = False  # 是否使用镜像源
 mirror_source = "official"  # 默认镜像源为官方源
 
-# 创建配置文件
+# 创建/读取配置文件
 config = configparser.ConfigParser()
 if not os.path.exists(config_file):
     config["USER"] = {"username": "", "uuid": "", "accessToken": ""}
-    config["DOWNLOAD"] = {"mirror_source": "official"}  #"use_mirror": "False",
+    config["DOWNLOAD"] = {"mirror_source": "official"}
     with open(config_file, "w") as f:
         config.write(f)
 else:
     config.read(config_file)
-    # 读取用户选择
-    # use_mirror = config.getboolean("DOWNLOAD", "use_mirror")
     mirror_source = config.get("DOWNLOAD", "mirror_source")
+
+
+def get_remote_versions(version_type):
+    """获取可下载版本列表"""
+    try:
+        response = requests.get(
+            f"{MIRROR_SOURCES[mirror_source]}/mc/game/version_manifest.json"
+        )
+        response.raise_for_status()
+        versions = response.json()["versions"]
+        return [v["id"] for v in versions if v["type"] == version_type]
+    except requests.exceptions.RequestException as e:
+        print(f"获取可下载版本列表时出错: {e}")
+        return []
+
+
+def get_version_url(version_id):
+    """获取版本的下载链接"""
+    try:
+        response = requests.get(
+            f"{MIRROR_SOURCES[mirror_source]}/mc/game/version_manifest.json"
+        )
+        response.raise_for_status()
+        versions = response.json()["versions"]
+        for v in versions:
+            if v["id"] == version_id:
+                return v["url"]
+        return None
+    except requests.exceptions.RequestException as e:
+        print(f"获取版本的下载链接时出错: {e}")
+        return None
 
 
 def main(page: ft.Page):
@@ -87,20 +117,6 @@ def main(page: ft.Page):
     save_button = ft.ElevatedButton(
         text="保存", on_click=lambda _: save_user_config()
     )
-    # 镜像源选择
-    # def on_mirror_change(e):
-    #     global use_mirror
-    #     use_mirror = mirror_switch.value
-    #     config["DOWNLOAD"]["use_mirror"] = str(use_mirror)
-    #     with open(config_file, "w") as f:
-    #         config.write(f)
-    #     page.update()
-    #
-    # mirror_switch = ft.Switch(
-    #     label="使用镜像源",
-    #     value=use_mirror,
-    #     on_change=on_mirror_change,
-    # )
 
     def on_mirror_source_change(e):
         global mirror_source
@@ -108,6 +124,10 @@ def main(page: ft.Page):
         config["DOWNLOAD"]["mirror_source"] = mirror_source
         with open(config_file, "w") as f:
             config.write(f)
+        # 更新可下载版本列表
+        remote_version_dropdown.options = [
+            ft.dropdown.Option(v) for v in get_remote_versions(version_type_dropdown.value)
+        ]
         page.update()
 
     mirror_source_dropdown = ft.Dropdown(
@@ -129,7 +149,7 @@ def main(page: ft.Page):
                 username_input,
                 uuid_input,
                 access_token_input,
-                mirror_source_dropdown,  # 保留镜像源选择下拉菜单
+                mirror_source_dropdown,
                 save_button,
             ],
             alignment=ft.MainAxisAlignment.START,
@@ -213,7 +233,6 @@ def main(page: ft.Page):
     def update_progress(progress):
         if progress_dialog.current is not None:
             progress_bar.value = progress
-            # print(progress_bar.value)
             page.update()
 
     def on_download_click(e, page=page, selected_version=None):
@@ -238,15 +257,17 @@ def main(page: ft.Page):
                     page.update()
 
                     version_url = get_version_url(selected_version)
-                    version_json = download_version_json(version_url)
+                    response = requests.get(version_url)
+                    response.raise_for_status()
+                    version_json = response.json()
 
                     await download_game_files(
-                         version_json,
-                         game_directory,
-                         selected_version,
-                         progress_callback=update_progress
-                     )
-                    # extract_natives(version_json, game_directory, selected_version)
+                        version_json,
+                        game_directory,
+                        selected_version,
+                        progress_callback=update_progress,
+                    )
+                    extract_natives(version_json, game_directory, selected_version)
 
                     page.snack_bar = ft.SnackBar(
                         ft.Text(f"Minecraft {selected_version} 下载完成！")
@@ -262,13 +283,7 @@ def main(page: ft.Page):
                     local_version_dropdown.value = selected_version
                     page.update()
 
-                # except "Server disconnected":
-                #     print("服务器断开链接")
                 except Exception as e:
-                    # if e.errno == e.errno.ECONNRESET:
-                    #     pass
-                    # if e == "Server disconnected":
-                    #     pass
                     print(f"下载游戏时出错: {e}")
                     page.snack_bar = ft.SnackBar(
                         ft.Text(f"下载游戏时出错: {e}")
@@ -296,9 +311,7 @@ def main(page: ft.Page):
     # 可下载版本下拉菜单
     remote_version_dropdown = ft.Dropdown(
         label="选择可下载版本",
-        options=[
-            ft.dropdown.Option(v) for v in get_remote_versions("release")
-        ],
+        options=[ft.dropdown.Option(v) for v in get_remote_versions("release")],
     )
 
     # 版本类型选择
@@ -321,10 +334,7 @@ def main(page: ft.Page):
         on_change=on_version_type_change,
     )
 
-    download_button = ft.ElevatedButton(
-        text="下载", on_click=on_download_click
-    )
-
+    download_button = ft.ElevatedButton(text="下载", on_click=on_download_click)
 
     download_game_content = ft.Container(
         ft.Column(
@@ -350,12 +360,7 @@ def main(page: ft.Page):
     # --- 页面切换 ---
 
     page_content = ft.Stack(
-        [
-            settings_content,
-            launch_game_content,
-            download_game_content,
-        ],
-        expand=True,
+        [settings_content, launch_game_content, download_game_content], expand=True
     )
 
     def on_nav_change(event, page):
@@ -389,12 +394,8 @@ def main(page: ft.Page):
 
     # --- 布局 ---
 
-    page.add(
-        ft.Row([nav_rail, page_content], expand=True),
-    )
+    page.add(ft.Row([nav_rail, page_content], expand=True))
 
 
 # 运行 Flet 应用程序
 ft.app(target=main)
-
-

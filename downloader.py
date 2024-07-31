@@ -1,14 +1,17 @@
+# downloader.py
 import os
-import requests
-import zipfile
 import json
 import asyncio
 import aiohttp
-import patoolib  # pip install patool
+import zipfile
+import shutil
+
+
 
 global_library_path = ""
 
-async def download_file(url, file_path, progress_callback=None, semaphore=None, retries=3):
+
+async def download_file(url, file_path, progress_callback=None, semaphore=None, retries=5):
     """异步下载文件到指定路径，并支持进度回调、信号量控制和重试机制."""
     for attempt in range(retries):
         try:
@@ -49,6 +52,7 @@ async def _download_file(url, file_path, progress_callback=None):
 
 
 async def download_assets(version_json, game_directory, version_id, progress_callback=None):
+    from main import mirror_source, MIRROR_SOURCES
     """下载资源索引文件和资源文件到游戏版本目录"""
     asset_index_url = version_json["assetIndex"]["url"]
     asset_index_path = os.path.join(
@@ -65,11 +69,13 @@ async def download_assets(version_json, game_directory, version_id, progress_cal
 
     # 创建下载任务列表
     tasks = []
-    # 限制并发下载数量为5
-    semaphore = asyncio.Semaphore(5)
+    # 限制并发下载数量为32
+    semaphore = asyncio.Semaphore(32)
     for i, (object_name, object_info) in enumerate(asset_index_json["objects"].items()):
         object_hash = object_info["hash"]
-        object_url = f"https://resources.download.minecraft.net/{object_hash[:2]}/{object_hash}"
+        # object_url = f"https://resources.download.minecraft.net/{object_hash[:2]}/{object_hash}"
+        object_url = f"{MIRROR_SOURCES[mirror_source]}/resources/{object_hash[:2]}/{object_hash}"
+        print(f"{MIRROR_SOURCES[mirror_source]}/resources/{object_hash[:2]}/{object_hash}")
         object_path = os.path.join(
             game_directory, 'versions', version_id, "assets", "objects", object_hash[:2], object_hash
         ).replace('/', os.path.sep)
@@ -79,44 +85,44 @@ async def download_assets(version_json, game_directory, version_id, progress_cal
     # 并发执行所有下载任务
     await asyncio.gather(*tasks)
 
-
-# import zipfile
-
 def extract_natives(version_json, game_directory, version_id):
+    """解压 natives 文件"""
+    natives_directory = os.path.join(
+        game_directory, 'versions', version_id, f"{version_id}-natives"
+    ).replace('/', os.path.sep)
+    os.makedirs(natives_directory, exist_ok=True)
     for library in version_json["libraries"]:
-        # 只处理包含 "natives-windows" 分类器的库文件
         if (
-            "downloads" in library
-            and "classifiers" in library["downloads"]
-            and "natives-windows" in library["downloads"]["classifiers"]
+                "downloads" in library
+                and "classifiers" in library["downloads"]
+                and "natives-windows" in library["downloads"]["classifiers"]
         ):
-            natives_jar_path = os.path.join(
+            library_path = os.path.join(
                 game_directory,
                 'libraries',
                 library["downloads"]["classifiers"]["natives-windows"]["path"]
             ).replace('/', os.path.sep)
-            natives_directory = os.path.join(
-                game_directory, 'versions', version_id, f"{version_id}-natives"
-            )
-            os.makedirs(natives_directory, exist_ok=True)
-
-            # 使用 zipfile 解压 .jar 文件
+            # 使用 zipfile 解压缩 jar 文件
             try:
-                with zipfile.ZipFile(natives_jar_path, "r") as zip_ref:
-                    zip_ref.extractall(natives_directory)
+                with zipfile.ZipFile(library_path, 'r') as zip_ref:
+                    for file_info in zip_ref.infolist():
+                        # 排除 META-INF 文件夹和目录
+                        if not file_info.filename.startswith('META-INF') and not file_info.filename.endswith('/'):
+                            zip_ref.extract(file_info, natives_directory)
             except FileNotFoundError:
-                print(f"警告: natives 文件不存在: {natives_jar_path}")
+                print(f"警告: natives 文件不存在: {library_path}")
             except Exception as e:
                 raise Exception(f"解压 natives 文件时出错：{e}")
+    file_count = len([f for f in os.listdir(natives_directory) if os.path.isfile(os.path.join(natives_directory, f))])
+    print(f"已解压 {file_count} 个 natives 文件到 {natives_directory}")
 
 
-async def download_game_files(version_json, game_directory, version, progress_callback=None,):
+async def download_game_files(version_json, game_directory, version, progress_callback=None, ):
     """下载游戏文件."""
     os.makedirs(game_directory, exist_ok=True)  # 确保游戏目录存在
 
     async def download_and_update_progress(download_function, url, file_path):
         """异步下载文件并更新进度条."""
-        # print(type(url))
         await download_function(url, file_path, progress_callback=progress_callback)
 
     async def update_progress(progress):
@@ -124,7 +130,6 @@ async def download_game_files(version_json, game_directory, version, progress_ca
             progress_callback(progress)
 
     version_id = version_json["id"]
-    # print(version_id["id"])
     # 保存 version.json 文件
     version_json_path = os.path.join(game_directory, "versions", version_id,
                                      f"{version_id}.json")
@@ -145,32 +150,34 @@ async def download_game_files(version_json, game_directory, version, progress_ca
     tasks = []
     semaphore = asyncio.Semaphore(5)
     for i, library in enumerate(version_json["libraries"]):
-        if "downloads" in library and "artifact" in library["downloads"]:
-            library_path = os.path.join(
-                game_directory,
-                "libraries",
-                library["downloads"]["artifact"]["path"]
-            ).replace('/', os.path.sep)
-            # print(library_path)
-            global global_library_path
-            global_library_path = library_path
-            tasks.append(download_file(library["downloads"]["artifact"]["url"], library_path,
-                                       progress_callback, semaphore))
+        if "downloads" in library:
+            # 下载 artifact 文件
+            if "artifact" in library["downloads"]:
+                artifact_path = os.path.join(
+                    game_directory,
+                    "libraries",
+                    library["downloads"]["artifact"]["path"]
+                ).replace('/', os.path.sep)
+                tasks.append(download_file(library["downloads"]["artifact"]["url"],
+                                           artifact_path,
+                                           progress_callback, semaphore))
+
+            # 下载 natives-windows 文件
+            if "classifiers" in library["downloads"] and "natives-windows" in library["downloads"]["classifiers"]:
+                natives_path = os.path.join(
+                    game_directory,
+                    "libraries",
+                    library["downloads"]["classifiers"]["natives-windows"]["path"]
+                ).replace('/', os.path.sep)
+                tasks.append(download_file(library["downloads"]["classifiers"]["natives-windows"]["url"],
+                                           natives_path,
+                                           progress_callback, semaphore))
+                # 下载完成后，解压 natives 文件
+                # extract_natives(version_json, game_directory, version_id)
+
     await asyncio.gather(*tasks)
 
     await update_progress(0.8)
 
     # 下载资源文件
     await download_assets(version_json, game_directory, version_id, progress_callback)
-    # 解压 natives 文件
-    # extract_natives(version_json, game_directory, version_id)
-
-
-def download_version_json(version_url):
-    """下载并解析版本 JSON 文件"""
-    try:
-        response = requests.get(version_url)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        raise Exception(f"下载版本 JSON 文件时出错: {e}")

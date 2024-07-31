@@ -74,7 +74,7 @@ def launch_minecraft(java_path, version_id, game_directory=".minecraft"):
         "--gameDir",
         game_directory,
         "--assetsDir",
-        os.path.join(game_directory, "assets"),
+        os.path.join(game_directory, "versions", version_id,"assets"),
         "--assetIndex",
         version_json["assetIndex"]["id"],
         "--uuid",
@@ -87,6 +87,7 @@ def launch_minecraft(java_path, version_id, game_directory=".minecraft"):
         version_json["type"],
     ]
     # 构造 Classpath
+    print(version_json["assetIndex"]["id"])
     classpath = [
         os.path.join(game_directory, "libraries", library["downloads"]["artifact"]["path"])
         for library in version_json["libraries"]
