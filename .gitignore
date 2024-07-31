@@ -3,3 +3,6 @@
 /venv/
 /logs/
 /.minecraft/
+/.idea/misc.xml
+/.idea/rec.iml
+/.idea/workspace.xml
