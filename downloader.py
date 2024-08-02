@@ -6,8 +6,6 @@ import aiohttp
 import zipfile
 import shutil
 
-
-
 global_library_path = ""
 
 
@@ -84,6 +82,7 @@ async def download_assets(version_json, game_directory, version_id, progress_cal
 
     # 并发执行所有下载任务
     await asyncio.gather(*tasks)
+
 
 def extract_natives(version_json, game_directory, version_id):
     """解压 natives 文件"""

@@ -1,3 +1,4 @@
+# main.py
 import asyncio
 import configparser
 import os
@@ -178,7 +179,7 @@ def main(page: ft.Page):
         def launch_game_thread():
             try:
                 if not launch_minecraft(
-                    java_path, selected_version, game_directory
+                        java_path, selected_version, game_directory
                 ):
                     page.snack_bar = ft.SnackBar(
                         ft.Text(
