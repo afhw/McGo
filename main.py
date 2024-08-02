@@ -1,15 +1,21 @@
-# main.py
 import asyncio
 import configparser
 import os
 import threading
+import webbrowser
 
 import flet as ft
 import requests
+from flask import Flask, request, redirect
 
 from downloader import download_game_files, extract_natives
 from java_utils import find_java_paths, get_java_version
 from launcher import launch_minecraft, get_local_versions
+from auth import MicrosoftAuthenticator
+
+# --- 配置 ---
+client_id = "cf1d47c2-2199-495a-9822-a2a2b97cd568"  # 你的 Azure 应用程序 ID
+redirect_uri = "http://localhost:5000/login/callback"  # 回调地址
 
 # 镜像源配置
 MIRROR_SOURCES = {
@@ -23,17 +29,34 @@ java_path = ""
 game_directory = ".minecraft"
 config_file = "launcher_config.ini"
 mirror_source = "official"  # 默认镜像源为官方源
+use_microsoft_login = False  # 是否使用微软登录
 
 # 创建/读取配置文件
 config = configparser.ConfigParser()
 if not os.path.exists(config_file):
     config["USER"] = {"username": "", "uuid": "", "accessToken": ""}
     config["DOWNLOAD"] = {"mirror_source": "official"}
+    config["AUTH"] = {"use_microsoft_login": "False", "refresh_token": ""}
     with open(config_file, "w") as f:
         config.write(f)
 else:
     config.read(config_file)
     mirror_source = config.get("DOWNLOAD", "mirror_source")
+    use_microsoft_login = config.getboolean("AUTH", "use_microsoft_login")
+
+# 创建认证器实例
+authenticator = MicrosoftAuthenticator(client_id, redirect_uri)
+
+# 创建 Flask 应用
+app = Flask(__name__)
+
+
+# --- Flask 路由 ---
+@app.route("/login/callback")
+def login_callback():
+    # 获取授权码
+    authenticator.authorization_code = request.args.get("code")
+    return "登录成功，你可以关闭此窗口"
 
 
 def get_remote_versions(version_type):
@@ -67,8 +90,14 @@ def get_version_url(version_id):
         return None
 
 
-def main(page: ft.Page):
+async def main(page: ft.Page):
     page.title = "Minecraft 启动器"
+
+    # --- 启动 Flask 应用 ---
+    def run_flask_app():
+        app.run(port=5000)
+
+    threading.Thread(target=run_flask_app).start()
 
     # --- 导航栏 ---
     nav_items = [
@@ -99,21 +128,31 @@ def main(page: ft.Page):
     java_version = ft.Text("")
 
     def save_user_config():
+        global use_microsoft_login
         config["USER"]["username"] = username_input.value
         config["USER"]["uuid"] = uuid_input.value
         config["USER"]["accessToken"] = access_token_input.value
+        config["AUTH"]["use_microsoft_login"] = str(use_microsoft_login)
         with open(config_file, "w") as f:
             config.write(f)
         page.snack_bar = ft.SnackBar(ft.Text("用户信息已保存"))
         page.snack_bar.open = True
+        update_settings_visibility()
         page.update()
 
     username_input = ft.TextField(
-        label="用户名", value=config["USER"]["username"]
+        label="用户名",
+        value=config["USER"]["username"],
+        visible=not use_microsoft_login,
     )
-    uuid_input = ft.TextField(label="UUID", value=config["USER"]["uuid"])
+    uuid_input = ft.TextField(
+        label="UUID", value=config["USER"]["uuid"], visible=not use_microsoft_login
+    )
     access_token_input = ft.TextField(
-        label="Access Token", value=config["USER"]["accessToken"], password=True
+        label="Access Token",
+        value=config["USER"]["accessToken"],
+        password=True,
+        visible=not use_microsoft_login,
     )
     save_button = ft.ElevatedButton(
         text="保存", on_click=lambda _: save_user_config()
@@ -127,7 +166,8 @@ def main(page: ft.Page):
             config.write(f)
         # 更新可下载版本列表
         remote_version_dropdown.options = [
-            ft.dropdown.Option(v) for v in get_remote_versions(version_type_dropdown.value)
+            ft.dropdown.Option(v)
+            for v in get_remote_versions(version_type_dropdown.value)
         ]
         page.update()
 
@@ -141,15 +181,64 @@ def main(page: ft.Page):
         value=mirror_source,
         on_change=on_mirror_source_change,
     )
+
+    # --- 处理微软登录 ---
+    def handle_microsoft_login():
+        webbrowser.open(authenticator.get_login_url())
+
+        async def wait_for_authentication():
+            while authenticator.authorization_code is None:
+                await asyncio.sleep(1)
+            await authenticator.authenticate()
+            # 保存刷新令牌到配置文件
+            config["AUTH"]["refresh_token"] = authenticator.refresh_token
+            with open(config_file, "w") as f:
+                config.write(f)
+
+        # 在新的线程中启动异步函数
+        threading.Thread(
+            target=asyncio.run, args=(wait_for_authentication(),)
+        ).start()
+
+    login_button = ft.ElevatedButton(
+        text="使用微软账号登录",
+        on_click=lambda _: handle_microsoft_login(),
+        visible=use_microsoft_login,
+    )
+
+    def on_login_mode_change(e):
+        global use_microsoft_login
+        use_microsoft_login = login_mode_dropdown.value == "microsoft"
+        update_settings_visibility()
+        page.update()
+
+    login_mode_dropdown = ft.Dropdown(
+        label="登录模式",
+        options=[
+            ft.dropdown.Option("offline"),
+            ft.dropdown.Option("microsoft"),
+        ],
+        value="microsoft" if use_microsoft_login else "offline",
+        on_change=on_login_mode_change,
+    )
+
+    def update_settings_visibility():
+        username_input.visible = not use_microsoft_login
+        uuid_input.visible = not use_microsoft_login
+        access_token_input.visible = not use_microsoft_login
+        login_button.visible = use_microsoft_login
+
     settings_content = ft.Container(
         ft.Column(
             [
                 ft.Text("设置页面", size=20),
                 java_paths,
                 java_version,
+                login_mode_dropdown,
                 username_input,
                 uuid_input,
                 access_token_input,
+                login_button,
                 mirror_source_dropdown,
                 save_button,
             ],
@@ -176,36 +265,59 @@ def main(page: ft.Page):
             page.update()
             return
 
-        def launch_game_thread():
+        async def launch_game_async():
             try:
+                # 尝试刷新访问令牌
+                if (
+                    use_microsoft_login
+                    and config.has_option("AUTH", "refresh_token")
+                ):
+                    await authenticator.refresh_access_token(
+                        config.get("AUTH", "refresh_token")
+                    )
+
+                # 如果已登录微软账号，则获取用户信息
+                if authenticator.xsts_token:
+                    uuid, username = await authenticator.get_minecraft_profile()
+                else:
+                    uuid = None
+                    username = None
+
+                # 启动游戏
                 if not launch_minecraft(
-                        java_path, selected_version, game_directory
+                    java_path,
+                    selected_version,
+                    game_directory,
+                    authenticator.xsts_token,
+                    username,
+                    uuid,
                 ):
                     page.snack_bar = ft.SnackBar(
-                        ft.Text(
-                            f"本地未找到版本 {selected_version}，请先下载"
-                        )
+                        ft.Text(f"本地未找到版本 {selected_version}，请先下载")
                     )
-                    page.snack_bar.open = True
-                    page.update()
                 else:
                     page.snack_bar = ft.SnackBar(
                         ft.Text(f"正在启动 Minecraft {selected_version}...")
                     )
-                    page.snack_bar.open = True
-                    page.update()
+                page.snack_bar.open = True
+                page.update()
             except Exception as e:
                 print(f"启动游戏时出错: {e}")
                 page.snack_bar = ft.SnackBar(ft.Text(f"启动游戏时出错: {e}"))
                 page.snack_bar.open = True
                 page.update()
 
-        threading.Thread(target=launch_game_thread).start()
+        # 在新的线程中启动异步函数
+        threading.Thread(
+            target=asyncio.run, args=(launch_game_async(),)
+        ).start()
 
     # 本地版本下拉菜单
     local_version_dropdown = ft.Dropdown(
         label="选择本地版本",
-        options=[ft.dropdown.Option(v) for v in get_local_versions(game_directory)],
+        options=[
+            ft.dropdown.Option(v) for v in get_local_versions(game_directory)
+        ],
     )
 
     launch_button = ft.ElevatedButton(
@@ -268,7 +380,9 @@ def main(page: ft.Page):
                         selected_version,
                         progress_callback=update_progress,
                     )
-                    extract_natives(version_json, game_directory, selected_version)
+                    extract_natives(
+                        version_json, game_directory, selected_version
+                    )
 
                     page.snack_bar = ft.SnackBar(
                         ft.Text(f"Minecraft {selected_version} 下载完成！")
@@ -312,14 +426,17 @@ def main(page: ft.Page):
     # 可下载版本下拉菜单
     remote_version_dropdown = ft.Dropdown(
         label="选择可下载版本",
-        options=[ft.dropdown.Option(v) for v in get_remote_versions("release")],
+        options=[
+            ft.dropdown.Option(v) for v in get_remote_versions("release")
+        ],
     )
 
     # 版本类型选择
     def on_version_type_change(e):
         version_type = version_type_dropdown.value
         remote_version_dropdown.options = [
-            ft.dropdown.Option(v) for v in get_remote_versions(version_type)
+            ft.dropdown.Option(v)
+            for v in get_remote_versions(version_type)
         ]
         page.update()
 
@@ -335,7 +452,9 @@ def main(page: ft.Page):
         on_change=on_version_type_change,
     )
 
-    download_button = ft.ElevatedButton(text="下载", on_click=on_download_click)
+    download_button = ft.ElevatedButton(
+        text="下载", on_click=on_download_click
+    )
 
     download_game_content = ft.Container(
         ft.Column(
@@ -361,7 +480,8 @@ def main(page: ft.Page):
     # --- 页面切换 ---
 
     page_content = ft.Stack(
-        [settings_content, launch_game_content, download_game_content], expand=True
+        [settings_content, launch_game_content, download_game_content],
+        expand=True,
     )
 
     def on_nav_change(event, page):
@@ -396,6 +516,8 @@ def main(page: ft.Page):
     # --- 布局 ---
 
     page.add(ft.Row([nav_rail, page_content], expand=True))
+
+    update_settings_visibility()
 
 
 # 运行 Flet 应用程序

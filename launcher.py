@@ -1,4 +1,3 @@
-# launcher.py
 import os
 import subprocess
 import json
@@ -10,8 +9,8 @@ config = configparser.ConfigParser()
 config.read("launcher_config.ini")
 
 
-def launch_minecraft(java_path, version_id, game_directory=".minecraft"):
-    """启动 Minecraft，如果本地没有该版本或版本文件不完整，则返回 False。"""
+def launch_minecraft(java_path, version_id, game_directory=".minecraft", xsts_token=None, username=None, uuid=None):
+    """启动 Minecraft。"""
     version_json_path = os.path.join(
         game_directory, "versions", version_id, f"{version_id}.json"
     )
@@ -60,33 +59,23 @@ def launch_minecraft(java_path, version_id, game_directory=".minecraft"):
         "-XX:G1HeapRegionSize=32M",
         f"-Djava.library.path={os.path.join(game_directory, 'versions', version_json['id'], version_json['id'] + '-natives')}",
     ]
-    print(f"-Djava.library.path={os.path.join(game_directory, 'versions', version_json['id'], version_json['id'] + '-natives')}")
-    # 从配置文件读取用户信息
-    username = config["USER"]["username"]
-    uuid = config["USER"]["uuid"]
-    access_token = config["USER"]["accessToken"]
+    print(
+        f"-Djava.library.path={os.path.join(game_directory, 'versions', version_json['id'], version_json['id'] + '-natives')}"
+    )
 
     # 构造游戏参数
     game_arguments = [
-        "--username",
-        username,
-        "--version",
-        version_json["id"],
-        "--gameDir",
-        game_directory,
-        "--assetsDir",
-        os.path.join(game_directory, "versions", version_id,"assets"),
-        "--assetIndex",
-        version_json["assetIndex"]["id"],
-        "--uuid",
-        uuid,
-        "--accessToken",
-        access_token,
-        "--userType",
-        "mojang",
-        "--versionType",
-        version_json["type"],
+        "--username", username if username else config["USER"]["username"],
+        "--version", version_json["id"],
+        "--gameDir", game_directory,
+        "--assetsDir", os.path.join(game_directory, "versions", version_id, "assets"),
+        "--assetIndex", version_json["assetIndex"]["id"],
+        "--uuid", uuid if uuid else config["USER"]["uuid"],
+        "--accessToken", xsts_token if xsts_token else config["USER"]["accessToken"],
+        "--userType", "msa" if xsts_token else "mojang",  # 根据登录方式设置 userType
+        "--versionType", version_json["type"],
     ]
+
     # 构造 Classpath
     print(version_json["assetIndex"]["id"])
     classpath = [
@@ -110,6 +99,7 @@ def launch_minecraft(java_path, version_id, game_directory=".minecraft"):
         version_json["mainClass"],
         *game_arguments,
     ]
+
     # 启动游戏
     subprocess.Popen(command)
     return True
