@@ -59,7 +59,7 @@ async def download_assets(version_json, game_directory, version_id, progress_cal
         game_directory, 'versions', version_id, "assets", "indexes",
         f"{version_json['assetIndex']['id']}.json"
     ).replace('/', os.path.sep)
-
+    print(asset_index_url)
     # 下载资源索引文件
     await download_file(asset_index_url, asset_index_path, progress_callback)
 
@@ -119,6 +119,7 @@ def extract_natives(version_json, game_directory, version_id):
 
 async def download_game_files(version_json, game_directory, version, progress_callback=None, ):
     """下载游戏文件."""
+    from main import mirror_source, MIRROR_SOURCES
     os.makedirs(game_directory, exist_ok=True)  # 确保游戏目录存在
 
     async def download_and_update_progress(download_function, url, file_path):
@@ -139,6 +140,7 @@ async def download_game_files(version_json, game_directory, version, progress_ca
 
     # 下载主文件
     await update_progress(0.0)
+    print(version_json["downloads"]["client"]["url"])
     await download_and_update_progress(
         download_file,
         version_json["downloads"]["client"]["url"],
