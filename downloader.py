@@ -69,17 +69,17 @@ async def download_assets(version_json, game_directory, version_id, MIRROR_SOURC
     tasks = []
     # 限制并发下载数量为32
     semaphore = asyncio.Semaphore(32)
-
+    object_url = ""
     for i, (object_name, object_info) in enumerate(asset_index_json["objects"].items()):
         object_hash = object_info["hash"]
         # object_url = f"https://resources.download.minecraft.net/{object_hash[:2]}/{object_hash}"
         if MIRROR_SOURCES == "https://resources.download.minecraft.net":
             object_url = f"{MIRROR_SOURCES}/resources/{object_hash[:2]}/{object_hash}"
-        elif MIRROR_SOURCES == "bmclapi2.bangbang93.com":
+            print(object_url)
+        elif MIRROR_SOURCES == "https://bmclapi2.bangbang93.com":
             object_url = f"https://bmclapi2.bangbang93.com/assets/resources/{object_hash[:2]}/{object_hash}"
 
-
-        print(f"{MIRROR_SOURCES}/resources/{object_hash[:2]}/{object_hash}")
+            print(object_url)
         object_path = os.path.join(
             game_directory, 'versions', version_id, "assets", "objects", object_hash[:2], object_hash
         ).replace('/', os.path.sep)
@@ -146,9 +146,14 @@ async def download_game_files(version_json, game_directory, version, MIRROR_SOUR
     # 下载主文件
     await update_progress(0.0)
     print(version_json["downloads"]["client"]["url"])
+    main_file = str(version_json["downloads"]["client"]["url"])
+    print(MIRROR_SOURCES)
+    if MIRROR_SOURCES == "https://bmclapi2.bangbang93.com":
+        main_file = main_file.replace("piston-data.mojang.com", "bmclapi2.bangbang93.com")
+        print(main_file)
     await download_and_update_progress(
         download_file,
-        version_json["downloads"]["client"]["url"],
+        main_file,
         os.path.join(game_directory, "versions", version_id, f"{version_id}.jar"),
     )
     await update_progress(0.2)
