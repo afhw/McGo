@@ -49,8 +49,8 @@ async def _download_file(url, file_path, progress_callback=None):
                             pass
 
 
-async def download_assets(version_json, game_directory, version_id, progress_callback=None):
-    from main import mirror_source, MIRROR_SOURCES
+async def download_assets(version_json, game_directory, version_id, MIRROR_SOURCES, progress_callback=None):
+    # from main import mirror_source,
     """下载资源索引文件和资源文件到游戏版本目录"""
     asset_index_url = version_json["assetIndex"]["url"]
     asset_index_path = os.path.join(
@@ -116,7 +116,7 @@ def extract_natives(version_json, game_directory, version_id):
     print(f"已解压 {file_count} 个 natives 文件到 {natives_directory}")
 
 
-async def download_game_files(version_json, game_directory, version, progress_callback=None, ):
+async def download_game_files(version_json, game_directory, version, MIRROR_SOURCES, progress_callback=None, ):
     """下载游戏文件."""
     # from main import mirror_source, MIRROR_SOURCES
     os.makedirs(game_directory, exist_ok=True)  # 确保游戏目录存在
@@ -181,4 +181,4 @@ async def download_game_files(version_json, game_directory, version, progress_ca
     await update_progress(0.8)
 
     # 下载资源文件
-    await download_assets(version_json, game_directory, version_id, progress_callback)
+    await download_assets(version_json, game_directory, version_id, MIRROR_SOURCES, progress_callback)
