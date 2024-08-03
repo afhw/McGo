@@ -69,10 +69,16 @@ async def download_assets(version_json, game_directory, version_id, MIRROR_SOURC
     tasks = []
     # 限制并发下载数量为32
     semaphore = asyncio.Semaphore(32)
+
     for i, (object_name, object_info) in enumerate(asset_index_json["objects"].items()):
         object_hash = object_info["hash"]
         # object_url = f"https://resources.download.minecraft.net/{object_hash[:2]}/{object_hash}"
-        object_url = f"{MIRROR_SOURCES}/resources/{object_hash[:2]}/{object_hash}"
+        if MIRROR_SOURCES == "https://resources.download.minecraft.net":
+            object_url = f"{MIRROR_SOURCES}/resources/{object_hash[:2]}/{object_hash}"
+        elif MIRROR_SOURCES == "bmclapi2.bangbang93.com":
+            object_url = f"https://bmclapi2.bangbang93.com/assets/resources/{object_hash[:2]}/{object_hash}"
+
+
         print(f"{MIRROR_SOURCES}/resources/{object_hash[:2]}/{object_hash}")
         object_path = os.path.join(
             game_directory, 'versions', version_id, "assets", "objects", object_hash[:2], object_hash
