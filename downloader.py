@@ -118,7 +118,7 @@ def extract_natives(version_json, game_directory, version_id):
 
 async def download_game_files(version_json, game_directory, version, progress_callback=None, ):
     """下载游戏文件."""
-    from main import mirror_source, MIRROR_SOURCES
+    # from main import mirror_source, MIRROR_SOURCES
     os.makedirs(game_directory, exist_ok=True)  # 确保游戏目录存在
 
     async def download_and_update_progress(download_function, url, file_path):
