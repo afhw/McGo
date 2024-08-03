@@ -77,7 +77,7 @@ async def download_assets(version_json, game_directory, version_id, MIRROR_SOURC
             object_url = f"{MIRROR_SOURCES}/resources/{object_hash[:2]}/{object_hash}"
             print(object_url)
         elif MIRROR_SOURCES == "https://bmclapi2.bangbang93.com":
-            object_url = f"https://bmclapi2.bangbang93.com/assets/resources/{object_hash[:2]}/{object_hash}"
+            object_url = f"https://bmclapi2.bangbang93.com/assets/{object_hash[:2]}/{object_hash}"
 
             print(object_url)
         object_path = os.path.join(
