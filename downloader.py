@@ -72,8 +72,8 @@ async def download_assets(version_json, game_directory, version_id, MIRROR_SOURC
     for i, (object_name, object_info) in enumerate(asset_index_json["objects"].items()):
         object_hash = object_info["hash"]
         # object_url = f"https://resources.download.minecraft.net/{object_hash[:2]}/{object_hash}"
-        object_url = f"{MIRROR_SOURCES[mirror_source]}/resources/{object_hash[:2]}/{object_hash}"
-        print(f"{MIRROR_SOURCES[mirror_source]}/resources/{object_hash[:2]}/{object_hash}")
+        object_url = f"{MIRROR_SOURCES}/resources/{object_hash[:2]}/{object_hash}"
+        print(f"{MIRROR_SOURCES}/resources/{object_hash[:2]}/{object_hash}")
         object_path = os.path.join(
             game_directory, 'versions', version_id, "assets", "objects", object_hash[:2], object_hash
         ).replace('/', os.path.sep)

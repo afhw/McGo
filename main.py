@@ -378,7 +378,7 @@ async def main(page: ft.Page):
                         version_json,
                         game_directory,
                         selected_version,
-                        MIRROR_SOURCES,
+                        MIRROR_SOURCES[mirror_source],
                         progress_callback=update_progress,
                     )
                     extract_natives(
