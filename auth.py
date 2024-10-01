@@ -4,6 +4,7 @@ import requests
 
 class MicrosoftAuthenticator:
     def __init__(self, client_id, redirect_uri):
+        self.minecraft_access_token = None
         self.client_id = client_id
         self.redirect_uri = redirect_uri
         self.authorization_code = None
@@ -70,17 +71,52 @@ class MicrosoftAuthenticator:
         response = requests.post(url, json=data, headers=headers)
         response.raise_for_status()
         self.xsts_token = response.json()["Token"]
+        print(self.xsts_token)
+        print("\n")
+        print(self.user_hash)
+
+        # 获取mc访问令牌
+
+
+        def get_minecraft_access_token(xsts_token, uhs):
+            url = "https://api.minecraftservices.com/authentication/login_with_xbox"
+            headers = {
+             "Content-Type": "application/json"
+         }
+            data = {
+            "identityToken": f"XBL3.0 x={uhs};{xsts_token}"
+            }
+            response = requests.post(url, json=data, headers=headers)
+
+            if response.status_code == 200:
+                access_token_data = response.json()
+                minecraft_access_token = access_token_data["access_token"]
+                print("Minecraft Access Token:", minecraft_access_token)
+                return minecraft_access_token
+            else:
+               # print("Minecraft Access Token:", minecraft_access_token)
+               print("Error:", response.json())
+               return None
+
+        self.minecraft_access_token = get_minecraft_access_token(self.xsts_token, self.user_hash)
+        print(self.minecraft_access_token)
 
     async def get_minecraft_profile(self):
-        if not self.xsts_token or not self.user_hash:
-            raise Exception("请先进行身份验证")
-
         url = "https://api.minecraftservices.com/minecraft/profile"
-        headers = {"Authorization": f"Bearer XBL3.0 x={self.user_hash};{self.xsts_token}"}
+        headers = {
+            "Authorization": f"Bearer {self.minecraft_access_token}"
+        }
         response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        profile = response.json()
-        return profile["id"], profile["name"]  # 返回 UUID 和用户名
+
+        if response.status_code == 200:
+            profile = response.json()
+            print("UUID:", profile["id"])
+            print("Username:", profile["name"])
+            print("Skins:", profile["skins"])
+            return profile["id"], profile["name"], profile["skins"]
+        else:
+            print("Error:", response.json())
+            return None
 
     async def refresh_access_token(self, refresh_token):
         if not refresh_token:

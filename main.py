@@ -278,7 +278,7 @@ async def main(page: ft.Page):
 
                 # 如果已登录微软账号，则获取用户信息
                 if authenticator.xsts_token:
-                    uuid, username = await authenticator.get_minecraft_profile()
+                    uuid, username, skin = await authenticator.get_minecraft_profile()
                 else:
                     uuid = None
                     username = None
@@ -288,7 +288,7 @@ async def main(page: ft.Page):
                     java_path,
                     selected_version,
                     game_directory,
-                    authenticator.xsts_token,
+                    authenticator.minecraft_access_token,
                     username,
                     uuid,
                 ):
@@ -348,7 +348,7 @@ async def main(page: ft.Page):
             progress_bar.value = progress
             page.update()
 
-    def on_download_click(e, page=page, selected_version=None):
+    def  on_download_click(e, page=page, selected_version=None):
         selected_version = remote_version_dropdown.value
         if not selected_version:
             page.snack_bar = ft.SnackBar(ft.Text("请选择要下载的版本"))

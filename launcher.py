@@ -9,7 +9,7 @@ config = configparser.ConfigParser()
 config.read("launcher_config.ini")
 
 
-def launch_minecraft(java_path, version_id, game_directory=".minecraft", xsts_token=None, username=None, uuid=None):
+def launch_minecraft(java_path, version_id, game_directory=".minecraft", minecraft_access_token=None, username=None, uuid=None):
     """启动 Minecraft。"""
     version_json_path = os.path.join(
         game_directory, "versions", version_id, f"{version_id}.json"
@@ -62,7 +62,7 @@ def launch_minecraft(java_path, version_id, game_directory=".minecraft", xsts_to
     print(
         f"-Djava.library.path={os.path.join(game_directory, 'versions', version_json['id'], version_json['id'] + '-natives')}"
     )
-
+    print("UUID:",uuid)
     # 构造游戏参数
     game_arguments = [
         "--username", username if username else config["USER"]["username"],
@@ -71,8 +71,8 @@ def launch_minecraft(java_path, version_id, game_directory=".minecraft", xsts_to
         "--assetsDir", os.path.join(game_directory, "versions", version_id, "assets"),
         "--assetIndex", version_json["assetIndex"]["id"],
         "--uuid", uuid if uuid else config["USER"]["uuid"],
-        "--accessToken", xsts_token if xsts_token else config["USER"]["accessToken"],
-        "--userType", "msa" if xsts_token else "mojang",  # 根据登录方式设置 userType
+        "--accessToken", minecraft_access_token if minecraft_access_token else config["USER"]["accessToken"],
+        "--userType", "msa" if minecraft_access_token else "mojang",  # 根据登录方式设置 userType
         "--versionType", version_json["type"],
     ]
 
