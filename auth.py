@@ -23,27 +23,8 @@ class MicrosoftAuthenticator:
             f"&scope=XboxLive.signin%20offline_access"
         )
 
-    async def authenticate(self):
-        if not self.authorization_code:
-            raise Exception("请先使用 get_login_url() 获取授权码")
-
-        # 使用授权码获取访问令牌和刷新令牌
-        url = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
-        data = {
-            "client_id": self.client_id,
-            "code": self.authorization_code,
-            "grant_type": "authorization_code",
-            "redirect_uri": self.redirect_uri,
-            "scope": "XboxLive.signin offline_access",
-        }
-        headers = {"Content-Type": "application/x-www-form-urlencoded"}
-        response = requests.post(url, data=data, headers=headers)
-        response.raise_for_status()
-        tokens = response.json()
-        self.access_token = tokens["access_token"]
-        self.refresh_token = tokens["refresh_token"]
-
-        # 使用访问令牌进行 XBox Live 身份验证
+    async def _exchange_tokens(self):
+        """完整的 Xbox Live -> XSTS -> Minecraft token 交换流程"""
         url = "https://user.auth.xboxlive.com/user/authenticate"
         data = {
             "Properties": {
@@ -60,7 +41,6 @@ class MicrosoftAuthenticator:
         xbl_token = response.json()["Token"]
         self.user_hash = response.json()["DisplayClaims"]["xui"][0]["uhs"]
 
-        # 使用 XBL 令牌进行 XSTS 身份验证
         url = "https://xsts.auth.xboxlive.com/xsts/authorize"
         data = {
             "Properties": {"SandboxId": "RETAIL", "UserTokens": [xbl_token]},
@@ -71,52 +51,48 @@ class MicrosoftAuthenticator:
         response = requests.post(url, json=data, headers=headers)
         response.raise_for_status()
         self.xsts_token = response.json()["Token"]
-        print(self.xsts_token)
-        print("\n")
-        print(self.user_hash)
 
-        # 获取mc访问令牌
+        url = "https://api.minecraftservices.com/authentication/login_with_xbox"
+        headers = {"Content-Type": "application/json"}
+        data = {"identityToken": f"XBL3.0 x={self.user_hash};{self.xsts_token}"}
+        response = requests.post(url, json=data, headers=headers)
+        response.raise_for_status()
+        self.minecraft_access_token = response.json()["access_token"]
 
+    async def authenticate(self):
+        if not self.authorization_code:
+            raise Exception("请先使用 get_login_url() 获取授权码")
 
-        def get_minecraft_access_token(xsts_token, uhs):
-            url = "https://api.minecraftservices.com/authentication/login_with_xbox"
-            headers = {
-             "Content-Type": "application/json"
-         }
-            data = {
-            "identityToken": f"XBL3.0 x={uhs};{xsts_token}"
-            }
-            response = requests.post(url, json=data, headers=headers)
+        url = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
+        data = {
+            "client_id": self.client_id,
+            "code": self.authorization_code,
+            "grant_type": "authorization_code",
+            "redirect_uri": self.redirect_uri,
+            "scope": "XboxLive.signin offline_access",
+        }
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        response = requests.post(url, data=data, headers=headers)
+        response.raise_for_status()
+        tokens = response.json()
+        self.access_token = tokens["access_token"]
+        self.refresh_token = tokens["refresh_token"]
 
-            if response.status_code == 200:
-                access_token_data = response.json()
-                minecraft_access_token = access_token_data["access_token"]
-                print("Minecraft Access Token:", minecraft_access_token)
-                return minecraft_access_token
-            else:
-               # print("Minecraft Access Token:", minecraft_access_token)
-               print("Error:", response.json())
-               return None
-
-        self.minecraft_access_token = get_minecraft_access_token(self.xsts_token, self.user_hash)
-        print(self.minecraft_access_token)
+        await self._exchange_tokens()
 
     async def get_minecraft_profile(self):
+        if not self.minecraft_access_token:
+            raise Exception("未登录或 Minecraft access token 不可用")
+
         url = "https://api.minecraftservices.com/minecraft/profile"
-        headers = {
-            "Authorization": f"Bearer {self.minecraft_access_token}"
-        }
+        headers = {"Authorization": f"Bearer {self.minecraft_access_token}"}
         response = requests.get(url, headers=headers)
 
         if response.status_code == 200:
             profile = response.json()
-            print("UUID:", profile["id"])
-            print("Username:", profile["name"])
-            print("Skins:", profile["skins"])
-            return profile["id"], profile["name"], profile["skins"]
+            return profile["id"], profile["name"], profile.get("skins", [])
         else:
-            print("Error:", response.json())
-            return None
+            raise Exception(f"获取 Minecraft 档案失败: {response.status_code} {response.text}")
 
     async def refresh_access_token(self, refresh_token):
         if not refresh_token:
@@ -135,3 +111,5 @@ class MicrosoftAuthenticator:
         tokens = response.json()
         self.access_token = tokens["access_token"]
         self.refresh_token = tokens["refresh_token"]
+
+        await self._exchange_tokens()

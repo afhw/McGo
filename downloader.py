@@ -1,195 +1,414 @@
 # downloader.py
-import os
-import json
 import asyncio
-import aiohttp
-import zipfile
+import json
+import os
 import shutil
+import time
+import zipfile
+from dataclasses import dataclass
 
-global_library_path = ""
+import aiohttp
+
+CHUNK_SIZE = 128 * 1024
+MAX_CORE_CONCURRENCY = 12
+MAX_ASSET_CONCURRENCY = 24
+REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=None, sock_connect=20, sock_read=60)
 
 
-async def download_file(url, file_path, progress_callback=None, semaphore=None, retries=5):
-    """异步下载文件到指定路径，并支持进度回调、信号量控制和重试机制."""
+@dataclass
+class DownloadJob:
+    url: str
+    file_path: str
+    relative_path: str
+    size: int = 0
+    label: str = ""
+
+
+class DownloadProgress:
+    def __init__(self, callback=None, emit_interval=0.2):
+        self.callback = callback
+        self.emit_interval = emit_interval
+        self.total_bytes = 0
+        self.ready_bytes = 0
+        self.total_files = 0
+        self.completed_files = 0
+        self.reused_files = 0
+        self.phase = "准备下载"
+        self.current_file = ""
+        self._last_emit = time.monotonic()
+        self._last_speed_calc = self._last_emit
+        self._network_window_bytes = 0
+        self._speed_bytes = 0.0
+
+    def add_totals(self, total_bytes, total_files):
+        self.total_bytes += max(0, int(total_bytes or 0))
+        self.total_files += max(0, int(total_files or 0))
+        self.emit(force=True)
+
+    def set_phase(self, phase, current_file=""):
+        self.phase = phase
+        if current_file:
+            self.current_file = current_file
+        self.emit(force=True)
+
+    def set_current_file(self, current_file):
+        self.current_file = current_file
+        self.emit()
+
+    def advance_network(self, byte_count):
+        byte_count = max(0, int(byte_count or 0))
+        self.ready_bytes += byte_count
+        self._network_window_bytes += byte_count
+        self.emit()
+
+    def advance_reused(self, byte_count):
+        self.ready_bytes += max(0, int(byte_count or 0))
+        self.reused_files += 1
+        self.emit(force=True)
+
+    def finish_file(self):
+        self.completed_files += 1
+        self.emit(force=True)
+
+    def emit(self, force=False):
+        if not self.callback:
+            return
+
+        now = time.monotonic()
+        elapsed = now - self._last_emit
+        if not force and elapsed < self.emit_interval:
+            return
+
+        speed_elapsed = max(now - self._last_speed_calc, 1e-6)
+        self._speed_bytes = self._network_window_bytes / speed_elapsed
+        self._network_window_bytes = 0
+        self._last_emit = now
+        self._last_speed_calc = now
+        self.callback(self.snapshot())
+
+    def snapshot(self):
+        progress = 0.0
+        if self.total_bytes > 0:
+            progress = min(1.0, self.ready_bytes / self.total_bytes)
+        elif self.total_files > 0:
+            progress = min(1.0, self.completed_files / self.total_files)
+
+        return {
+            "progress": progress,
+            "phase": self.phase,
+            "current_file": self.current_file,
+            "completed_files": self.completed_files,
+            "total_files": self.total_files,
+            "reused_files": self.reused_files,
+            "downloaded_bytes": self.ready_bytes,
+            "total_bytes": self.total_bytes,
+            "speed_bytes": self._speed_bytes,
+        }
+
+
+def _ensure_parent(path):
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+
+def _file_size(path):
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
+
+def _matches_size(path, expected_size):
+    if not os.path.exists(path):
+        return False
+    if expected_size and _file_size(path) != expected_size:
+        return False
+    return os.path.isfile(path)
+
+
+def _candidate_cache_dirs(game_directory):
+    normalized = os.path.abspath(game_directory)
+    candidates = []
+
+    def add_candidate(path):
+        if not path:
+            return
+        absolute = os.path.abspath(path)
+        if absolute not in candidates:
+            candidates.append(absolute)
+
+    add_candidate(normalized)
+    add_candidate(os.path.join(os.getcwd(), ".minecraft"))
+    appdata = os.getenv("APPDATA")
+    if appdata:
+        add_candidate(os.path.join(appdata, ".minecraft"))
+    add_candidate(os.path.join(os.path.expanduser("~"), ".minecraft"))
+    return candidates
+
+
+def _try_copy_from_cache(job, cache_dirs, target_game_dir):
+    target_root = os.path.abspath(target_game_dir)
+    for cache_dir in cache_dirs:
+        cache_root = os.path.abspath(cache_dir)
+        if cache_root == target_root:
+            continue
+
+        source_path = os.path.join(cache_root, job.relative_path)
+        if not _matches_size(source_path, job.size):
+            continue
+
+        _ensure_parent(job.file_path)
+        shutil.copy2(source_path, job.file_path)
+        return True
+
+    return False
+
+
+def _rewrite_url(url, mirror_source):
+    if mirror_source != "https://bmclapi2.bangbang93.com":
+        return url
+
+    replacements = {
+        "https://piston-data.mojang.com": mirror_source,
+        "https://launcher.mojang.com": mirror_source,
+        "https://libraries.minecraft.net": f"{mirror_source}/maven",
+        "https://resources.download.minecraft.net": f"{mirror_source}/assets",
+    }
+    for source, target in replacements.items():
+        if url.startswith(source):
+            return url.replace(source, target, 1)
+    return url
+
+
+async def _download_with_retries(session, job, progress, semaphore, retries=5):
     for attempt in range(retries):
         try:
-            if semaphore:
-                async with semaphore:  # 限制并发下载数量
-                    await _download_file(url, file_path, progress_callback)
-            else:
-                await _download_file(url, file_path, progress_callback)
-            return  # 下载成功，退出循环
-        except Exception as e:
-            print(f"下载文件时出错: {e}，正在进行第 {attempt + 1} 次重试...")
-            await asyncio.sleep(1)  # 等待 1 秒后重试
-
-    raise Exception(f"下载文件失败: {url}")  # 超过最大重试次数，抛出异常
+            async with semaphore:
+                await _download_single(session, job, progress)
+            return
+        except Exception:
+            if attempt == retries - 1:
+                raise
+            await asyncio.sleep(min(2 ** attempt, 5))
 
 
-async def _download_file(url, file_path, progress_callback=None):
-    """异步下载文件的实际逻辑"""
-    if not os.path.exists(os.path.dirname(file_path)):
-        os.makedirs(os.path.dirname(file_path))
+async def _download_single(session, job, progress):
+    _ensure_parent(job.file_path)
+    progress.set_current_file(job.label)
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as response:
-            response.raise_for_status()
-            total_size = int(response.headers.get("content-length", 0))
-            downloaded_size = 0
-            with open(file_path, "wb") as f:
-                async for chunk in response.content.iter_chunked(8192):
-                    f.write(chunk)
-                    downloaded_size += len(chunk)
-                    if progress_callback:
-                        try:
-                            if total_size == 0:  # 防止除以零
-                                total_size = 0.01
-                            progress_callback(downloaded_size / total_size)
-                        finally:
-                            pass
+    async with session.get(job.url) as response:
+        response.raise_for_status()
+        with open(job.file_path, "wb") as file_handle:
+            async for chunk in response.content.iter_chunked(CHUNK_SIZE):
+                if not chunk:
+                    continue
+                file_handle.write(chunk)
+                progress.advance_network(len(chunk))
 
 
-async def download_assets(version_json, game_directory, version_id, MIRROR_SOURCES, progress_callback=None):
-    # from main import mirror_source,
-    """下载资源索引文件和资源文件到游戏版本目录"""
-    asset_index_url = version_json["assetIndex"]["url"]
+async def _process_job(session, job, progress, semaphore, cache_dirs, target_game_dir):
+    if _matches_size(job.file_path, job.size):
+        progress.set_current_file(f"{job.label}（已存在）")
+        progress.advance_reused(job.size or _file_size(job.file_path))
+        progress.finish_file()
+        return "reused"
+
+    if _try_copy_from_cache(job, cache_dirs, target_game_dir):
+        progress.set_current_file(f"{job.label}（本地复用）")
+        progress.advance_reused(job.size or _file_size(job.file_path))
+        progress.finish_file()
+        return "reused"
+
+    await _download_with_retries(session, job, progress, semaphore)
+    progress.finish_file()
+    return "downloaded"
+
+
+async def _run_jobs(session, jobs, progress, concurrency, cache_dirs, target_game_dir):
+    if not jobs:
+        return
+    semaphore = asyncio.Semaphore(concurrency)
+    await asyncio.gather(*[
+        _process_job(session, job, progress, semaphore, cache_dirs, target_game_dir)
+        for job in jobs
+    ])
+
+
+def _build_core_jobs(version_json, game_directory, version_id, mirror_source):
+    jobs = []
+
+    client_info = version_json.get("downloads", {}).get("client", {})
+    client_relative = os.path.join("versions", version_id, f"{version_id}.jar")
+    jobs.append(DownloadJob(
+        url=_rewrite_url(client_info["url"], mirror_source),
+        file_path=os.path.join(game_directory, client_relative),
+        relative_path=client_relative,
+        size=client_info.get("size", 0),
+        label=f"{version_id}.jar",
+    ))
+
+    for library in version_json.get("libraries", []):
+        downloads = library.get("downloads", {})
+        artifact = downloads.get("artifact")
+        if artifact:
+            jobs.append(DownloadJob(
+                url=_rewrite_url(artifact["url"], mirror_source),
+                file_path=os.path.join(game_directory, "libraries", artifact["path"]),
+                relative_path=os.path.join("libraries", artifact["path"]),
+                size=artifact.get("size", 0),
+                label=os.path.basename(artifact["path"]),
+            ))
+
+        natives = downloads.get("classifiers", {}).get("natives-windows")
+        if natives:
+            jobs.append(DownloadJob(
+                url=_rewrite_url(natives["url"], mirror_source),
+                file_path=os.path.join(game_directory, "libraries", natives["path"]),
+                relative_path=os.path.join("libraries", natives["path"]),
+                size=natives.get("size", 0),
+                label=os.path.basename(natives["path"]),
+            ))
+    return jobs
+
+
+def _build_asset_index_job(version_json, game_directory, mirror_source):
+    asset_index = version_json.get("assetIndex", {})
+    asset_index_relative = os.path.join("assets", "indexes", f"{asset_index['id']}.json")
+    return DownloadJob(
+        url=_rewrite_url(asset_index["url"], mirror_source),
+        file_path=os.path.join(game_directory, asset_index_relative),
+        relative_path=asset_index_relative,
+        size=asset_index.get("size", 0),
+        label=f"{asset_index['id']}.json",
+    )
+
+
+def _build_asset_jobs(asset_index_json, game_directory, mirror_source):
+    jobs = []
+    for object_hash, object_info in (
+        (info["hash"], info) for info in asset_index_json.get("objects", {}).values()
+    ):
+        prefix = object_hash[:2]
+        relative_path = os.path.join("assets", "objects", prefix, object_hash)
+        jobs.append(DownloadJob(
+            url=_rewrite_url(f"https://resources.download.minecraft.net/{prefix}/{object_hash}", mirror_source),
+            file_path=os.path.join(game_directory, relative_path),
+            relative_path=relative_path,
+            size=object_info.get("size", 0),
+            label=object_hash,
+        ))
+    return jobs
+
+
+async def download_assets(version_json, game_directory, version_id, mirror_source, progress_callback=None):
+    progress = DownloadProgress(progress_callback)
+    cache_dirs = _candidate_cache_dirs(game_directory)
     asset_index_path = os.path.join(
-        game_directory, 'versions', version_id, "assets", "indexes",
-        f"{version_json['assetIndex']['id']}.json"
-    ).replace('/', os.path.sep)
-    print(asset_index_url)
-    # 下载资源索引文件
-    await download_file(asset_index_url, asset_index_path, progress_callback)
+        game_directory, "assets", "indexes", f"{version_json['assetIndex']['id']}.json"
+    )
 
-    # 解析资源索引文件
-    with open(asset_index_path, "r") as f:
-        asset_index_json = json.load(f)
-
-    # 创建下载任务列表
-    tasks = []
-    # 限制并发下载数量为32
-    semaphore = asyncio.Semaphore(32)
-    object_url = ""
-    for i, (object_name, object_info) in enumerate(asset_index_json["objects"].items()):
-        object_hash = object_info["hash"]
-        # object_url = f"https://resources.download.minecraft.net/{object_hash[:2]}/{object_hash}"
-        if MIRROR_SOURCES == "https://resources.download.minecraft.net":
-            object_url = f"{MIRROR_SOURCES}/resources/{object_hash[:2]}/{object_hash}"
-            print(object_url)
-        elif MIRROR_SOURCES == "https://bmclapi2.bangbang93.com":
-            object_url = f"https://bmclapi2.bangbang93.com/assets/{object_hash[:2]}/{object_hash}"
-
-            print(object_url)
-        object_path = os.path.join(
-            game_directory, 'versions', version_id, "assets", "objects", object_hash[:2], object_hash
-        ).replace('/', os.path.sep)
-        # 将下载任务添加到列表中
-        tasks.append(download_file(object_url, object_path, progress_callback, semaphore))
-
-    # 并发执行所有下载任务
-    await asyncio.gather(*tasks)
+    async with aiohttp.ClientSession(
+        timeout=REQUEST_TIMEOUT,
+        connector=aiohttp.TCPConnector(limit=MAX_ASSET_CONCURRENCY * 2, ttl_dns_cache=300),
+    ) as session:
+        with open(asset_index_path, "r", encoding="utf-8") as file_handle:
+            asset_index_json = json.load(file_handle)
+        jobs = _build_asset_jobs(asset_index_json, game_directory, mirror_source)
+        progress.set_phase("下载资源文件")
+        progress.add_totals(sum(job.size for job in jobs), len(jobs))
+        await _run_jobs(session, jobs, progress, MAX_ASSET_CONCURRENCY, cache_dirs, game_directory)
+        progress.set_phase("资源文件下载完成")
+        progress.emit(force=True)
 
 
 def extract_natives(version_json, game_directory, version_id):
-    """解压 natives 文件"""
     natives_directory = os.path.join(
-        game_directory, 'versions', version_id, f"{version_id}-natives"
-    ).replace('/', os.path.sep)
+        game_directory, "versions", version_id, f"{version_id}-natives"
+    )
     os.makedirs(natives_directory, exist_ok=True)
-    for library in version_json["libraries"]:
-        if (
-                "downloads" in library
-                and "classifiers" in library["downloads"]
-                and "natives-windows" in library["downloads"]["classifiers"]
-        ):
-            library_path = os.path.join(
-                game_directory,
-                'libraries',
-                library["downloads"]["classifiers"]["natives-windows"]["path"]
-            ).replace('/', os.path.sep)
-            # 使用 zipfile 解压缩 jar 文件
-            try:
-                with zipfile.ZipFile(library_path, 'r') as zip_ref:
-                    for file_info in zip_ref.infolist():
-                        # 排除 META-INF 文件夹和目录
-                        if not file_info.filename.startswith('META-INF') and not file_info.filename.endswith('/'):
-                            zip_ref.extract(file_info, natives_directory)
-            except FileNotFoundError:
-                print(f"警告: natives 文件不存在: {library_path}")
-            except Exception as e:
-                raise Exception(f"解压 natives 文件时出错：{e}")
-    file_count = len([f for f in os.listdir(natives_directory) if os.path.isfile(os.path.join(natives_directory, f))])
+
+    for library in version_json.get("libraries", []):
+        classifiers = library.get("downloads", {}).get("classifiers", {})
+        natives_info = classifiers.get("natives-windows")
+        if not natives_info:
+            continue
+
+        library_path = os.path.join(game_directory, "libraries", natives_info["path"])
+        try:
+            with zipfile.ZipFile(library_path, "r") as zip_ref:
+                for file_info in zip_ref.infolist():
+                    if file_info.filename.startswith("META-INF") or file_info.filename.endswith("/"):
+                        continue
+
+                    extract_path = os.path.normpath(os.path.join(natives_directory, file_info.filename))
+                    if not extract_path.startswith(os.path.normpath(natives_directory)):
+                        print(f"警告: 跳过可疑路径 {file_info.filename}")
+                        continue
+
+                    zip_ref.extract(file_info, natives_directory)
+        except FileNotFoundError:
+            print(f"警告: natives 文件不存在: {library_path}")
+        except Exception as exc:
+            print(f"解压 natives 文件时出错：{exc}")
+
+    file_count = 0
+    for _, _, files in os.walk(natives_directory):
+        file_count += len(files)
     print(f"已解压 {file_count} 个 natives 文件到 {natives_directory}")
 
 
-async def download_game_files(version_json, game_directory, version, MIRROR_SOURCES, progress_callback=None, ):
-    """下载游戏文件."""
-    # from main import mirror_source, MIRROR_SOURCES
-    os.makedirs(game_directory, exist_ok=True)  # 确保游戏目录存在
-
-    async def download_and_update_progress(download_function, url, file_path):
-        """异步下载文件并更新进度条."""
-        await download_function(url, file_path, progress_callback=progress_callback)
-
-    async def update_progress(progress):
-        if progress_callback:
-            progress_callback(progress)
+async def download_game_files(version_json, game_directory, version, mirror_source, progress_callback=None):
+    os.makedirs(game_directory, exist_ok=True)
 
     version_id = version_json["id"]
-    # 保存 version.json 文件
-    version_json_path = os.path.join(game_directory, "versions", version_id,
-                                     f"{version_id}.json")
-    os.makedirs(os.path.dirname(version_json_path), exist_ok=True)
-    with open(version_json_path, "w") as f:
-        json.dump(version_json, f, indent=4)
+    version_json_relative = os.path.join("versions", version_id, f"{version_id}.json")
+    version_json_path = os.path.join(game_directory, version_json_relative)
+    _ensure_parent(version_json_path)
+    with open(version_json_path, "w", encoding="utf-8") as file_handle:
+        json.dump(version_json, file_handle, ensure_ascii=False, indent=4)
 
-    # 下载主文件
-    await update_progress(0.0)
-    print(version_json["downloads"]["client"]["url"])
-    main_file = str(version_json["downloads"]["client"]["url"])
-    print(MIRROR_SOURCES)
-    if MIRROR_SOURCES == "https://bmclapi2.bangbang93.com":
-        main_file = main_file.replace("piston-data.mojang.com", "bmclapi2.bangbang93.com")
-        print(main_file)
-    await download_and_update_progress(
-        download_file,
-        main_file,
-        os.path.join(game_directory, "versions", version_id, f"{version_id}.jar"),
-    )
-    await update_progress(0.2)
+    progress = DownloadProgress(progress_callback)
+    cache_dirs = _candidate_cache_dirs(game_directory)
+    asset_index_job = _build_asset_index_job(version_json, game_directory, mirror_source)
+    core_jobs = _build_core_jobs(version_json, game_directory, version_id, mirror_source)
 
-    # 下载库文件
-    tasks = []
-    semaphore = asyncio.Semaphore(5)
-    for i, library in enumerate(version_json["libraries"]):
-        if "downloads" in library:
-            # 下载 artifact 文件
-            if "artifact" in library["downloads"]:
-                artifact_path = os.path.join(
-                    game_directory,
-                    "libraries",
-                    library["downloads"]["artifact"]["path"]
-                ).replace('/', os.path.sep)
-                tasks.append(download_file(library["downloads"]["artifact"]["url"],
-                                           artifact_path,
-                                           progress_callback, semaphore))
+    async with aiohttp.ClientSession(
+        timeout=REQUEST_TIMEOUT,
+        connector=aiohttp.TCPConnector(limit=MAX_ASSET_CONCURRENCY * 2, ttl_dns_cache=300),
+    ) as session:
+        asset_index_result = await _process_job(
+            session,
+            asset_index_job,
+            DownloadProgress(),
+            asyncio.Semaphore(1),
+            cache_dirs,
+            game_directory,
+        )
 
-            # 下载 natives-windows 文件
-            if "classifiers" in library["downloads"] and "natives-windows" in library["downloads"]["classifiers"]:
-                natives_path = os.path.join(
-                    game_directory,
-                    "libraries",
-                    library["downloads"]["classifiers"]["natives-windows"]["path"]
-                ).replace('/', os.path.sep)
-                tasks.append(download_file(library["downloads"]["classifiers"]["natives-windows"]["url"],
-                                           natives_path,
-                                           progress_callback, semaphore))
-                # 下载完成后，解压 natives 文件
-                # extract_natives(version_json, game_directory, version_id)
+        asset_index_path = os.path.join(
+            game_directory, "assets", "indexes", f"{version_json['assetIndex']['id']}.json"
+        )
+        with open(asset_index_path, "r", encoding="utf-8") as file_handle:
+            asset_index_json = json.load(file_handle)
 
-    await asyncio.gather(*tasks)
+        asset_jobs = _build_asset_jobs(asset_index_json, game_directory, mirror_source)
+        all_jobs = [asset_index_job, *core_jobs, *asset_jobs]
+        progress.add_totals(sum(job.size for job in all_jobs), len(all_jobs))
 
-    await update_progress(0.8)
+        progress.set_phase("准备下载")
+        progress.set_current_file(asset_index_job.label)
+        if asset_index_result == "reused":
+            progress.advance_reused(asset_index_job.size or _file_size(asset_index_job.file_path))
+        else:
+            progress.ready_bytes += asset_index_job.size or _file_size(asset_index_job.file_path)
+            progress.emit(force=True)
+        progress.finish_file()
 
-    # 下载资源文件
-    await download_assets(version_json, game_directory, version_id, MIRROR_SOURCES, progress_callback)
+        progress.set_phase("下载核心文件")
+        await _run_jobs(session, core_jobs, progress, MAX_CORE_CONCURRENCY, cache_dirs, game_directory)
+        progress.set_phase("下载资源文件")
+        await _run_jobs(session, asset_jobs, progress, MAX_ASSET_CONCURRENCY, cache_dirs, game_directory)
+
+    progress.set_phase("下载完成")
+    progress.emit(force=True)
