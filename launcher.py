@@ -10,6 +10,107 @@ config = configparser.ConfigParser()
 config.read("launcher_config.ini")
 
 
+def _top_level_version_files(version_dir, suffix):
+    if not os.path.isdir(version_dir):
+        return []
+    result = []
+    for entry in os.listdir(version_dir):
+        path = os.path.join(version_dir, entry)
+        if os.path.isfile(path) and entry.lower().endswith(suffix):
+            result.append(path)
+    return result
+
+
+def _load_json_file(path):
+    try:
+        with open(path, "r", encoding="utf-8") as file_handle:
+            data = json.load(file_handle)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _looks_like_version_manifest(data):
+    if not isinstance(data, dict) or not data.get("id"):
+        return False
+    return any(
+        key in data
+        for key in ("mainClass", "inheritsFrom", "arguments", "minecraftArguments", "libraries", "downloads", "assetIndex")
+    )
+
+
+def find_version_json_path(game_directory, version_id):
+    version_dir = os.path.join(game_directory, "versions", version_id)
+    preferred_path = os.path.join(version_dir, f"{version_id}.json")
+    if os.path.isfile(preferred_path):
+        return preferred_path
+
+    candidates = []
+    for path in _top_level_version_files(version_dir, ".json"):
+        data = _load_json_file(path)
+        if not _looks_like_version_manifest(data):
+            continue
+        score = 0
+        filename = os.path.splitext(os.path.basename(path))[0]
+        if filename == version_id:
+            score += 100
+        if data.get("id") == version_id:
+            score += 80
+        if data.get("mainClass"):
+            score += 20
+        if data.get("inheritsFrom"):
+            score += 10
+        if data.get("arguments") or data.get("minecraftArguments"):
+            score += 10
+        candidates.append((score, path))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: (-item[0], item[1]))
+    return candidates[0][1]
+
+
+def find_version_jar_path(game_directory, version_id, version_json=None):
+    version_dir = os.path.join(game_directory, "versions", version_id)
+    jar_candidates = _top_level_version_files(version_dir, ".jar")
+    if not jar_candidates:
+        return None
+
+    preferred_names = {version_id}
+    if isinstance(version_json, dict):
+        manifest_id = (version_json.get("id") or "").strip()
+        if manifest_id:
+            preferred_names.add(manifest_id)
+
+    manifest_path = find_version_json_path(game_directory, version_id)
+    if manifest_path:
+        preferred_names.add(os.path.splitext(os.path.basename(manifest_path))[0])
+
+    for preferred_name in preferred_names:
+        jar_path = os.path.join(version_dir, f"{preferred_name}.jar")
+        if os.path.isfile(jar_path):
+            return jar_path
+
+    if len(jar_candidates) == 1:
+        return jar_candidates[0]
+
+    ranked = []
+    for path in jar_candidates:
+        name = os.path.splitext(os.path.basename(path))[0]
+        score = 0
+        if name in preferred_names:
+            score += 100
+        if any(preferred_name and preferred_name in name for preferred_name in preferred_names):
+            score += 30
+        if name.lower().endswith("-natives"):
+            score -= 50
+        ranked.append((score, path))
+
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    return ranked[0][1]
+
+
 def _hidden_subprocess_kwargs():
     if os.name != "nt":
         return {}
@@ -49,6 +150,25 @@ def _current_os_version():
     return platform.version() or platform.release() or ""
 
 
+def _compare_version_part(left, right):
+    if left.isdigit() and right.isdigit():
+        return (int(left) > int(right)) - (int(left) < int(right))
+    return (left > right) - (left < right)
+
+
+def _compare_version_strings(current, target):
+    current_parts = re.findall(r"[A-Za-z]+|\d+", str(current or ""))
+    target_parts = re.findall(r"[A-Za-z]+|\d+", str(target or ""))
+    length = max(len(current_parts), len(target_parts))
+    for index in range(length):
+        left = current_parts[index] if index < len(current_parts) else "0"
+        right = target_parts[index] if index < len(target_parts) else "0"
+        comparison = _compare_version_part(left, right)
+        if comparison != 0:
+            return comparison
+    return 0
+
+
 def _rule_allows(rule, features=None):
     os_rule = rule.get("os", {})
     if os_rule:
@@ -61,6 +181,15 @@ def _rule_allows(rule, features=None):
         version_pattern = os_rule.get("version")
         if version_pattern and not re.search(version_pattern, _current_os_version()):
             return False
+        version_range = os_rule.get("versionRange", {})
+        if version_range:
+            current_version = _current_os_version()
+            min_version = version_range.get("min")
+            if min_version and _compare_version_strings(current_version, min_version) < 0:
+                return False
+            max_version = version_range.get("max")
+            if max_version and _compare_version_strings(current_version, max_version) > 0:
+                return False
 
     required_features = rule.get("features", {})
     if required_features:
@@ -154,7 +283,7 @@ def launch_minecraft(java_path, version_id, game_directory=".minecraft", minecra
     """启动 Minecraft。"""
     version_json = get_version_json(game_directory, version_id)
     if not version_json:
-        return False
+        raise FileNotFoundError(f"未找到版本清单：{version_id}")
 
     chain = get_version_inheritance_chain(game_directory, version_id)
     version_json = _merge_version_chain(chain)
@@ -164,12 +293,12 @@ def launch_minecraft(java_path, version_id, game_directory=".minecraft", minecra
         item_id = item.get("id")
         if not item_id:
             continue
-        jar_path = os.path.join(game_directory, "versions", item_id, f"{item_id}.jar")
-        if os.path.exists(jar_path) and jar_path not in version_jars:
+        jar_path = find_version_jar_path(game_directory, item_id, item)
+        if jar_path and os.path.exists(jar_path) and jar_path not in version_jars:
             version_jars.append(jar_path)
 
     if not version_jars:
-        return False
+        raise FileNotFoundError(f"未找到可启动的版本 JAR：{version_id}")
 
     natives_version_id = version_json["id"]
     for item in chain:
@@ -216,6 +345,9 @@ def launch_minecraft(java_path, version_id, game_directory=".minecraft", minecra
         "assets_index_name": version_json.get("assetIndex", {}).get("id", ""),
         "auth_uuid": uuid if uuid else config.get("USER", "uuid", fallback="00000000-0000-0000-0000-000000000000"),
         "auth_access_token": minecraft_access_token if minecraft_access_token else config.get("USER", "accessToken", fallback="0"),
+        "auth_xuid": "0",
+        "clientid": "",
+        "client_id": "",
         "user_type": "msa" if minecraft_access_token else "mojang",
         "version_type": version_json.get("type", "release"),
         "launcher_name": "McGo",
@@ -279,20 +411,18 @@ def get_local_versions(game_directory=".minecraft"):
     versions_dir = os.path.join(game_directory, "versions")
     if os.path.exists(versions_dir):
         for version_dir in os.listdir(versions_dir):
-            if os.path.isdir(os.path.join(versions_dir, version_dir)):
+            full_dir = os.path.join(versions_dir, version_dir)
+            if os.path.isdir(full_dir) and find_version_json_path(game_directory, version_dir):
                 versions.append(version_dir)
     return versions
 
 
 def get_version_json(game_directory, version_id):
-    version_json_path = os.path.join(
-        game_directory, "versions", version_id, f"{version_id}.json"
-    )
-    if not os.path.exists(version_json_path):
+    version_json_path = find_version_json_path(game_directory, version_id)
+    if not version_json_path or not os.path.exists(version_json_path):
         return None
 
-    with open(version_json_path, "r", encoding="utf-8") as file_handle:
-        return json.load(file_handle)
+    return _load_json_file(version_json_path)
 
 
 def get_version_inheritance_chain(game_directory, version_id):

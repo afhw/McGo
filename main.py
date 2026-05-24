@@ -38,13 +38,15 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMessageBox,
-    QListWidget,
     QListWidgetItem,
+    QSizePolicy,
+    QTextEdit,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 from qfluentwidgets import (
+    Action,
     BodyLabel,
     CaptionLabel,
     CardWidget,
@@ -56,13 +58,16 @@ from qfluentwidgets import (
     InfoBar,
     InfoBarPosition,
     LineEdit,
+    ListWidget,
     PasswordLineEdit,
     Pivot,
     PrimaryPushButton,
     ProgressBar,
     PushButton,
+    RoundMenu,
     ScrollArea,
     SegmentedWidget,
+    SmoothMode,
     SubtitleLabel,
     TextEdit,
     Theme,
@@ -1106,6 +1111,7 @@ class Page(ScrollArea):
     def __init__(self, object_name, title, subtitle):
         super().__init__()
         self.setObjectName(object_name)
+        self._configure_scroll_behavior()
         self.view = QWidget()
         self.view.setStyleSheet("background: transparent;")
         self.layout = QVBoxLayout(self.view)
@@ -1116,6 +1122,11 @@ class Page(ScrollArea):
         self.setWidget(self.view)
         self.setWidgetResizable(True)
         self.setFrameShape(QFrame.Shape.NoFrame)
+
+    def _configure_scroll_behavior(self):
+        self.setSmoothMode(SmoothMode.NO_SMOOTH, Qt.Orientation.Vertical)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
 
 class UiMotionController(QObject):
@@ -1360,7 +1371,7 @@ class LauncherWindow(FluentWindow):
         self.advanced_mode_check.stateChanged.connect(self.on_advanced_mode_changed)
         self.auto_open_browser_check = CheckBox("Microsoft 登录时自动打开浏览器")
         self.auto_open_browser_check.setChecked(config.getboolean("AUTH", "auto_open_browser", fallback=True))
-        self.resource_isolation_check = CheckBox("启用资源隔离（每个版本使用独立运行目录）")
+        self.resource_isolation_check = CheckBox("启用资源隔离（每个版本使用独立 versions/<版本名> 运行目录）")
         self.resource_isolation_check.setChecked(config.getboolean("GAME", "enable_resource_isolation", fallback=False))
         self.resource_isolation_check.stateChanged.connect(lambda _: self.on_local_version_changed(self.current_selected_version()))
         self.game_dir_input = LineEdit()
@@ -1383,14 +1394,33 @@ class LauncherWindow(FluentWindow):
         self.version_jvm_args_input = LineEdit()
         self.version_jvm_args_input.setPlaceholderText("-XX:-OmitStackTraceInFastThrow -Djdk.lang.Process.allowAmbiguousCommands=True -Dfml.ignoreInvalidMinecraftCertificates=True -Dfml.ignorePatchDiscrepancies=True")
         self.version_custom_dir_input = LineEdit()
-        self.version_custom_dir_input.setPlaceholderText("留空则使用默认游戏目录或资源隔离目录")
-        self.version_isolation_check = CheckBox("当前版本单独使用资源隔离目录")
-        self.version_mods_list = QListWidget()
+        self.version_custom_dir_input.setPlaceholderText("留空则使用默认游戏目录或 versions/<版本名> 资源隔离目录")
+        self.version_isolation_check = CheckBox("当前版本单独使用 versions/<版本名> 资源隔离目录")
+        self.version_mods_list = ListWidget()
         self.version_mods_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.version_mods_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.version_mods_list.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.version_mods_list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.version_mods_list.setUniformItemSizes(True)
+        self.version_mods_list.setWordWrap(True)
+        self.version_mods_list.setMinimumHeight(360)
+        self.version_mods_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.version_mods_list.setSelectRightClickedRow(True)
+        self.version_mods_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.version_mods_list.itemDoubleClicked.connect(self.on_version_mod_item_activated)
+        self.version_mods_list.customContextMenuRequested.connect(self.show_version_mod_context_menu)
         self.install_log = TextEdit()
         self.install_log.setReadOnly(True)
+        self.install_log.setAcceptRichText(False)
+        self.install_log.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.install_log.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        self.install_log.document().setMaximumBlockCount(1000)
         self.status_log = TextEdit()
         self.status_log.setReadOnly(True)
+        self.status_log.setAcceptRichText(False)
+        self.status_log.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.status_log.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        self.status_log.document().setMaximumBlockCount(1000)
         self.version_type_combo.currentTextChanged.connect(lambda _: self.log("版本类型已更改，点击“刷新远程版本”重新加载列表。"))
         self.download_loader_checks = {
             "fabric": CheckBox("下载完成后安装 Fabric"),
@@ -1559,13 +1589,21 @@ class LauncherWindow(FluentWindow):
         self.add_labeled_control(selector_layout, "版本列表", self.version_display_combo)
         selector_layout.addWidget(self.version_summary_label)
 
-        settings_card, settings_layout = self.make_card("版本设置", "为当前版本单独设置名称、JVM 参数、运行目录与 Mod 列表")
+        settings_card, settings_layout = self.make_card("版本设置", "为当前版本单独设置名称、JVM 参数、运行目录，并根据版本类型显示 Mod 管理状态")
         self.add_labeled_control(settings_layout, "显示名称", self.version_alias_input)
         self.add_labeled_control(settings_layout, "额外 JVM 参数", self.version_jvm_args_input)
         settings_layout.addWidget(self.version_isolation_check)
         self.add_labeled_control(settings_layout, "自定义运行目录", self.version_custom_dir_input)
-        settings_layout.addWidget(BodyLabel("Mod 列表"))
-        settings_layout.addWidget(self.version_mods_list)
+        self.mod_section = QWidget()
+        mod_layout = QVBoxLayout(self.mod_section)
+        mod_layout.setContentsMargins(0, 0, 0, 0)
+        mod_layout.setSpacing(12)
+        mod_layout.setStretch(2, 1)
+        self.mod_section_title = BodyLabel("Mod 列表")
+        self.mod_section_hint = CaptionLabel("当前版本支持 Mod 管理时，可以直接打开 mods 文件夹并启用、禁用或删除 Mod。")
+        mod_layout.addWidget(self.mod_section_title)
+        mod_layout.addWidget(self.mod_section_hint)
+        mod_layout.addWidget(self.version_mods_list)
         settings_row = QHBoxLayout()
         self.save_version_settings_button = PrimaryPushButton("保存当前版本设置")
         self.open_mods_button = PushButton("打开 mods 文件夹")
@@ -1580,7 +1618,8 @@ class LauncherWindow(FluentWindow):
         settings_row.addWidget(self.toggle_mod_button)
         settings_row.addWidget(self.delete_mod_button)
         settings_row.addStretch()
-        settings_layout.addLayout(settings_row)
+        mod_layout.addLayout(settings_row)
+        settings_layout.addWidget(self.mod_section)
 
         selector_view_layout = QVBoxLayout(self.version_selector_view)
         selector_view_layout.setContentsMargins(0, 0, 0, 0)
@@ -1898,7 +1937,10 @@ class LauncherWindow(FluentWindow):
         return resolve_base_minecraft_version(self.current_game_dir(), version_id)
 
     def version_matches_category(self, version_id, category):
-        return version_matches_category(version_id, category)
+        return version_matches_category(self.current_game_dir(), version_id, category)
+
+    def version_supports_mod_management(self, version_id):
+        return bool(version_id and version_matches_category(self.current_game_dir(), version_id, "可安装 Mod"))
 
     def current_selected_version(self):
         return self.local_version_combo.currentText().strip()
@@ -1921,30 +1963,42 @@ class LauncherWindow(FluentWindow):
         self.version_isolation_check.setEnabled(not forced_isolation)
 
         runtime_directory = self.runtime_directory_for_version(version_id)
-        mods_dir = self.current_mods_directory()
         self.version_mods_list.clear()
-        if os.path.isdir(mods_dir):
-            for item in sorted(os.listdir(mods_dir)):
-                lowered = item.lower()
-                if not (lowered.endswith(".jar") or lowered.endswith(".jar.disabled")):
-                    continue
-                enabled = lowered.endswith(".jar")
-                label = f"{'启用' if enabled else '禁用'} | {item}"
-                widget_item = QListWidgetItem(label)
-                widget_item.setData(Qt.ItemDataRole.UserRole, os.path.join(mods_dir, item))
-                self.version_mods_list.addItem(widget_item)
-        if self.version_mods_list.count() == 0:
-            empty_item = QListWidgetItem("当前没有检测到 Mod 文件")
+        supports_mod_management = self.version_supports_mod_management(version_id)
+        self.open_mods_button.setEnabled(supports_mod_management)
+        self.toggle_mod_button.setEnabled(supports_mod_management)
+        self.delete_mod_button.setEnabled(supports_mod_management)
+
+        if supports_mod_management:
+            self.mod_section_hint.setText("当前版本支持 Mod 管理，可以直接打开 mods 文件夹并启用、禁用或删除 Mod。")
+            mods_dir = self.current_mods_directory()
+            if os.path.isdir(mods_dir):
+                for item in sorted(os.listdir(mods_dir)):
+                    lowered = item.lower()
+                    if not (lowered.endswith(".jar") or lowered.endswith(".jar.disabled")):
+                        continue
+                    enabled = lowered.endswith(".jar")
+                    label = f"{'启用' if enabled else '禁用'} | {item}"
+                    widget_item = QListWidgetItem(label)
+                    widget_item.setData(Qt.ItemDataRole.UserRole, os.path.join(mods_dir, item))
+                    self.version_mods_list.addItem(widget_item)
+            if self.version_mods_list.count() == 0:
+                empty_item = QListWidgetItem("当前没有检测到 Mod 文件")
+                empty_item.setFlags(Qt.ItemFlag.NoItemFlags)
+                self.version_mods_list.addItem(empty_item)
+            self.motion.pulse_list(self.version_mods_list)
+        else:
+            self.mod_section_hint.setText(f"当前版本类型为 {version_type_label(self.current_game_dir(), version_id)}，不支持 Mod 管理。请切换到 Fabric / Forge / NeoForge / OptiFine 版本。")
+            empty_item = QListWidgetItem("当前版本不支持 Mod 管理")
             empty_item.setFlags(Qt.ItemFlag.NoItemFlags)
             self.version_mods_list.addItem(empty_item)
-        self.motion.pulse_list(self.version_mods_list)
 
         summary = [
             f"当前版本：{self.version_display_name(version_id)}",
             f"基础版本：{self.base_version_for(version_id)}",
             f"运行目录：{runtime_directory}",
         ]
-        summary.append(f"类型：{version_type_label(version_id)}")
+        summary.append(f"类型：{version_type_label(self.current_game_dir(), version_id)}")
         self.version_summary_label.setText(" | ".join(summary))
         self.motion.fade_slide_in(self.version_summary_label, offset=8, duration=220)
 
@@ -1972,18 +2026,57 @@ class LauncherWindow(FluentWindow):
             global_isolation=self.resource_isolation_check.isChecked(),
         )
 
+    def current_mod_item_path(self, item=None):
+        current_item = item or self.version_mods_list.currentItem()
+        if current_item is None:
+            return ""
+        mod_path = current_item.data(Qt.ItemDataRole.UserRole)
+        return mod_path if isinstance(mod_path, str) else ""
+
+    def on_version_mod_item_activated(self, item):
+        if not self.current_mod_item_path(item):
+            return
+        self.toggle_selected_mod()
+
+    def show_version_mod_context_menu(self, pos):
+        menu = RoundMenu(parent=self.version_mods_list)
+        item = self.version_mods_list.itemAt(pos)
+        mod_path = self.current_mod_item_path(item)
+
+        open_dir_action = Action(FluentIcon.FOLDER, "打开 mods 文件夹", triggered=self.open_current_mods_directory)
+        menu.addAction(open_dir_action)
+
+        if mod_path:
+            if item is not self.version_mods_list.currentItem():
+                self.version_mods_list.setCurrentItem(item)
+
+            toggle_text = "启用 Mod" if mod_path.lower().endswith(".jar.disabled") else "禁用 Mod"
+            toggle_action = Action(FluentIcon.SYNC, toggle_text, triggered=self.toggle_selected_mod)
+            delete_action = Action(FluentIcon.DELETE, "删除 Mod", triggered=self.delete_selected_mod)
+            menu.addSeparator()
+            menu.addAction(toggle_action)
+            menu.addAction(delete_action)
+
+        menu.exec(self.version_mods_list.viewport().mapToGlobal(pos))
+
     def open_current_mods_directory(self):
         version_id = self.current_selected_version()
         if not version_id:
             self.show_warning("缺少版本", "请先选择一个本地版本。")
+            return
+        if not self.version_supports_mod_management(version_id):
+            self.show_warning("不支持 Mod 管理", f"{self.version_display_name(version_id)} 不是可安装 Mod 的版本。")
             return
         mods_dir = self.current_mods_directory()
         os.makedirs(mods_dir, exist_ok=True)
         os.startfile(os.path.abspath(mods_dir))
 
     def toggle_selected_mod(self):
-        current_item = self.version_mods_list.currentItem()
-        mod_path = current_item.data(Qt.ItemDataRole.UserRole) if current_item else ""
+        version_id = self.current_selected_version()
+        if not self.version_supports_mod_management(version_id):
+            self.show_warning("不支持 Mod 管理", f"{self.version_display_name(version_id)} 不是可安装 Mod 的版本。")
+            return
+        mod_path = self.current_mod_item_path()
         if not mod_path or not os.path.isfile(mod_path):
             self.show_warning("缺少 Mod", "请先在列表中选择一个 Mod。")
             return
@@ -1997,8 +2090,11 @@ class LauncherWindow(FluentWindow):
         self.show_success("Mod 状态已更新", os.path.basename(target_path))
 
     def delete_selected_mod(self):
-        current_item = self.version_mods_list.currentItem()
-        mod_path = current_item.data(Qt.ItemDataRole.UserRole) if current_item else ""
+        version_id = self.current_selected_version()
+        if not self.version_supports_mod_management(version_id):
+            self.show_warning("不支持 Mod 管理", f"{self.version_display_name(version_id)} 不是可安装 Mod 的版本。")
+            return
+        mod_path = self.current_mod_item_path()
         if not mod_path or not os.path.isfile(mod_path):
             self.show_warning("缺少 Mod", "请先在列表中选择一个 Mod。")
             return
