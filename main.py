@@ -9,6 +9,7 @@ import subprocess
 import threading
 import tempfile
 import time
+import types
 import uuid as uuidlib
 import webbrowser
 import zipfile
@@ -16,12 +17,23 @@ from io import BytesIO
 
 import requests
 from flask import Flask, request
-from PyQt6.QtCore import QObject, Qt, QThread, pyqtSignal as Signal
+from PyQt6.QtCore import (
+    QEasingCurve,
+    QPoint,
+    QPropertyAnimation,
+    QParallelAnimationGroup,
+    QThread,
+    QTimer,
+    Qt,
+    QObject,
+    pyqtSignal as Signal,
+)
 from PyQt6.QtWidgets import (
     QApplication,
     QAbstractItemView,
     QFileDialog,
     QFrame,
+    QGraphicsOpacityEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -57,6 +69,8 @@ from qfluentwidgets import (
     TitleLabel,
     setTheme,
 )
+from qfluentwidgets.common.animation import FluentAnimation
+from qfluentwidgets.components.navigation.navigation_panel import NavigationDisplayMode, NavigationTreeWidgetBase
 
 from auth import MicrosoftAuthenticator
 from downloader import download_game_files, extract_natives
@@ -91,6 +105,19 @@ MIRROR_SOURCES = {
 config = configparser.ConfigParser()
 authenticator = MicrosoftAuthenticator(client_id, redirect_uri)
 app = Flask(__name__)
+
+
+def hidden_subprocess_kwargs():
+    if os.name != "nt":
+        return {}
+
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return {
+        "startupinfo": startupinfo,
+        "creationflags": creationflags,
+    }
 
 
 @app.route("/login/callback")
@@ -706,6 +733,7 @@ class InstallerEngine:
                 cwd=temp_dir,
                 encoding="utf-8",
                 errors="replace",
+                **hidden_subprocess_kwargs(),
             )
             collected_output = []
             self.emit_progress_text(f"正在执行 {label} 安装器", os.path.basename(installer_path), progress=0.5, completed_files=1, total_files=2)
@@ -1090,9 +1118,142 @@ class Page(ScrollArea):
         self.setFrameShape(QFrame.Shape.NoFrame)
 
 
+class UiMotionController(QObject):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.animations = []
+        self.last_trigger_at = {}
+
+    def _track(self, animation):
+        self.animations.append(animation)
+
+        def cleanup():
+            try:
+                self.animations.remove(animation)
+            except ValueError:
+                pass
+
+        if isinstance(animation, QParallelAnimationGroup):
+            animation.finished.connect(cleanup)
+        else:
+            animation.finished.connect(cleanup)
+        return animation
+
+    def _opacity_effect(self, widget):
+        effect = widget.graphicsEffect()
+        if isinstance(effect, QGraphicsOpacityEffect):
+            effect.setEnabled(True)
+            return effect
+
+        effect = QGraphicsOpacityEffect(widget)
+        effect.setOpacity(0.0)
+        effect.setEnabled(False)
+        widget.setGraphicsEffect(effect)
+        effect.setEnabled(True)
+        return effect
+
+    def _finish_with_effect(self, animation, effect):
+        def cleanup_effect():
+            effect.setOpacity(1.0)
+            effect.setEnabled(False)
+
+        animation.finished.connect(cleanup_effect)
+
+    def _curve_accelerate(self):
+        return FluentAnimation.createBezierCurve(0.18, 0.0, 0.0, 1.0)
+
+    def _curve_decelerate(self):
+        return FluentAnimation.createBezierCurve(0.12, 0.82, 0.22, 1.0)
+
+    def _curve_emphasized(self):
+        return FluentAnimation.createBezierCurve(0.2, 0.0, 0.0, 1.0)
+
+    def fade_slide_in(self, widget, offset=18, duration=320):
+        if widget is None:
+            return
+
+        effect = self._opacity_effect(widget)
+        effect.setOpacity(0.0)
+
+        opacity_animation = QPropertyAnimation(effect, b"opacity", widget)
+        opacity_animation.setDuration(duration)
+        opacity_animation.setStartValue(0.0)
+        opacity_animation.setEndValue(1.0)
+        opacity_animation.setEasingCurve(self._curve_accelerate())
+        self._finish_with_effect(opacity_animation, effect)
+
+        group = QParallelAnimationGroup(widget)
+        group.addAnimation(opacity_animation)
+        self._track(group).start()
+
+    def cross_fade_stack(self, stack, index, duration=260):
+        if stack is None or index < 0 or index >= stack.count():
+            return
+
+        current = stack.currentWidget()
+        target = stack.widget(index)
+        if target is None or current is target:
+            stack.setCurrentIndex(index)
+            return
+
+        effect = self._opacity_effect(target)
+
+        effect.setOpacity(0.0)
+        stack.setCurrentIndex(index)
+
+        opacity_animation = QPropertyAnimation(effect, b"opacity", target)
+        opacity_animation.setDuration(duration)
+        opacity_animation.setStartValue(0.0)
+        opacity_animation.setEndValue(1.0)
+        opacity_animation.setEasingCurve(self._curve_accelerate())
+        self._finish_with_effect(opacity_animation, effect)
+
+        group = QParallelAnimationGroup(target)
+        group.addAnimation(opacity_animation)
+        self._track(group).start()
+
+    def pulse_list(self, list_widget, duration=220):
+        if list_widget is None:
+            return
+
+        effect = self._opacity_effect(list_widget)
+        effect.setOpacity(0.24)
+
+        animation = QPropertyAnimation(effect, b"opacity", list_widget)
+        animation.setDuration(duration)
+        animation.setStartValue(0.24)
+        animation.setEndValue(1.0)
+        animation.setEasingCurve(self._curve_decelerate())
+        self._finish_with_effect(animation, effect)
+        self._track(animation).start()
+
+    def pulse_widget(self, widget, duration=220, start_opacity=0.55, throttle_key=None, min_interval=0.0):
+        if widget is None:
+            return
+
+        if throttle_key:
+            now = time.monotonic()
+            previous = self.last_trigger_at.get(throttle_key, 0.0)
+            if now - previous < min_interval:
+                return
+            self.last_trigger_at[throttle_key] = now
+
+        effect = self._opacity_effect(widget)
+        effect.setOpacity(start_opacity)
+
+        animation = QPropertyAnimation(effect, b"opacity", widget)
+        animation.setDuration(duration)
+        animation.setStartValue(start_opacity)
+        animation.setEndValue(1.0)
+        animation.setEasingCurve(self._curve_decelerate())
+        self._finish_with_effect(animation, effect)
+        self._track(animation).start()
+
+
 class LauncherWindow(FluentWindow):
     def __init__(self):
         super().__init__()
+        self.motion = UiMotionController(self)
         self.download_thread = None
         self.download_worker = None
         self.install_thread = None
@@ -1129,10 +1290,34 @@ class LauncherWindow(FluentWindow):
         self.build_pages()
         self.init_navigation()
         self.refresh_account_selector()
-        self.refresh_java_paths()
-        self.refresh_local_versions()
         self.remote_version_combo.addItem("点击刷新远程版本")
         self.log("QFluentWidgets 界面已启动。远程版本列表已延后加载。")
+        QTimer.singleShot(0, self.initialize_background_state)
+        QTimer.singleShot(40, self.animate_initial_views)
+
+    def initialize_background_state(self):
+        self.refresh_java_paths()
+        self.refresh_local_versions()
+
+    def animate_initial_views(self):
+        self.animate_card_group(getattr(self, "home_cards", []))
+
+    def animate_card_group(self, widgets):
+        for widget in widgets:
+            if widget is None:
+                continue
+            effect = widget.graphicsEffect()
+            if not isinstance(effect, QGraphicsOpacityEffect):
+                effect = QGraphicsOpacityEffect(widget)
+                widget.setGraphicsEffect(effect)
+            effect.setOpacity(0.0)
+            effect.setEnabled(True)
+
+        for index, widget in enumerate(widgets):
+            QTimer.singleShot(
+                42 * index,
+                lambda current=widget: self.motion.fade_slide_in(current, offset=16, duration=240),
+            )
 
     def build_controls(self):
         self.java_combo = ComboBox()
@@ -1234,6 +1419,47 @@ class LauncherWindow(FluentWindow):
         self.addSubInterface(self.launch_page, FluentIcon.GAME, "启动")
         self.addSubInterface(self.download_page, FluentIcon.DOWNLOAD, "下载")
         self.addSubInterface(self.manage_page, FluentIcon.SETTING, "管理")
+        self.configure_navigation_animation()
+        if hasattr(self, "stackedWidget"):
+            self.stackedWidget.currentChanged.connect(self.on_main_stack_changed)
+
+    def configure_navigation_animation(self):
+        navigation = getattr(self, "navigationInterface", None)
+        panel = getattr(navigation, "panel", None) if navigation else None
+        if not panel or not hasattr(panel, "expandAni"):
+            return
+        panel.expandAni.setDuration(240)
+        panel.expandAni.setEasingCurve(FluentAnimation.createBezierCurve(0.2, 0.0, 0.0, 1.0))
+        navigation.setExpandWidth(312)
+        navigation.setMinimumExpandWidth(100000)
+        if not hasattr(panel, "_mcgo_original_collapse"):
+            panel._mcgo_original_collapse = panel.collapse
+            panel.collapse = types.MethodType(self._navigation_panel_collapse, panel)
+
+    def _navigation_panel_collapse(self, panel_self):
+        sender = panel_self.sender()
+        if (
+            sender is not None
+            and isinstance(sender, NavigationTreeWidgetBase)
+            and panel_self.displayMode == NavigationDisplayMode.MENU
+        ):
+            return
+        return panel_self._mcgo_original_collapse()
+
+    def on_main_stack_changed(self, index):
+        if not hasattr(self, "stackedWidget"):
+            return
+        page = self.stackedWidget.widget(index)
+        if page is None:
+            return
+        if page is self.home_page:
+            self.animate_card_group(getattr(self, "home_cards", []))
+        elif page is self.launch_page:
+            self.animate_card_group(getattr(self, "launch_cards", []))
+        elif page is self.download_page:
+            self.animate_card_group(getattr(self, "download_cards", []))
+        elif page is self.manage_page:
+            self.animate_card_group(getattr(self, "manage_cards", []))
 
     def make_card(self, title, subtitle=None):
         card = CardWidget()
@@ -1262,10 +1488,10 @@ class LauncherWindow(FluentWindow):
         download_button = PushButton("2. 下载版本")
         launch_button = PushButton("3. 启动游戏")
         refresh_button = PushButton("刷新本地状态")
-        manage_button.clicked.connect(lambda: self.switchTo(self.manage_page))
+        manage_button.clicked.connect(lambda: self.switch_main_page(self.manage_page, self.manage_cards))
         refresh_button.clicked.connect(self.refresh_all)
-        download_button.clicked.connect(lambda: self.switchTo(self.download_page))
-        launch_button.clicked.connect(lambda: self.switchTo(self.launch_page))
+        download_button.clicked.connect(lambda: self.switch_main_page(self.download_page, self.download_cards))
+        launch_button.clicked.connect(lambda: self.switch_main_page(self.launch_page, self.launch_cards))
         row.addWidget(manage_button)
         row.addWidget(download_button)
         row.addWidget(launch_button)
@@ -1292,6 +1518,7 @@ class LauncherWindow(FluentWindow):
         self.home_page.layout.addWidget(quick_card)
         self.home_page.layout.addWidget(overview_card)
         self.home_page.layout.addStretch()
+        self.home_cards = [quick_card, overview_card]
 
     def build_launch_page(self):
         start_card, start_layout = self.make_card("立即启动", "先选账号与版本分类，再从版本中心确认要启动的版本")
@@ -1376,6 +1603,7 @@ class LauncherWindow(FluentWindow):
         self.launch_page.layout.addWidget(self.version_stack)
         self.launch_page.layout.addWidget(env_card)
         self.launch_page.layout.addStretch()
+        self.launch_cards = [start_card, nav_card, self.version_stack, env_card]
 
     def build_download_page(self):
         progress_card, progress_layout = self.make_card("任务进度", "下载和扩展安装共用这一组进度与状态信息")
@@ -1456,6 +1684,7 @@ class LauncherWindow(FluentWindow):
         self.download_page.layout.addWidget(nav_card)
         self.download_page.layout.addWidget(self.download_stack)
         self.download_page.layout.addStretch()
+        self.download_cards = [progress_card, nav_card, self.download_stack]
 
     def build_account_section(self):
         nav_card = CardWidget()
@@ -1616,12 +1845,19 @@ class LauncherWindow(FluentWindow):
         self.manage_page.layout.addWidget(nav_card)
         self.manage_page.layout.addWidget(self.manage_stack)
         self.manage_page.layout.addStretch()
+        self.manage_cards = [nav_card, self.manage_stack]
+
+    def switch_main_page(self, page, card_group=None):
+        self.switchTo(page)
+        self.animate_card_group(card_group or [])
 
     def log(self, message):
         self.status_log.append(message)
+        self.motion.pulse_widget(self.status_log.viewport(), duration=220, start_opacity=0.66, throttle_key="status_log", min_interval=0.18)
 
     def log_install(self, message):
         self.install_log.append(message)
+        self.motion.pulse_widget(self.install_log.viewport(), duration=220, start_opacity=0.66, throttle_key="install_log", min_interval=0.12)
 
     def switch_manage_section(self, section_key):
         mapping = {
@@ -1630,7 +1866,7 @@ class LauncherWindow(FluentWindow):
             "logs": 2,
         }
         index = mapping.get(section_key, 0)
-        self.manage_stack.setCurrentIndex(index)
+        self.motion.cross_fade_stack(self.manage_stack, index)
         self.manage_pivot.setCurrentItem(section_key)
 
     def switch_version_section(self, section_key):
@@ -1640,7 +1876,7 @@ class LauncherWindow(FluentWindow):
         }
         index = mapping.get(section_key, 0)
         if hasattr(self, "version_stack"):
-            self.version_stack.setCurrentIndex(index)
+            self.motion.cross_fade_stack(self.version_stack, index)
         if hasattr(self, "version_segment"):
             self.version_segment.setCurrentItem(section_key if section_key in mapping else "selector")
 
@@ -1701,6 +1937,7 @@ class LauncherWindow(FluentWindow):
             empty_item = QListWidgetItem("当前没有检测到 Mod 文件")
             empty_item.setFlags(Qt.ItemFlag.NoItemFlags)
             self.version_mods_list.addItem(empty_item)
+        self.motion.pulse_list(self.version_mods_list)
 
         summary = [
             f"当前版本：{self.version_display_name(version_id)}",
@@ -1709,6 +1946,7 @@ class LauncherWindow(FluentWindow):
         ]
         summary.append(f"类型：{version_type_label(version_id)}")
         self.version_summary_label.setText(" | ".join(summary))
+        self.motion.fade_slide_in(self.version_summary_label, offset=8, duration=220)
 
     def save_current_version_settings(self):
         version_id = self.current_selected_version()
@@ -1799,6 +2037,7 @@ class LauncherWindow(FluentWindow):
         if current_file:
             details += f" | 当前: {current_file}"
         self.download_metrics_label.setText(details)
+        self.motion.pulse_widget(self.download_metrics_label, duration=210, start_opacity=0.5, throttle_key="download_metrics", min_interval=0.18)
 
     def update_install_metrics(self, snapshot):
         progress = snapshot.get("progress", 0.0) * 100
@@ -1822,6 +2061,7 @@ class LauncherWindow(FluentWindow):
         if current_file:
             details += f" | 当前: {current_file}"
         self.install_metrics_label.setText(details)
+        self.motion.pulse_widget(self.install_metrics_label, duration=210, start_opacity=0.5, throttle_key="install_metrics", min_interval=0.14)
 
     def set_download_running(self, running):
         if hasattr(self, "download_button"):
@@ -1955,6 +2195,8 @@ class LauncherWindow(FluentWindow):
         save_config()
         self.populate_selected_account_fields()
         self.update_home_summary()
+        if hasattr(self, "account_summary_label"):
+            self.motion.fade_slide_in(self.account_summary_label, offset=10, duration=210)
 
     def populate_selected_account_fields(self):
         account = self.current_account()
@@ -2001,7 +2243,7 @@ class LauncherWindow(FluentWindow):
         }
         index = mapping.get(section_key, 0)
         if hasattr(self, "download_stack"):
-            self.download_stack.setCurrentIndex(index)
+            self.motion.cross_fade_stack(self.download_stack, index)
         if hasattr(self, "download_segment"):
             self.download_segment.setCurrentItem(section_key if section_key in mapping else "vanilla")
 
@@ -2017,7 +2259,7 @@ class LauncherWindow(FluentWindow):
             self.login_mode_combo.setCurrentText(section_key)
             self.login_mode_combo.blockSignals(False)
         if hasattr(self, "account_stack"):
-            self.account_stack.setCurrentIndex(index)
+            self.motion.cross_fade_stack(self.account_stack, index)
         if hasattr(self, "account_segment"):
             self.account_segment.setCurrentItem(section_key if section_key in mapping else "overview")
         self.update_account_field_visibility()
@@ -2171,6 +2413,7 @@ class LauncherWindow(FluentWindow):
                 if local_index >= 0:
                     self.local_version_combo.setCurrentIndex(local_index)
             self.refresh_install_versions(versions)
+            self.motion.pulse_list(self.version_mods_list)
             self.log(f"本地版本数量：{len(versions)}")
             if versions:
                 self.on_local_version_changed(self.local_version_combo.currentText().strip())
@@ -2204,10 +2447,19 @@ class LauncherWindow(FluentWindow):
         self.home_account_label.setText(f"账号：{account_text}")
         if hasattr(self, "account_summary_label"):
             self.account_summary_label.setText(f"当前账号：{account_text}")
+            self.motion.pulse_widget(self.account_summary_label, duration=200, start_opacity=0.58, throttle_key="account_summary", min_interval=0.15)
         self.home_java_label.setText(f"Java：{self.java_combo.count()} 个")
         self.home_local_label.setText(f"本地版本：{self.local_version_combo.count()}")
         self.home_remote_label.setText(f"远程版本：{self.remote_version_combo.count()}")
         self.home_dir_label.setText(f"游戏目录：{self.current_game_dir()}")
+        for key, widget in (
+            ("home_account", self.home_account_label),
+            ("home_java", self.home_java_label),
+            ("home_local", self.home_local_label),
+            ("home_remote", self.home_remote_label),
+            ("home_dir", self.home_dir_label),
+        ):
+            self.motion.pulse_widget(widget, duration=190, start_opacity=0.62, throttle_key=key, min_interval=0.18)
 
     def get_required_java_version(self, version_id):
         if not version_id:
@@ -2277,6 +2529,7 @@ class LauncherWindow(FluentWindow):
             self.version_display_combo.blockSignals(False)
         self.apply_recommended_java(version_id)
         self.populate_version_settings_panel(version_id)
+        self.motion.fade_slide_in(self.launch_status_label, offset=10, duration=210)
 
     def on_java_selected(self, java_path):
         path = java_path.strip()
@@ -2303,6 +2556,10 @@ class LauncherWindow(FluentWindow):
     def update_java_version(self, path):
         if not path:
             self.java_version_label.setText("未选择 Java")
+            return
+        major = self.java_versions.get(path)
+        if major:
+            self.java_version_label.setText(f"Java {major}")
             return
         version = get_java_version(path)
         self.java_version_label.setText(version or "无法获取 Java 版本")
@@ -2520,14 +2777,17 @@ class LauncherWindow(FluentWindow):
 
     def on_launch_status(self, message):
         self.launch_status_label.setText(message)
+        self.motion.pulse_widget(self.launch_status_label, duration=210, start_opacity=0.5, throttle_key="launch_status", min_interval=0.12)
         self.log(message)
 
     def on_install_status(self, message):
         self.install_status_label.setText(message)
+        self.motion.pulse_widget(self.install_status_label, duration=210, start_opacity=0.5, throttle_key="install_status", min_interval=0.12)
         self.log_install(message)
 
     def on_install_status_from_download(self, message):
         self.install_status_label.setText(message)
+        self.motion.pulse_widget(self.install_status_label, duration=210, start_opacity=0.5, throttle_key="install_status_from_download", min_interval=0.12)
         self.log_install(message)
 
     def on_launch_finished(self, payload):

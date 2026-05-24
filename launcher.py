@@ -10,6 +10,19 @@ config = configparser.ConfigParser()
 config.read("launcher_config.ini")
 
 
+def _hidden_subprocess_kwargs():
+    if os.name != "nt":
+        return {}
+
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return {
+        "startupinfo": startupinfo,
+        "creationflags": creationflags,
+    }
+
+
 def _current_os_name():
     if os.name == "nt":
         return "windows"
@@ -256,7 +269,7 @@ def launch_minecraft(java_path, version_id, game_directory=".minecraft", minecra
         command.extend(["-cp", classpath_string])
     command.extend([version_json["mainClass"], *game_arguments])
 
-    subprocess.Popen(command)
+    subprocess.Popen(command, **_hidden_subprocess_kwargs())
     return True
 
 

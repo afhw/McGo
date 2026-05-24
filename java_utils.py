@@ -5,6 +5,19 @@ import subprocess
 from platform import system
 
 
+def _hidden_subprocess_kwargs():
+    if os.name != "nt":
+        return {}
+
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return {
+        "startupinfo": startupinfo,
+        "creationflags": creationflags,
+    }
+
+
 def _push_unique(seen, paths, path):
     if not path:
         return
@@ -234,7 +247,13 @@ def get_java_version(java_path):
         return f'java version "{release_version}"'
 
     try:
-        result = subprocess.run([java_path, "-version"], capture_output=True, text=True, timeout=10)
+        result = subprocess.run(
+            [java_path, "-version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            **_hidden_subprocess_kwargs(),
+        )
         output = (result.stderr or result.stdout or "").strip()
         return _extract_java_version_text(output)
     except (FileNotFoundError, subprocess.SubprocessError, OSError):
