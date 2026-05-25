@@ -74,13 +74,15 @@ from qfluentwidgets import (
     TitleLabel,
     setTheme,
 )
+from qfluentwidgets.common.smooth_scroll import SmoothMode as NativeSmoothMode
 from qfluentwidgets.common.animation import FluentAnimation
 from qfluentwidgets.components.navigation.navigation_panel import NavigationDisplayMode, NavigationTreeWidgetBase
+from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
 
 from auth import MicrosoftAuthenticator
-from downloader import download_game_files, extract_natives
+from downloader import download_game_files, extract_natives, repair_game_files
 from java_utils import find_java_paths, get_java_major_version, get_java_version
-from launcher import get_local_versions, infer_required_java_version, launch_minecraft, get_version_json
+from launcher import build_launch_command, get_local_versions, get_version_inheritance_chain, infer_required_java_version, launch_minecraft, get_version_json
 from version_utils import (
     find_matching_fabric_versions,
     launch_options_for_version,
@@ -856,6 +858,7 @@ class InstallerEngine:
             "installed_version": installed_version,
             "message": "；".join(messages),
             "steps": list(install_types),
+            "install_type": install_types[-1] if install_types else "",
         }
 
 
@@ -961,6 +964,198 @@ class InstallWorker(QObject):
                 progress_callback=self.emit_snapshot,
             )
             payload = engine.install(self.install_type)
+            payload["install_type"] = self.install_type
+            self.progress.emit(100)
+            self.finished.emit(payload)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class RepairWorker(QObject):
+    progress = Signal(int)
+    metrics = Signal(dict)
+    status = Signal(str)
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, version_id, mirror_source, game_dir):
+        super().__init__()
+        self.version_id = version_id
+        self.mirror_source = mirror_source
+        self.game_dir = os.path.abspath(game_dir)
+
+    def run(self):
+        try:
+            chain = get_version_inheritance_chain(self.game_dir, self.version_id)
+            if not chain:
+                raise RuntimeError(f"未找到版本清单：{self.version_id}")
+
+            def on_progress(snapshot):
+                value = snapshot.get("progress", 0.0)
+                self.progress.emit(max(0, min(100, int(value * 100))))
+                self.metrics.emit(snapshot)
+
+            for index, version_json in enumerate(reversed(chain), start=1):
+                version_id = version_json.get("id", self.version_id)
+                self.status.emit(f"正在校验并补全 {version_id}（{index}/{len(chain)}）...")
+                asyncio.run(repair_game_files(
+                    version_json,
+                    self.game_dir,
+                    version_id,
+                    MIRROR_SOURCES[self.mirror_source],
+                    progress_callback=on_progress,
+                ))
+            self.progress.emit(100)
+            self.finished.emit({"version": self.version_id})
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class ModpackImportWorker(QObject):
+    progress = Signal(int)
+    status = Signal(str)
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, pack_path, game_dir):
+        super().__init__()
+        self.pack_path = pack_path
+        self.game_dir = os.path.abspath(game_dir)
+
+    def _safe_join(self, root, relative_path):
+        normalized = os.path.normpath(relative_path).replace("\\", os.sep).lstrip(os.sep)
+        target = os.path.abspath(os.path.join(root, normalized))
+        root_abs = os.path.abspath(root)
+        if not target.startswith(root_abs + os.sep) and target != root_abs:
+            raise RuntimeError(f"整合包包含不安全路径：{relative_path}")
+        return target
+
+    def _extract_prefix(self, archive, prefix, target_dir):
+        prefix = prefix.strip("/")
+        if prefix:
+            prefix = prefix + "/"
+        copied = 0
+        for item in archive.infolist():
+            name = item.filename.replace("\\", "/")
+            if item.is_dir() or (prefix and not name.startswith(prefix)):
+                continue
+            relative = name[len(prefix):] if prefix else name
+            if not relative:
+                continue
+            target = self._safe_join(target_dir, relative)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with archive.open(item) as src, open(target, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+            copied += 1
+        return copied
+
+    def _read_json(self, archive, name):
+        with archive.open(name) as handle:
+            return json.loads(handle.read().decode("utf-8-sig"))
+
+    def _find_entry(self, archive, candidates):
+        names = {item.filename.replace("\\", "/"): item.filename for item in archive.infolist()}
+        for candidate in candidates:
+            if candidate in names:
+                return names[candidate]
+        for name in names:
+            for candidate in candidates:
+                if name.endswith("/" + candidate):
+                    return names[name]
+        return ""
+
+    def _download_file(self, url, target_path):
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        with requests.get(url, stream=True, timeout=60) as response:
+            response.raise_for_status()
+            with open(target_path, "wb") as handle:
+                for chunk in response.iter_content(chunk_size=128 * 1024):
+                    if chunk:
+                        handle.write(chunk)
+
+    def _install_modrinth(self, archive, index_entry):
+        index = self._read_json(archive, index_entry)
+        dependencies = index.get("dependencies", {})
+        minecraft_version = dependencies.get("minecraft", "")
+        pack_name = (index.get("name") or os.path.splitext(os.path.basename(self.pack_path))[0]).strip()
+        version_id = re.sub(r'[<>:"/\\|?*]+', "_", pack_name) or f"Modrinth-{minecraft_version}"
+        runtime_dir = os.path.join(self.game_dir, "versions", version_id)
+        os.makedirs(runtime_dir, exist_ok=True)
+
+        self.status.emit("正在解压 overrides...")
+        base = index_entry.replace("\\", "/").rsplit("/", 1)[0]
+        base_prefix = f"{base}/" if base else ""
+        self._extract_prefix(archive, base_prefix + "overrides", runtime_dir)
+        self._extract_prefix(archive, base_prefix + "client-overrides", runtime_dir)
+
+        files = index.get("files", [])
+        for idx, item in enumerate(files, start=1):
+            path = item.get("path", "")
+            downloads = item.get("downloads", [])
+            if not path or not downloads:
+                continue
+            self.status.emit(f"正在下载整合包文件 {idx}/{len(files)}：{os.path.basename(path)}")
+            self.progress.emit(min(95, int(idx / max(len(files), 1) * 90)))
+            self._download_file(downloads[0], self._safe_join(runtime_dir, path))
+
+        return {
+            "version": version_id,
+            "alias": pack_name,
+            "minecraft": minecraft_version,
+            "loader": next((key for key in ("fabric-loader", "forge", "neoforge", "quilt-loader") if dependencies.get(key)), ""),
+            "message": f"Modrinth 整合包已导入：{pack_name}",
+        }
+
+    def _install_curseforge(self, archive, manifest_entry):
+        manifest = self._read_json(archive, manifest_entry)
+        minecraft_version = manifest.get("minecraft", {}).get("version", "")
+        pack_name = (manifest.get("name") or os.path.splitext(os.path.basename(self.pack_path))[0]).strip()
+        version_id = re.sub(r'[<>:"/\\|?*]+', "_", pack_name) or f"CurseForge-{minecraft_version}"
+        runtime_dir = os.path.join(self.game_dir, "versions", version_id)
+        os.makedirs(runtime_dir, exist_ok=True)
+
+        override_dir = (manifest.get("overrides") or "overrides").strip("/\\")
+        base = manifest_entry.replace("\\", "/").rsplit("/", 1)[0]
+        base_prefix = f"{base}/" if base else ""
+        copied = self._extract_prefix(archive, base_prefix + override_dir, runtime_dir)
+        file_count = len(manifest.get("files", []))
+        return {
+            "version": version_id,
+            "alias": pack_name,
+            "minecraft": minecraft_version,
+            "loader": "",
+            "message": f"CurseForge 整合包已导入 overrides（{copied} 个文件）。外部 Mod 清单 {file_count} 项需后续下载支持。",
+        }
+
+    def _install_plain_zip(self, archive):
+        pack_name = os.path.splitext(os.path.basename(self.pack_path))[0].strip()
+        version_id = re.sub(r'[<>:"/\\|?*]+', "_", pack_name) or "ImportedPack"
+        runtime_dir = os.path.join(self.game_dir, "versions", version_id)
+        os.makedirs(runtime_dir, exist_ok=True)
+        copied = self._extract_prefix(archive, "", runtime_dir)
+        return {
+            "version": version_id,
+            "alias": pack_name,
+            "minecraft": "",
+            "loader": "",
+            "message": f"压缩包已导入：{copied} 个文件",
+        }
+
+    def run(self):
+        try:
+            if not zipfile.is_zipfile(self.pack_path):
+                raise RuntimeError("当前仅支持 zip/mrpack 格式整合包。")
+            self.progress.emit(3)
+            self.status.emit("正在识别整合包格式...")
+            with zipfile.ZipFile(self.pack_path, "r") as archive:
+                modrinth_entry = self._find_entry(archive, ["modrinth.index.json"])
+                manifest_entry = self._find_entry(archive, ["manifest.json"])
+                if modrinth_entry:
+                    payload = self._install_modrinth(archive, modrinth_entry)
+                elif manifest_entry:
+                    payload = self._install_curseforge(archive, manifest_entry)
+                else:
+                    payload = self._install_plain_zip(archive)
             self.progress.emit(100)
             self.finished.emit(payload)
         except Exception as exc:
@@ -1047,6 +1242,8 @@ class ScanWorker(QObject):
 
 class LaunchWorker(QObject):
     status = Signal(str)
+    progress = Signal(int)
+    stage = Signal(str)
     finished = Signal(dict)
     failed = Signal(str)
 
@@ -1069,11 +1266,15 @@ class LaunchWorker(QObject):
             if account.get("type") == "offline":
                 if not username:
                     raise Exception("离线账号需要填写用户名。")
+                self.stage.emit("离线账号校验")
+                self.progress.emit(25)
             else:
                 refresh_token = account.get("refresh_token", "")
                 if not refresh_token:
                     raise Exception("该 Microsoft 账号没有可用的刷新令牌，请重新登录。")
 
+                self.stage.emit("刷新 Microsoft 登录")
+                self.progress.emit(20)
                 self.status.emit("正在刷新 Microsoft 登录状态...")
                 session = MicrosoftAuthenticator(client_id, redirect_uri)
                 asyncio.run(session.refresh_access_token(refresh_token))
@@ -1084,6 +1285,8 @@ class LaunchWorker(QObject):
                 account["uuid"] = uuid
                 account["display_name"] = username
 
+            self.stage.emit("构建启动命令")
+            self.progress.emit(70)
             self.status.emit(f"正在启动 Minecraft {self.version}...")
             launched = launch_minecraft(
                 self.java_path,
@@ -1098,6 +1301,8 @@ class LaunchWorker(QObject):
             if not launched:
                 raise Exception(f"本地未找到版本 {self.version}，请先下载。")
 
+            self.stage.emit("启动进程")
+            self.progress.emit(100)
             self.finished.emit({
                 "version": self.version,
                 "account": account,
@@ -1125,8 +1330,22 @@ class Page(ScrollArea):
 
     def _configure_scroll_behavior(self):
         self.setSmoothMode(SmoothMode.NO_SMOOTH, Qt.Orientation.Vertical)
+        self.setSmoothMode(SmoothMode.NO_SMOOTH, Qt.Orientation.Horizontal)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+
+class NativeComboBoxMenu(ComboBoxMenu):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        if hasattr(self.view, "scrollDelegate"):
+            self.view.scrollDelegate.verticalSmoothScroll.setSmoothMode(NativeSmoothMode.NO_SMOOTH)
+            self.view.scrollDelegate.horizonSmoothScroll.setSmoothMode(NativeSmoothMode.NO_SMOOTH)
+
+
+class NativeComboBox(ComboBox):
+    def _createComboMenu(self):
+        return NativeComboBoxMenu(self)
 
 
 class UiMotionController(QObject):
@@ -1269,12 +1488,17 @@ class LauncherWindow(FluentWindow):
         self.download_worker = None
         self.install_thread = None
         self.install_worker = None
+        self.repair_thread = None
+        self.repair_worker = None
+        self.modpack_thread = None
+        self.modpack_worker = None
         self.auth_thread = None
         self.auth_worker = None
         self.launch_thread = None
         self.launch_worker = None
         self.scan_threads = {}
         self.scan_workers = {}
+        self.scan_feedback_tasks = set()
         self.java_versions = {}
         self.accounts = load_accounts()
         self.version_settings = load_version_settings()
@@ -1307,8 +1531,8 @@ class LauncherWindow(FluentWindow):
         QTimer.singleShot(40, self.animate_initial_views)
 
     def initialize_background_state(self):
-        self.refresh_java_paths()
-        self.refresh_local_versions()
+        self.refresh_java_paths(show_feedback=False)
+        self.refresh_local_versions(show_feedback=False)
 
     def animate_initial_views(self):
         self.animate_card_group(getattr(self, "home_cards", []))
@@ -1331,34 +1555,34 @@ class LauncherWindow(FluentWindow):
             )
 
     def build_controls(self):
-        self.java_combo = ComboBox()
+        self.java_combo = NativeComboBox()
         self.java_combo.currentTextChanged.connect(self.on_java_selected)
         self.java_version_label = BodyLabel("未选择 Java")
-        self.version_category_combo = ComboBox()
+        self.version_category_combo = NativeComboBox()
         self.version_category_combo.addItems(["全部版本", "原版", "仅 OptiFine", "可安装 Mod"])
-        self.version_category_combo.currentTextChanged.connect(lambda _: self.refresh_local_versions())
-        self.version_display_combo = ComboBox()
+        self.version_category_combo.currentTextChanged.connect(lambda _: self.refresh_local_versions(show_feedback=False))
+        self.version_display_combo = NativeComboBox()
         self.version_display_combo.currentTextChanged.connect(self.on_version_display_selected)
-        self.local_version_combo = ComboBox()
+        self.local_version_combo = NativeComboBox()
         self.local_version_combo.currentTextChanged.connect(self.on_local_version_changed)
-        self.remote_version_combo = ComboBox()
-        self.install_type_combo = ComboBox()
+        self.remote_version_combo = NativeComboBox()
+        self.install_type_combo = NativeComboBox()
         self.install_type_combo.addItems(["fabric", "forge", "neoforge", "optifine", "fabric_api"])
         self.install_type_combo.currentTextChanged.connect(self.update_install_button_text)
         self.install_type_combo.currentTextChanged.connect(lambda _: self.refresh_install_versions())
-        self.install_version_combo = ComboBox()
-        self.version_type_combo = ComboBox()
+        self.install_version_combo = NativeComboBox()
+        self.version_type_combo = NativeComboBox()
         self.version_type_combo.addItems(["release", "snapshot", "old_alpha", "old_beta"])
-        self.mirror_combo = ComboBox()
+        self.mirror_combo = NativeComboBox()
         self.mirror_combo.addItems(list(MIRROR_SOURCES.keys()))
         self.mirror_combo.setCurrentText(config.get("DOWNLOAD", "mirror_source", fallback="official"))
-        self.login_mode_combo = ComboBox()
+        self.login_mode_combo = NativeComboBox()
         self.login_mode_combo.addItems(["offline", "microsoft"])
         self.login_mode_combo.setCurrentText("microsoft" if config.getboolean("AUTH", "use_microsoft_login", fallback=False) else "offline")
         self.login_mode_combo.currentTextChanged.connect(self.update_account_field_visibility)
-        self.account_combo = ComboBox()
+        self.account_combo = NativeComboBox()
         self.account_combo.currentTextChanged.connect(self.on_account_selected)
-        self.manage_account_combo = ComboBox()
+        self.manage_account_combo = NativeComboBox()
         self.manage_account_combo.currentTextChanged.connect(self.on_manage_account_selected)
         self.username_input = LineEdit()
         self.username_input.setText(config.get("USER", "username", fallback=""))
@@ -1381,7 +1605,7 @@ class LauncherWindow(FluentWindow):
         self.login_link_input.setPlaceholderText("关闭自动打开后，Microsoft 登录链接会显示在这里")
         self.login_link_button = HyperlinkButton("", "打开登录链接")
         self.login_link_button.setVisible(False)
-        self.delete_account_combo = ComboBox()
+        self.delete_account_combo = NativeComboBox()
         self.progress_bar = ProgressBar()
         self.progress_bar.setRange(0, 100)
         self.download_metrics_label = BodyLabel("等待下载")
@@ -1401,6 +1625,8 @@ class LauncherWindow(FluentWindow):
         self.version_mods_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.version_mods_list.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.version_mods_list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        if hasattr(self.version_mods_list, "setSmoothMode"):
+            self.version_mods_list.setSmoothMode(SmoothMode.NO_SMOOTH)
         self.version_mods_list.setUniformItemSizes(True)
         self.version_mods_list.setWordWrap(True)
         self.version_mods_list.setMinimumHeight(360)
@@ -1414,12 +1640,16 @@ class LauncherWindow(FluentWindow):
         self.install_log.setAcceptRichText(False)
         self.install_log.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.install_log.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        if hasattr(self.install_log, "setSmoothMode"):
+            self.install_log.setSmoothMode(SmoothMode.NO_SMOOTH)
         self.install_log.document().setMaximumBlockCount(1000)
         self.status_log = TextEdit()
         self.status_log.setReadOnly(True)
         self.status_log.setAcceptRichText(False)
         self.status_log.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.status_log.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        if hasattr(self.status_log, "setSmoothMode"):
+            self.status_log.setSmoothMode(SmoothMode.NO_SMOOTH)
         self.status_log.document().setMaximumBlockCount(1000)
         self.version_type_combo.currentTextChanged.connect(lambda _: self.log("版本类型已更改，点击“刷新远程版本”重新加载列表。"))
         self.download_loader_checks = {
@@ -1432,6 +1662,7 @@ class LauncherWindow(FluentWindow):
         for install_type, checkbox in self.download_loader_checks.items():
             checkbox.stateChanged.connect(lambda _, current=install_type: self.on_download_addon_changed(current))
         self.download_addon_hint_label = CaptionLabel("可在下载原版后自动继续安装；Fabric API 仅在 Fabric 一起安装时可用。")
+        self.download_warning_label = CaptionLabel("")
 
     def build_pages(self):
         self.home_page = Page("homePage", "McGo", "一个 Fluent 风格的 Minecraft 启动器")
@@ -1518,10 +1749,10 @@ class LauncherWindow(FluentWindow):
         download_button = PushButton("2. 下载版本")
         launch_button = PushButton("3. 启动游戏")
         refresh_button = PushButton("刷新本地状态")
-        manage_button.clicked.connect(lambda: self.switch_main_page(self.manage_page, self.manage_cards))
+        manage_button.clicked.connect(lambda: self.open_manage_section("accounts"))
         refresh_button.clicked.connect(self.refresh_all)
-        download_button.clicked.connect(lambda: self.switch_main_page(self.download_page, self.download_cards))
-        launch_button.clicked.connect(lambda: self.switch_main_page(self.launch_page, self.launch_cards))
+        download_button.clicked.connect(lambda: self.open_download_section("vanilla"))
+        launch_button.clicked.connect(lambda: self.open_version_section("selector"))
         row.addWidget(manage_button)
         row.addWidget(download_button)
         row.addWidget(launch_button)
@@ -1557,6 +1788,20 @@ class LauncherWindow(FluentWindow):
         self.add_labeled_control(start_layout, "当前版本", self.version_display_combo)
         start_layout.addWidget(self.version_summary_label)
         start_layout.addWidget(self.launch_status_label)
+        self.launch_progress_bar = ProgressBar()
+        self.launch_progress_bar.setRange(0, 100)
+        self.launch_progress_bar.setValue(0)
+        self.launch_stage_label = CaptionLabel("当前步骤：等待启动")
+        self.launch_method_label = CaptionLabel("登录方式：未选择")
+        self.launch_progress_label = CaptionLabel("启动进度：0%")
+        start_layout.addWidget(self.launch_progress_bar)
+        launch_info_grid = QGridLayout()
+        launch_info_grid.setHorizontalSpacing(18)
+        launch_info_grid.setVerticalSpacing(8)
+        launch_info_grid.addWidget(self.launch_stage_label, 0, 0)
+        launch_info_grid.addWidget(self.launch_method_label, 0, 1)
+        launch_info_grid.addWidget(self.launch_progress_label, 1, 0)
+        start_layout.addLayout(launch_info_grid)
         start_row = QHBoxLayout()
         refresh_button = PushButton("刷新本地版本")
         self.launch_button = PrimaryPushButton("启动 Minecraft")
@@ -1589,11 +1834,49 @@ class LauncherWindow(FluentWindow):
         self.add_labeled_control(selector_layout, "版本列表", self.version_display_combo)
         selector_layout.addWidget(self.version_summary_label)
 
-        settings_card, settings_layout = self.make_card("版本设置", "为当前版本单独设置名称、JVM 参数、运行目录，并根据版本类型显示 Mod 管理状态")
-        self.add_labeled_control(settings_layout, "显示名称", self.version_alias_input)
-        self.add_labeled_control(settings_layout, "额外 JVM 参数", self.version_jvm_args_input)
-        settings_layout.addWidget(self.version_isolation_check)
-        self.add_labeled_control(settings_layout, "自定义运行目录", self.version_custom_dir_input)
+        personalization_card, personalization_layout = self.make_card("个性化", "显示名称会出现在版本列表中，便于区分 Forge、Fabric 等实例")
+        self.add_labeled_control(personalization_layout, "显示名称", self.version_alias_input)
+        personalization_row = QHBoxLayout()
+        self.save_version_settings_button = PrimaryPushButton("保存当前版本设置")
+        self.save_version_settings_button.clicked.connect(self.save_current_version_settings)
+        personalization_row.addWidget(self.save_version_settings_button)
+        personalization_row.addStretch()
+        personalization_layout.addLayout(personalization_row)
+
+        launch_settings_card, launch_settings_layout = self.make_card("启动设置", "为当前版本单独设置 JVM 参数和运行目录")
+        self.add_labeled_control(launch_settings_layout, "额外 JVM 参数", self.version_jvm_args_input)
+        launch_settings_layout.addWidget(self.version_isolation_check)
+        self.add_labeled_control(launch_settings_layout, "自定义运行目录", self.version_custom_dir_input)
+
+        shortcut_card, shortcut_layout = self.make_card("快捷方式", "常用文件夹和启动脚本集中在这里")
+        shortcut_row = QHBoxLayout()
+        self.open_version_folder_button = PushButton("版本文件夹")
+        self.open_saves_button = PushButton("存档文件夹")
+        self.open_mods_button = PushButton("Mod 文件夹")
+        self.export_launch_script_button = PushButton("导出启动脚本")
+        self.open_version_folder_button.clicked.connect(self.open_current_version_folder)
+        self.open_saves_button.clicked.connect(self.open_current_saves_directory)
+        self.open_mods_button.clicked.connect(self.open_current_mods_directory)
+        self.export_launch_script_button.clicked.connect(self.export_current_launch_script)
+        shortcut_row.addWidget(self.open_version_folder_button)
+        shortcut_row.addWidget(self.open_saves_button)
+        shortcut_row.addWidget(self.open_mods_button)
+        shortcut_row.addWidget(self.export_launch_script_button)
+        shortcut_row.addStretch()
+        shortcut_layout.addLayout(shortcut_row)
+
+        manage_card, manage_layout = self.make_card("高级管理", "处理当前版本的本地文件和危险操作")
+        manage_row = QHBoxLayout()
+        self.repair_version_button = PushButton("补全/校验文件")
+        self.delete_version_button = PushButton("删除当前版本")
+        self.repair_version_button.clicked.connect(self.repair_current_version)
+        self.delete_version_button.clicked.connect(self.delete_current_version)
+        manage_row.addWidget(self.repair_version_button)
+        manage_row.addWidget(self.delete_version_button)
+        manage_row.addStretch()
+        manage_layout.addLayout(manage_row)
+
+        mod_card, mod_card_layout = self.make_card("Mod 管理", "可安装 Mod 的版本会显示 mods 文件夹内的 jar")
         self.mod_section = QWidget()
         mod_layout = QVBoxLayout(self.mod_section)
         mod_layout.setContentsMargins(0, 0, 0, 0)
@@ -1605,21 +1888,15 @@ class LauncherWindow(FluentWindow):
         mod_layout.addWidget(self.mod_section_hint)
         mod_layout.addWidget(self.version_mods_list)
         settings_row = QHBoxLayout()
-        self.save_version_settings_button = PrimaryPushButton("保存当前版本设置")
-        self.open_mods_button = PushButton("打开 mods 文件夹")
         self.toggle_mod_button = PushButton("启用/禁用所选 Mod")
         self.delete_mod_button = PushButton("删除所选 Mod")
-        self.save_version_settings_button.clicked.connect(self.save_current_version_settings)
-        self.open_mods_button.clicked.connect(self.open_current_mods_directory)
         self.toggle_mod_button.clicked.connect(self.toggle_selected_mod)
         self.delete_mod_button.clicked.connect(self.delete_selected_mod)
-        settings_row.addWidget(self.save_version_settings_button)
-        settings_row.addWidget(self.open_mods_button)
         settings_row.addWidget(self.toggle_mod_button)
         settings_row.addWidget(self.delete_mod_button)
         settings_row.addStretch()
         mod_layout.addLayout(settings_row)
-        settings_layout.addWidget(self.mod_section)
+        mod_card_layout.addWidget(self.mod_section)
 
         selector_view_layout = QVBoxLayout(self.version_selector_view)
         selector_view_layout.setContentsMargins(0, 0, 0, 0)
@@ -1628,7 +1905,11 @@ class LauncherWindow(FluentWindow):
 
         settings_view_layout = QVBoxLayout(self.version_settings_view)
         settings_view_layout.setContentsMargins(0, 0, 0, 0)
-        settings_view_layout.addWidget(settings_card)
+        settings_view_layout.addWidget(personalization_card)
+        settings_view_layout.addWidget(launch_settings_card)
+        settings_view_layout.addWidget(shortcut_card)
+        settings_view_layout.addWidget(manage_card)
+        settings_view_layout.addWidget(mod_card)
         settings_view_layout.addStretch()
 
         self.version_stack.addWidget(self.version_selector_view)
@@ -1661,6 +1942,7 @@ class LauncherWindow(FluentWindow):
         self.download_stack = QStackedWidget()
         self.download_vanilla_view = QWidget()
         self.download_install_view = QWidget()
+        self.download_modpack_view = QWidget()
 
         download_card, download_layout = self.make_card("下载原版", "原版下载支持一并勾选后续安装项，减少重复操作")
         self.add_labeled_control(download_layout, "版本类型", self.version_type_combo)
@@ -1674,6 +1956,7 @@ class LauncherWindow(FluentWindow):
         addon_container.setLayout(addon_row)
         self.add_labeled_control(download_layout, "下载后继续", addon_container)
         download_layout.addWidget(self.download_addon_hint_label)
+        download_layout.addWidget(self.download_warning_label)
         row = QHBoxLayout()
         self.refresh_remote_button = PushButton("刷新远程版本")
         self.download_button = PrimaryPushButton("下载所选版本")
@@ -1700,6 +1983,15 @@ class LauncherWindow(FluentWindow):
         install_layout.addWidget(self.install_metrics_label)
         install_layout.addWidget(self.install_log)
 
+        modpack_card, modpack_layout = self.make_card("导入整合包", "支持 Modrinth .mrpack、CurseForge manifest 包和普通 zip 覆写包")
+        modpack_layout.addWidget(CaptionLabel("Modrinth 包会下载 index 中声明的文件；CurseForge 包先导入 overrides，外部 Mod 下载后续补齐。"))
+        modpack_row = QHBoxLayout()
+        self.import_modpack_button = PrimaryPushButton("选择并导入整合包")
+        self.import_modpack_button.clicked.connect(self.import_modpack)
+        modpack_row.addWidget(self.import_modpack_button)
+        modpack_row.addStretch()
+        modpack_layout.addLayout(modpack_row)
+
         vanilla_layout = QVBoxLayout(self.download_vanilla_view)
         vanilla_layout.setContentsMargins(0, 0, 0, 0)
         vanilla_layout.addWidget(download_card)
@@ -1710,10 +2002,17 @@ class LauncherWindow(FluentWindow):
         install_view_layout.addWidget(install_card)
         install_view_layout.addStretch()
 
+        modpack_view_layout = QVBoxLayout(self.download_modpack_view)
+        modpack_view_layout.setContentsMargins(0, 0, 0, 0)
+        modpack_view_layout.addWidget(modpack_card)
+        modpack_view_layout.addStretch()
+
         self.download_stack.addWidget(self.download_vanilla_view)
         self.download_stack.addWidget(self.download_install_view)
+        self.download_stack.addWidget(self.download_modpack_view)
         self.download_segment.addItem("vanilla", "下载原版", lambda: self.switch_download_section("vanilla"))
         self.download_segment.addItem("addons", "安装扩展", lambda: self.switch_download_section("addons"))
+        self.download_segment.addItem("modpack", "导入整合包", lambda: self.switch_download_section("modpack"))
         self.download_segment.setCurrentItem("vanilla")
 
         self.update_install_button_text(self.install_type_combo.currentText())
@@ -1890,6 +2189,18 @@ class LauncherWindow(FluentWindow):
         self.switchTo(page)
         self.animate_card_group(card_group or [])
 
+    def open_manage_section(self, section_key):
+        self.switch_main_page(self.manage_page, self.manage_cards)
+        self.switch_manage_section(section_key)
+
+    def open_download_section(self, section_key):
+        self.switch_main_page(self.download_page, self.download_cards)
+        self.switch_download_section(section_key)
+
+    def open_version_section(self, section_key):
+        self.switch_main_page(self.launch_page, self.launch_cards)
+        self.switch_version_section(section_key)
+
     def log(self, message):
         self.status_log.append(message)
         self.motion.pulse_widget(self.status_log.viewport(), duration=220, start_opacity=0.66, throttle_key="status_log", min_interval=0.18)
@@ -1968,6 +2279,12 @@ class LauncherWindow(FluentWindow):
         self.open_mods_button.setEnabled(supports_mod_management)
         self.toggle_mod_button.setEnabled(supports_mod_management)
         self.delete_mod_button.setEnabled(supports_mod_management)
+        has_version = bool(version_id)
+        self.open_version_folder_button.setEnabled(has_version)
+        self.open_saves_button.setEnabled(has_version)
+        self.export_launch_script_button.setEnabled(has_version)
+        self.repair_version_button.setEnabled(has_version)
+        self.delete_version_button.setEnabled(has_version)
 
         if supports_mod_management:
             self.mod_section_hint.setText("当前版本支持 Mod 管理，可以直接打开 mods 文件夹并启用、禁用或删除 Mod。")
@@ -2009,13 +2326,49 @@ class LauncherWindow(FluentWindow):
             return
         entry = self.version_settings_entry(version_id)
         entry["alias"] = self.version_alias_input.text().strip()
+        entry["alias_auto"] = False
         entry["jvm_args"] = self.version_jvm_args_input.text().strip()
         entry["runtime_directory"] = self.version_custom_dir_input.text().strip()
         entry["use_isolated_directory"] = self.version_isolation_check.isChecked()
         save_version_settings(self.version_settings)
-        self.refresh_local_versions()
+        self.refresh_local_versions(show_feedback=False)
         self.populate_version_settings_panel(version_id)
         self.show_success("版本设置已保存", self.version_display_name(version_id))
+
+    def build_installed_version_alias(self, version_id, install_types):
+        normalized_types = [item for item in install_types if item]
+        detected = version_type_label(self.current_game_dir(), version_id)
+        if "fabric_api" in normalized_types and detected in {"Fabric", "Forge", "NeoForge", "OptiFine"}:
+            detected_key = detected.lower()
+            if detected_key not in normalized_types:
+                normalized_types.insert(0, detected_key)
+        labels = [
+            INSTALL_TYPE_LABELS.get(item, item)
+            for item in normalized_types
+            if item
+        ]
+        if not labels:
+            if detected and detected != "原版":
+                labels = [detected]
+        if not labels:
+            return ""
+        base_version = self.base_version_for(version_id)
+        return f"Minecraft {base_version} {' + '.join(labels)}"
+
+    def apply_auto_version_alias(self, version_id, install_types):
+        if not version_id:
+            return ""
+        entry = self.version_settings_entry(version_id)
+        if (entry.get("alias") or "").strip() and not entry.get("alias_auto", False):
+            return ""
+        alias = self.build_installed_version_alias(version_id, install_types)
+        if not alias:
+            return ""
+        entry["alias"] = alias
+        entry["alias_auto"] = True
+        save_version_settings(self.version_settings)
+        self.log(f"已自动命名版本：{alias} [{version_id}]")
+        return alias
 
     def current_mods_directory(self):
         version_id = self.current_selected_version()
@@ -2025,6 +2378,14 @@ class LauncherWindow(FluentWindow):
             version_id,
             global_isolation=self.resource_isolation_check.isChecked(),
         )
+
+    def current_version_directory(self):
+        version_id = self.current_selected_version()
+        return os.path.join(self.current_game_dir(), "versions", version_id) if version_id else ""
+
+    def current_saves_directory(self):
+        version_id = self.current_selected_version()
+        return os.path.join(self.runtime_directory_for_version(version_id), "saves") if version_id else ""
 
     def current_mod_item_path(self, item=None):
         current_item = item or self.version_mods_list.currentItem()
@@ -2070,6 +2431,135 @@ class LauncherWindow(FluentWindow):
         mods_dir = self.current_mods_directory()
         os.makedirs(mods_dir, exist_ok=True)
         os.startfile(os.path.abspath(mods_dir))
+
+    def open_current_version_folder(self):
+        version_dir = self.current_version_directory()
+        if not version_dir:
+            self.show_warning("缺少版本", "请先选择一个本地版本。")
+            return
+        if not os.path.isdir(version_dir):
+            self.show_warning("版本不存在", version_dir)
+            return
+        os.startfile(os.path.abspath(version_dir))
+
+    def open_current_saves_directory(self):
+        saves_dir = self.current_saves_directory()
+        if not saves_dir:
+            self.show_warning("缺少版本", "请先选择一个本地版本。")
+            return
+        os.makedirs(saves_dir, exist_ok=True)
+        os.startfile(os.path.abspath(saves_dir))
+
+    def export_current_launch_script(self):
+        version_id = self.current_selected_version()
+        java_path = self.java_combo.currentText().strip()
+        account = self.current_account()
+        if not version_id:
+            self.show_warning("缺少版本", "请先选择一个本地版本。")
+            return
+        if not java_path:
+            self.show_warning("缺少 Java", "请先选择 Java 路径。")
+            return
+        if not account:
+            self.show_warning("缺少账号", "请先选择一个账号。")
+            return
+
+        launch_options = launch_options_for_version(
+            self.current_game_dir(),
+            self.version_settings,
+            version_id,
+            global_isolation=self.resource_isolation_check.isChecked(),
+        )
+        try:
+            command = build_launch_command(
+                java_path,
+                version_id,
+                game_directory=self.current_game_dir(),
+                minecraft_access_token=account.get("access_token", ""),
+                username=account.get("username", ""),
+                uuid=account.get("uuid", ""),
+                runtime_directory=launch_options["runtime_directory"],
+                extra_jvm_args=launch_options["extra_jvm_args"],
+            )
+        except Exception as exc:
+            self.show_warning("导出失败", str(exc))
+            return
+
+        script_dir = os.path.join(self.current_game_dir(), "mcgo_scripts")
+        os.makedirs(script_dir, exist_ok=True)
+        safe_name = re.sub(r'[<>:"/\\|?*]+', "_", version_id).strip() or "minecraft"
+        script_path = os.path.join(script_dir, f"launch-{safe_name}.bat")
+        with open(script_path, "w", encoding="utf-8-sig", newline="\r\n") as file_handle:
+            file_handle.write("@echo off\r\n")
+            file_handle.write("cd /d %~dp0\\..\r\n")
+            file_handle.write(f"{subprocess.list2cmdline(command)}\r\n")
+            file_handle.write("pause\r\n")
+        self.show_success("启动脚本已导出", script_path)
+        self.log(f"已导出启动脚本：{script_path}")
+
+    def repair_current_version(self):
+        if self.repair_thread and self.repair_thread.isRunning():
+            self.show_warning("补全进行中", "当前已有补全任务在运行。")
+            return
+        if self.download_thread and self.download_thread.isRunning():
+            self.show_warning("下载进行中", "请等待当前下载任务完成后再补全文件。")
+            return
+        if self.install_thread and self.install_thread.isRunning():
+            self.show_warning("安装进行中", "请等待当前安装任务完成后再补全文件。")
+            return
+
+        version_id = self.current_selected_version()
+        if not version_id:
+            self.show_warning("缺少版本", "请先选择一个本地版本。")
+            return
+        self.progress_bar.setValue(0)
+        self.download_metrics_label.setText(f"准备补全 {version_id}...")
+        self.install_status_label.setText("正在校验版本完整性")
+        self.install_metrics_label.setText("等待校验任务返回进度")
+        self.set_download_running(True)
+        self.repair_thread = QThread()
+        self.repair_worker = RepairWorker(version_id, self.mirror_combo.currentText(), self.current_game_dir())
+        self.repair_worker.moveToThread(self.repair_thread)
+        self.repair_thread.started.connect(self.repair_worker.run)
+        self.repair_worker.progress.connect(self.progress_bar.setValue)
+        self.repair_worker.metrics.connect(self.update_download_metrics)
+        self.repair_worker.status.connect(self.on_install_status)
+        self.repair_worker.finished.connect(self.on_repair_finished)
+        self.repair_worker.failed.connect(self.on_repair_failed)
+        self.repair_worker.finished.connect(self.repair_thread.quit)
+        self.repair_worker.failed.connect(self.repair_thread.quit)
+        self.repair_thread.start()
+
+    def delete_current_version(self):
+        version_id = self.current_selected_version()
+        version_dir = self.current_version_directory()
+        if not version_id or not version_dir:
+            self.show_warning("缺少版本", "请先选择一个本地版本。")
+            return
+        if not os.path.isdir(version_dir):
+            self.show_warning("版本不存在", version_dir)
+            return
+        reply = QMessageBox.question(
+            self,
+            "删除版本",
+            f"确定要删除版本 {self.version_display_name(version_id)} 吗？\n\n将删除：{os.path.abspath(version_dir)}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            shutil.rmtree(version_dir)
+            self.version_settings.pop(version_id, None)
+            if self.version_settings.get("_meta", {}).get("last_launched_version") == version_id:
+                self.version_settings["_meta"]["last_launched_version"] = ""
+            save_version_settings(self.version_settings)
+        except Exception as exc:
+            self.show_warning("删除失败", str(exc))
+            return
+        self.refresh_local_versions(show_feedback=False)
+        self.show_success("版本已删除", version_id)
+        self.log(f"已删除版本：{version_id}")
 
     def toggle_selected_mod(self):
         version_id = self.current_selected_version()
@@ -2168,6 +2658,10 @@ class LauncherWindow(FluentWindow):
             self.install_button.setEnabled(not running)
         if hasattr(self, "refresh_install_versions_button"):
             self.refresh_install_versions_button.setEnabled(not running)
+        if hasattr(self, "import_modpack_button"):
+            self.import_modpack_button.setEnabled(not running)
+        if hasattr(self, "repair_version_button"):
+            self.repair_version_button.setEnabled(not running)
         if hasattr(self, "install_type_combo"):
             self.install_type_combo.setEnabled(not running)
         if hasattr(self, "install_version_combo"):
@@ -2187,6 +2681,9 @@ class LauncherWindow(FluentWindow):
 
     def show_success(self, title, content):
         InfoBar.success(title, content, duration=2500, position=InfoBarPosition.TOP_RIGHT, parent=self)
+
+    def show_info(self, title, content):
+        InfoBar.info(title, content, duration=2200, position=InfoBarPosition.TOP_RIGHT, parent=self)
 
     def show_warning(self, title, content):
         InfoBar.warning(title, content, duration=3500, position=InfoBarPosition.TOP_RIGHT, parent=self)
@@ -2336,6 +2833,7 @@ class LauncherWindow(FluentWindow):
         mapping = {
             "vanilla": 0,
             "addons": 1,
+            "modpack": 2,
         }
         index = mapping.get(section_key, 0)
         if hasattr(self, "download_stack"):
@@ -2440,10 +2938,17 @@ class LauncherWindow(FluentWindow):
     def current_game_dir(self):
         return self.game_dir_input.text().strip() or game_directory
 
-    def start_scan_task(self, task_type, game_dir="", version_type="", mirror_source="official"):
+    def start_scan_task(self, task_type, game_dir="", version_type="", mirror_source="official", show_feedback=False):
         existing_thread = self.scan_threads.get(task_type)
         if existing_thread and existing_thread.isRunning():
+            if show_feedback:
+                self.show_info("正在刷新", self.scan_task_running_message(task_type))
+                self.scan_feedback_tasks.add(task_type)
             return
+
+        if show_feedback:
+            self.scan_feedback_tasks.add(task_type)
+            self.show_info("正在刷新", self.scan_task_started_message(task_type))
 
         thread = QThread()
         worker = ScanWorker(task_type, game_dir=game_dir, version_type=version_type, mirror_source=mirror_source)
@@ -2459,6 +2964,28 @@ class LauncherWindow(FluentWindow):
         self.scan_workers[task_type] = worker
         thread.start()
 
+    def scan_task_started_message(self, task_type):
+        messages = {
+            "java": "正在扫描本机 Java 环境...",
+            "local_versions": "正在读取本地 Minecraft 版本...",
+            "remote_versions": "正在获取远程版本列表...",
+        }
+        return messages.get(task_type, "正在刷新状态...")
+
+    def scan_task_running_message(self, task_type):
+        messages = {
+            "java": "Java 环境扫描仍在进行。",
+            "local_versions": "本地版本刷新仍在进行。",
+            "remote_versions": "远程版本列表刷新仍在进行。",
+        }
+        return messages.get(task_type, "刷新任务仍在进行。")
+
+    def should_show_scan_feedback(self, task_type):
+        return task_type in self.scan_feedback_tasks
+
+    def finish_scan_feedback(self, task_type):
+        self.scan_feedback_tasks.discard(task_type)
+
     def clear_scan_task(self, task_type):
         self.scan_threads.pop(task_type, None)
         self.scan_workers.pop(task_type, None)
@@ -2467,6 +2994,7 @@ class LauncherWindow(FluentWindow):
         task = payload.get("task", "")
         if task == "java":
             paths = payload.get("paths", [])
+            show_feedback = self.should_show_scan_feedback(task)
             self.java_combo.clear()
             self.java_versions = payload.get("versions", {})
             for path in paths:
@@ -2479,10 +3007,14 @@ class LauncherWindow(FluentWindow):
                 self.launch_status_label.setText("未找到可用 Java")
                 self.log("未找到 Java。")
             self.update_home_summary()
+            if show_feedback:
+                self.show_success("刷新完成", f"已找到 {len(paths)} 个 Java 环境。")
+                self.finish_scan_feedback(task)
             return
 
         if task == "local_versions":
             versions = payload.get("versions", [])
+            show_feedback = self.should_show_scan_feedback(task)
             self.local_version_combo.clear()
             self.local_version_combo.addItems(versions)
             current_category = self.version_category_combo.currentText().strip() if hasattr(self, "version_category_combo") else "全部版本"
@@ -2516,26 +3048,39 @@ class LauncherWindow(FluentWindow):
             else:
                 self.launch_status_label.setText("当前游戏目录下没有可启动的本地版本")
             self.update_home_summary()
+            if show_feedback:
+                self.show_success("刷新完成", f"已同步 {len(versions)} 个本地版本。")
+                self.finish_scan_feedback(task)
             return
 
         if task == "remote_versions":
             versions = payload.get("versions", [])
+            show_feedback = self.should_show_scan_feedback(task)
             self.remote_version_combo.clear()
             self.remote_version_combo.addItems(versions)
             self.log(f"远程版本数量：{len(versions)}")
             self.update_home_summary()
+            if show_feedback:
+                self.show_success("刷新完成", f"已获取 {len(versions)} 个远程版本。")
+                self.finish_scan_feedback(task)
 
     def on_scan_failed(self, task_type, message):
+        show_feedback = self.should_show_scan_feedback(task_type)
         if task_type == "remote_versions":
             self.log(f"刷新远程版本失败：{message}")
-            self.show_warning("刷新失败", message)
+            if show_feedback:
+                self.show_warning("刷新失败", message)
+                self.finish_scan_feedback(task_type)
             return
         self.log(f"{task_type} 扫描失败：{message}")
+        if show_feedback:
+            self.show_warning("刷新失败", message)
+            self.finish_scan_feedback(task_type)
 
     def refresh_all(self):
-        self.refresh_java_paths()
-        self.refresh_local_versions()
-        self.log("本地状态已刷新；远程版本请在下载页手动刷新。")
+        self.refresh_java_paths(show_feedback=True)
+        self.refresh_local_versions(show_feedback=True)
+        self.log("正在刷新本地状态；远程版本请在下载页手动刷新。")
 
     def update_home_summary(self):
         account = self.current_account()
@@ -2646,8 +3191,8 @@ class LauncherWindow(FluentWindow):
                     f"当前选择的是 Java {selected_java_major}，低于 Minecraft {version_id} 需要的 Java {required}"
                 )
 
-    def refresh_java_paths(self):
-        self.start_scan_task("java")
+    def refresh_java_paths(self, _checked=False, *, show_feedback=True):
+        self.start_scan_task("java", show_feedback=show_feedback)
 
     def update_java_version(self, path):
         if not path:
@@ -2660,8 +3205,8 @@ class LauncherWindow(FluentWindow):
         version = get_java_version(path)
         self.java_version_label.setText(version or "无法获取 Java 版本")
 
-    def refresh_local_versions(self):
-        self.start_scan_task("local_versions", game_dir=self.current_game_dir())
+    def refresh_local_versions(self, _checked=False, *, show_feedback=True):
+        self.start_scan_task("local_versions", game_dir=self.current_game_dir(), show_feedback=show_feedback)
 
     def refresh_install_versions(self, existing_versions=None):
         versions = existing_versions if existing_versions is not None else get_local_versions(self.current_game_dir())
@@ -2713,6 +3258,16 @@ class LauncherWindow(FluentWindow):
         else:
             self.download_addon_hint_label.setText("可在下载原版后自动继续安装；Fabric API 仅在 Fabric 一起安装时可用。")
 
+        warnings = []
+        if fabric_checked and not fabric_api_check.isChecked():
+            warnings.append("提示：大多数 Fabric Mod 需要 Fabric API。")
+        if self.download_loader_checks["optifine"].isChecked():
+            warnings.append("提示：OptiFine 与部分 Mod 兼容性不佳，整合包建议优先考虑 Fabric/Forge。")
+        if self.download_loader_checks["forge"].isChecked() or self.download_loader_checks["neoforge"].isChecked():
+            warnings.append("提示：Forge / NeoForge 安装依赖 Java，安装过程可能需要更久。")
+        if hasattr(self, "download_warning_label"):
+            self.download_warning_label.setText(" ".join(warnings))
+
     def get_selected_download_addons(self):
         install_types = []
         for install_type in ("fabric", "forge", "neoforge", "optifine"):
@@ -2728,11 +3283,12 @@ class LauncherWindow(FluentWindow):
             return
         self.install_button.setText("开始安装")
 
-    def refresh_remote_versions(self):
+    def refresh_remote_versions(self, _checked=False, *, show_feedback=True):
         self.start_scan_task(
             "remote_versions",
             version_type=self.version_type_combo.currentText(),
             mirror_source=self.mirror_combo.currentText(),
+            show_feedback=show_feedback,
         )
 
     def save_settings(self, show_feedback=True):
@@ -2767,7 +3323,7 @@ class LauncherWindow(FluentWindow):
         directory = QFileDialog.getExistingDirectory(self, "选择游戏目录", self.current_game_dir())
         if directory:
             self.game_dir_input.setText(directory)
-            self.refresh_local_versions()
+            self.refresh_local_versions(show_feedback=False)
             self.update_home_summary()
 
     def open_game_directory(self):
@@ -2853,6 +3409,10 @@ class LauncherWindow(FluentWindow):
 
         self.set_launch_running(True)
         self.launch_status_label.setText("正在准备启动...")
+        self.launch_progress_bar.setValue(5)
+        self.launch_stage_label.setText("当前步骤：准备启动")
+        self.launch_method_label.setText(f"登录方式：{'Microsoft' if account.get('type') == 'microsoft' else '离线'}")
+        self.launch_progress_label.setText("启动进度：5%")
         self.launch_thread = QThread()
         self.launch_worker = LaunchWorker(
             java_path,
@@ -2865,6 +3425,8 @@ class LauncherWindow(FluentWindow):
         self.launch_worker.moveToThread(self.launch_thread)
         self.launch_thread.started.connect(self.launch_worker.run)
         self.launch_worker.status.connect(self.on_launch_status)
+        self.launch_worker.stage.connect(self.on_launch_stage)
+        self.launch_worker.progress.connect(self.on_launch_progress)
         self.launch_worker.finished.connect(self.on_launch_finished)
         self.launch_worker.failed.connect(self.on_launch_failed)
         self.launch_worker.finished.connect(self.launch_thread.quit)
@@ -2875,6 +3437,14 @@ class LauncherWindow(FluentWindow):
         self.launch_status_label.setText(message)
         self.motion.pulse_widget(self.launch_status_label, duration=210, start_opacity=0.5, throttle_key="launch_status", min_interval=0.12)
         self.log(message)
+
+    def on_launch_stage(self, stage):
+        self.launch_stage_label.setText(f"当前步骤：{stage}")
+        self.motion.pulse_widget(self.launch_stage_label, duration=190, start_opacity=0.55, throttle_key="launch_stage", min_interval=0.12)
+
+    def on_launch_progress(self, progress):
+        self.launch_progress_bar.setValue(progress)
+        self.launch_progress_label.setText(f"启动进度：{progress}%")
 
     def on_install_status(self, message):
         self.install_status_label.setText(message)
@@ -2901,6 +3471,7 @@ class LauncherWindow(FluentWindow):
     def on_launch_failed(self, message):
         self.set_launch_running(False)
         self.launch_status_label.setText(f"启动失败：{message}")
+        self.launch_stage_label.setText("当前步骤：启动失败")
         self.log(f"启动失败：{message}")
         self.show_warning("启动失败", message)
 
@@ -3000,22 +3571,62 @@ class LauncherWindow(FluentWindow):
         self.install_worker.failed.connect(self.install_thread.quit)
         self.install_thread.start()
 
+    def import_modpack(self):
+        if self.modpack_thread and self.modpack_thread.isRunning():
+            self.show_warning("导入进行中", "当前已有整合包导入任务在运行。")
+            return
+        if self.download_thread and self.download_thread.isRunning():
+            self.show_warning("下载进行中", "请等待当前下载任务完成后再导入整合包。")
+            return
+        if self.install_thread and self.install_thread.isRunning():
+            self.show_warning("安装进行中", "请等待当前安装任务完成后再导入整合包。")
+            return
+
+        pack_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择整合包文件",
+            "",
+            "整合包文件 (*.mrpack *.zip);;所有文件 (*.*)",
+        )
+        if not pack_path:
+            return
+        self.progress_bar.setValue(0)
+        self.download_metrics_label.setText("准备导入整合包...")
+        self.install_status_label.setText("正在识别整合包")
+        self.install_metrics_label.setText(os.path.basename(pack_path))
+        self.set_download_running(True)
+        self.modpack_thread = QThread()
+        self.modpack_worker = ModpackImportWorker(pack_path, self.current_game_dir())
+        self.modpack_worker.moveToThread(self.modpack_thread)
+        self.modpack_thread.started.connect(self.modpack_worker.run)
+        self.modpack_worker.progress.connect(self.progress_bar.setValue)
+        self.modpack_worker.status.connect(self.on_install_status)
+        self.modpack_worker.finished.connect(self.on_modpack_import_finished)
+        self.modpack_worker.failed.connect(self.on_modpack_import_failed)
+        self.modpack_worker.finished.connect(self.modpack_thread.quit)
+        self.modpack_worker.failed.connect(self.modpack_thread.quit)
+        self.modpack_thread.start()
+
     def on_download_finished(self, payload):
         self.set_download_running(False)
         version = payload.get("version", "")
         post_install = payload.get("post_install")
         self.log(f"Minecraft {version} 下载完成。")
-        self.refresh_local_versions()
+        self.refresh_local_versions(show_feedback=False)
         self.local_version_combo.setCurrentText(version)
         if post_install:
             installed_version = post_install.get("installed_version", version)
+            alias = self.apply_auto_version_alias(installed_version, post_install.get("steps", []))
             self.download_metrics_label.setText(post_install.get("message", "下载和安装完成"))
             self.install_status_label.setText("附加安装完成")
             self.install_metrics_label.setText(post_install.get("message", "附加安装已完成"))
             index = self.local_version_combo.findText(installed_version)
             if index >= 0:
                 self.local_version_combo.setCurrentIndex(index)
-            self.show_success("下载和安装完成", f"Minecraft {version} 已下载，并完成附加安装。")
+            if alias:
+                self.show_success("下载和安装完成", f"已自动命名为：{alias}")
+            else:
+                self.show_success("下载和安装完成", f"Minecraft {version} 已下载，并完成附加安装。")
         else:
             self.download_metrics_label.setText("下载完成")
             self.install_status_label.setText("本次未执行附加安装")
@@ -3037,11 +3648,18 @@ class LauncherWindow(FluentWindow):
         self.install_status_label.setText("安装完成")
         self.install_metrics_label.setText(message)
         self.download_metrics_label.setText(message)
-        self.refresh_local_versions()
         if installed_version:
+            install_types = [payload.get("install_type", "")]
+            alias = self.apply_auto_version_alias(installed_version, install_types)
+            self.refresh_local_versions(show_feedback=False)
             index = self.local_version_combo.findText(installed_version)
             if index >= 0:
                 self.local_version_combo.setCurrentIndex(index)
+            if alias:
+                self.show_success("安装完成", f"已自动命名为：{alias}")
+                return
+        else:
+            self.refresh_local_versions(show_feedback=False)
         self.show_success("安装完成", message)
 
     def on_install_failed(self, message):
@@ -3051,6 +3669,52 @@ class LauncherWindow(FluentWindow):
         self.install_status_label.setText("安装失败")
         self.install_metrics_label.setText(message)
         self.show_warning("安装失败", message)
+
+    def on_repair_finished(self, payload):
+        self.set_download_running(False)
+        version = payload.get("version", "")
+        self.download_metrics_label.setText("补全完成")
+        self.install_status_label.setText("版本文件已校验并补全")
+        self.install_metrics_label.setText(version)
+        self.show_success("补全完成", f"{version} 的缺失文件已补齐。")
+        self.log(f"版本补全完成：{version}")
+
+    def on_repair_failed(self, message):
+        self.set_download_running(False)
+        self.download_metrics_label.setText(f"补全失败：{message}")
+        self.install_status_label.setText("补全失败")
+        self.install_metrics_label.setText(message)
+        self.show_warning("补全失败", message)
+        self.log(f"版本补全失败：{message}")
+
+    def on_modpack_import_finished(self, payload):
+        self.set_download_running(False)
+        version = payload.get("version", "")
+        alias = payload.get("alias", "")
+        if version:
+            entry = self.version_settings_entry(version)
+            if alias and not (entry.get("alias") or "").strip():
+                entry["alias"] = alias
+                entry["alias_auto"] = True
+            entry["use_isolated_directory"] = True
+            save_version_settings(self.version_settings)
+        self.refresh_local_versions(show_feedback=False)
+        if version:
+            self.local_version_combo.setCurrentText(version)
+        message = payload.get("message", "整合包导入完成")
+        self.download_metrics_label.setText("整合包导入完成")
+        self.install_status_label.setText(message)
+        self.install_metrics_label.setText(f"目标版本：{version or '未识别'}")
+        self.show_success("导入完成", message)
+        self.log(message)
+
+    def on_modpack_import_failed(self, message):
+        self.set_download_running(False)
+        self.download_metrics_label.setText(f"导入失败：{message}")
+        self.install_status_label.setText("整合包导入失败")
+        self.install_metrics_label.setText(message)
+        self.show_warning("导入失败", message)
+        self.log(f"整合包导入失败：{message}")
 
 
 def main():

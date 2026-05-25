@@ -412,3 +412,44 @@ async def download_game_files(version_json, game_directory, version, mirror_sour
 
     progress.set_phase("下载完成")
     progress.emit(force=True)
+
+
+async def repair_game_files(version_json, game_directory, version, mirror_source, progress_callback=None):
+    """校验并补齐当前版本的核心文件、资源索引、资源文件和 natives。"""
+    os.makedirs(game_directory, exist_ok=True)
+    version_id = version_json.get("id") or version
+
+    progress = DownloadProgress(progress_callback)
+    cache_dirs = _candidate_cache_dirs(game_directory)
+    asset_index_job = _build_asset_index_job(version_json, game_directory, mirror_source)
+    core_jobs = _build_core_jobs(version_json, game_directory, version_id, mirror_source)
+
+    async with aiohttp.ClientSession(
+        timeout=REQUEST_TIMEOUT,
+        connector=aiohttp.TCPConnector(limit=MAX_ASSET_CONCURRENCY * 2, ttl_dns_cache=300),
+    ) as session:
+        progress.set_phase("校验资源索引", asset_index_job.label)
+        progress.add_totals(asset_index_job.size, 1)
+        await _process_job(
+            session,
+            asset_index_job,
+            progress,
+            asyncio.Semaphore(1),
+            cache_dirs,
+            game_directory,
+        )
+
+        with open(asset_index_job.file_path, "r", encoding="utf-8") as file_handle:
+            asset_index_json = json.load(file_handle)
+
+        asset_jobs = _build_asset_jobs(asset_index_json, game_directory, mirror_source)
+        progress.add_totals(sum(job.size for job in core_jobs) + sum(job.size for job in asset_jobs), len(core_jobs) + len(asset_jobs))
+
+        progress.set_phase("校验核心文件")
+        await _run_jobs(session, core_jobs, progress, MAX_CORE_CONCURRENCY, cache_dirs, game_directory)
+        progress.set_phase("校验资源文件")
+        await _run_jobs(session, asset_jobs, progress, MAX_ASSET_CONCURRENCY, cache_dirs, game_directory)
+
+    progress.set_phase("补全完成")
+    progress.emit(force=True)
+    extract_natives(version_json, game_directory, version_id)

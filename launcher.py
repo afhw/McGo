@@ -279,8 +279,8 @@ def _library_allowed(library, features=None):
     return any(_rule_allows(rule, features=features) for rule in rules)
 
 
-def launch_minecraft(java_path, version_id, game_directory=".minecraft", minecraft_access_token=None, username=None, uuid=None, runtime_directory=None, extra_jvm_args=None):
-    """启动 Minecraft。"""
+def build_launch_command(java_path, version_id, game_directory=".minecraft", minecraft_access_token=None, username=None, uuid=None, runtime_directory=None, extra_jvm_args=None):
+    """构建 Minecraft 启动命令。"""
     version_json = get_version_json(game_directory, version_id)
     if not version_json:
         raise FileNotFoundError(f"未找到版本清单：{version_id}")
@@ -400,7 +400,21 @@ def launch_minecraft(java_path, version_id, game_directory=".minecraft", minecra
     if "-cp" not in jvm_arguments and "--class-path" not in jvm_arguments:
         command.extend(["-cp", classpath_string])
     command.extend([version_json["mainClass"], *game_arguments])
+    return command
 
+
+def launch_minecraft(java_path, version_id, game_directory=".minecraft", minecraft_access_token=None, username=None, uuid=None, runtime_directory=None, extra_jvm_args=None):
+    """启动 Minecraft。"""
+    command = build_launch_command(
+        java_path,
+        version_id,
+        game_directory=game_directory,
+        minecraft_access_token=minecraft_access_token,
+        username=username,
+        uuid=uuid,
+        runtime_directory=runtime_directory,
+        extra_jvm_args=extra_jvm_args,
+    )
     subprocess.Popen(command, **_hidden_subprocess_kwargs())
     return True
 
