@@ -186,26 +186,62 @@ def _try_copy_from_cache(job, cache_dirs, target_game_dir):
 
 
 def _rewrite_url(url, mirror_source):
-    if mirror_source != "https://bmclapi2.bangbang93.com":
-        return url
-
-    replacements = {
-        "https://piston-data.mojang.com": mirror_source,
-        "https://launcher.mojang.com": mirror_source,
-        "https://libraries.minecraft.net": f"{mirror_source}/maven",
-        "https://resources.download.minecraft.net": f"{mirror_source}/assets",
-    }
+    bmclapi = "https://bmclapi2.bangbang93.com"
+    if mirror_source == bmclapi:
+        replacements = {
+            "https://piston-data.mojang.com": mirror_source,
+            "https://launcher.mojang.com": mirror_source,
+            "https://libraries.minecraft.net": f"{mirror_source}/maven",
+            "https://resources.download.minecraft.net": f"{mirror_source}/assets",
+        }
+    else:
+        replacements = {
+            f"{bmclapi}/maven": "https://libraries.minecraft.net",
+            f"{bmclapi}/assets": "https://resources.download.minecraft.net",
+            bmclapi: "https://piston-data.mojang.com",
+        }
     for source, target in replacements.items():
         if url.startswith(source):
             return url.replace(source, target, 1)
     return url
 
 
-async def _download_with_retries(session, job, progress, semaphore, retries=5):
+def _alternate_mirror(mirror_source):
+    if mirror_source == "https://launchermeta.mojang.com":
+        return "https://bmclapi2.bangbang93.com"
+    if mirror_source == "https://bmclapi2.bangbang93.com":
+        return "https://launchermeta.mojang.com"
+    return ""
+
+
+def _candidate_urls(url, mirror_source):
+    urls = []
+    for source in (mirror_source, _alternate_mirror(mirror_source)):
+        if not source:
+            continue
+        candidate = _rewrite_url(url, source)
+        if candidate not in urls:
+            urls.append(candidate)
+    if url not in urls:
+        urls.append(url)
+    return urls
+
+
+async def _throttle_download(progress, speed_limit_bps, started_at):
+    if not speed_limit_bps:
+        return
+    expected_elapsed = progress.ready_bytes / max(speed_limit_bps, 1)
+    actual_elapsed = time.monotonic() - started_at
+    delay = expected_elapsed - actual_elapsed
+    if delay > 0:
+        await asyncio.sleep(min(delay, 1.0))
+
+
+async def _download_with_retries(session, job, progress, semaphore, retries=5, mirror_source="", speed_limit_bps=0):
     for attempt in range(retries):
         try:
             async with semaphore:
-                await _download_single(session, job, progress)
+                await _download_single(session, job, progress, mirror_source=mirror_source, speed_limit_bps=speed_limit_bps)
             return
         except Exception as exc:
             if attempt == retries - 1:
@@ -228,23 +264,38 @@ async def _download_with_retries(session, job, progress, semaphore, retries=5):
             await asyncio.sleep(min(2 ** attempt, 5))
 
 
-async def _download_single(session, job, progress):
+async def _download_single(session, job, progress, mirror_source="", speed_limit_bps=0):
     _ensure_parent(job.file_path)
     progress.set_current_file(job.label)
     logger.debug("Downloading file: label=%s size=%s url=%s target=%s", job.label, job.size, job.url, job.file_path)
 
-    async with session.get(job.url) as response:
-        response.raise_for_status()
-        with open(job.file_path, "wb") as file_handle:
-            async for chunk in response.content.iter_chunked(CHUNK_SIZE):
-                if not chunk:
-                    continue
-                file_handle.write(chunk)
-                progress.advance_network(len(chunk))
-    logger.debug("Downloaded file: label=%s bytes=%s target=%s", job.label, _file_size(job.file_path), job.file_path)
+    errors = []
+    started_at = time.monotonic()
+    for candidate_url in _candidate_urls(job.url, mirror_source):
+        try:
+            async with session.get(candidate_url) as response:
+                response.raise_for_status()
+                with open(job.file_path, "wb") as file_handle:
+                    async for chunk in response.content.iter_chunked(CHUNK_SIZE):
+                        if not chunk:
+                            continue
+                        file_handle.write(chunk)
+                        progress.advance_network(len(chunk))
+                        await _throttle_download(progress, speed_limit_bps, started_at)
+            logger.debug("Downloaded file: label=%s bytes=%s target=%s", job.label, _file_size(job.file_path), job.file_path)
+            return
+        except Exception as exc:
+            errors.append(f"{candidate_url}: {exc}")
+            logger.warning("Download source failed: label=%s url=%s error=%s", job.label, candidate_url, exc)
+            try:
+                if os.path.exists(job.file_path):
+                    os.remove(job.file_path)
+            except OSError:
+                logger.debug("Failed to remove partial file: %s", job.file_path)
+    raise RuntimeError("；".join(errors))
 
 
-async def _process_job(session, job, progress, semaphore, cache_dirs, target_game_dir):
+async def _process_job(session, job, progress, semaphore, cache_dirs, target_game_dir, mirror_source="", speed_limit_bps=0, cache_strategy="reuse"):
     if _matches_file(job.file_path, job.size, job.sha1):
         progress.set_current_file(f"{job.label}（已存在）")
         progress.advance_reused(job.size or _file_size(job.file_path))
@@ -252,23 +303,23 @@ async def _process_job(session, job, progress, semaphore, cache_dirs, target_gam
         logger.debug("File already valid: %s", job.relative_path)
         return "reused"
 
-    if _try_copy_from_cache(job, cache_dirs, target_game_dir):
+    if cache_strategy == "reuse" and _try_copy_from_cache(job, cache_dirs, target_game_dir):
         progress.set_current_file(f"{job.label}（本地复用）")
         progress.advance_reused(job.size or _file_size(job.file_path))
         progress.finish_file()
         return "reused"
 
-    await _download_with_retries(session, job, progress, semaphore)
+    await _download_with_retries(session, job, progress, semaphore, mirror_source=mirror_source, speed_limit_bps=speed_limit_bps)
     progress.finish_file()
     return "downloaded"
 
 
-async def _run_jobs(session, jobs, progress, concurrency, cache_dirs, target_game_dir):
+async def _run_jobs(session, jobs, progress, concurrency, cache_dirs, target_game_dir, mirror_source="", speed_limit_bps=0, cache_strategy="reuse"):
     if not jobs:
         return
     semaphore = asyncio.Semaphore(concurrency)
     await asyncio.gather(*[
-        _process_job(session, job, progress, semaphore, cache_dirs, target_game_dir)
+        _process_job(session, job, progress, semaphore, cache_dirs, target_game_dir, mirror_source=mirror_source, speed_limit_bps=speed_limit_bps, cache_strategy=cache_strategy)
         for job in jobs
     ])
 
@@ -395,7 +446,16 @@ def collect_missing_game_files(version_json, game_directory, version_id, include
     return missing
 
 
-async def download_assets(version_json, game_directory, version_id, mirror_source, progress_callback=None):
+async def download_assets(
+    version_json,
+    game_directory,
+    version_id,
+    mirror_source,
+    progress_callback=None,
+    max_asset_concurrency=MAX_ASSET_CONCURRENCY,
+    speed_limit_kbps=0,
+    cache_strategy="reuse",
+):
     logger.info(
         "Starting asset download: version=%s game_directory=%s mirror=%s",
         version_id,
@@ -410,7 +470,7 @@ async def download_assets(version_json, game_directory, version_id, mirror_sourc
 
     async with aiohttp.ClientSession(
         timeout=REQUEST_TIMEOUT,
-        connector=aiohttp.TCPConnector(limit=MAX_ASSET_CONCURRENCY * 2, ttl_dns_cache=300),
+        connector=aiohttp.TCPConnector(limit=max_asset_concurrency * 2, ttl_dns_cache=300),
     ) as session:
         with open(asset_index_path, "r", encoding="utf-8") as file_handle:
             asset_index_json = json.load(file_handle)
@@ -418,7 +478,17 @@ async def download_assets(version_json, game_directory, version_id, mirror_sourc
         logger.info("Asset jobs prepared: version=%s jobs=%d bytes=%d", version_id, len(jobs), sum(job.size for job in jobs))
         progress.set_phase("下载资源文件")
         progress.add_totals(sum(job.size for job in jobs), len(jobs))
-        await _run_jobs(session, jobs, progress, MAX_ASSET_CONCURRENCY, cache_dirs, game_directory)
+        await _run_jobs(
+            session,
+            jobs,
+            progress,
+            max_asset_concurrency,
+            cache_dirs,
+            game_directory,
+            mirror_source=mirror_source,
+            speed_limit_bps=int(speed_limit_kbps or 0) * 1024,
+            cache_strategy=cache_strategy,
+        )
         progress.set_phase("资源文件下载完成")
         progress.emit(force=True)
     logger.info("Asset download finished: version=%s", version_id)
@@ -461,7 +531,17 @@ def extract_natives(version_json, game_directory, version_id):
     logger.info("Extracted natives: version=%s files=%d target=%s", version_id, file_count, natives_directory)
 
 
-async def download_game_files(version_json, game_directory, version, mirror_source, progress_callback=None):
+async def download_game_files(
+    version_json,
+    game_directory,
+    version,
+    mirror_source,
+    progress_callback=None,
+    max_core_concurrency=MAX_CORE_CONCURRENCY,
+    max_asset_concurrency=MAX_ASSET_CONCURRENCY,
+    speed_limit_kbps=0,
+    cache_strategy="reuse",
+):
     os.makedirs(game_directory, exist_ok=True)
 
     version_id = version_json["id"]
@@ -491,7 +571,7 @@ async def download_game_files(version_json, game_directory, version, mirror_sour
 
     async with aiohttp.ClientSession(
         timeout=REQUEST_TIMEOUT,
-        connector=aiohttp.TCPConnector(limit=MAX_ASSET_CONCURRENCY * 2, ttl_dns_cache=300),
+        connector=aiohttp.TCPConnector(limit=max_asset_concurrency * 2, ttl_dns_cache=300),
     ) as session:
         asset_index_result = ""
         asset_jobs = []
@@ -503,6 +583,9 @@ async def download_game_files(version_json, game_directory, version, mirror_sour
                 asyncio.Semaphore(1),
                 cache_dirs,
                 game_directory,
+                mirror_source=mirror_source,
+                speed_limit_bps=int(speed_limit_kbps or 0) * 1024,
+                cache_strategy=cache_strategy,
             )
 
             with open(asset_index_job.file_path, "r", encoding="utf-8") as file_handle:
@@ -525,16 +608,46 @@ async def download_game_files(version_json, game_directory, version, mirror_sour
             progress.finish_file()
 
         progress.set_phase("下载核心文件")
-        await _run_jobs(session, core_jobs, progress, MAX_CORE_CONCURRENCY, cache_dirs, game_directory)
+        await _run_jobs(
+            session,
+            core_jobs,
+            progress,
+            max_core_concurrency,
+            cache_dirs,
+            game_directory,
+            mirror_source=mirror_source,
+            speed_limit_bps=int(speed_limit_kbps or 0) * 1024,
+            cache_strategy=cache_strategy,
+        )
         progress.set_phase("下载资源文件")
-        await _run_jobs(session, asset_jobs, progress, MAX_ASSET_CONCURRENCY, cache_dirs, game_directory)
+        await _run_jobs(
+            session,
+            asset_jobs,
+            progress,
+            max_asset_concurrency,
+            cache_dirs,
+            game_directory,
+            mirror_source=mirror_source,
+            speed_limit_bps=int(speed_limit_kbps or 0) * 1024,
+            cache_strategy=cache_strategy,
+        )
 
     progress.set_phase("下载完成")
     progress.emit(force=True)
     logger.info("Game file download finished: version=%s", version_id)
 
 
-async def repair_game_files(version_json, game_directory, version, mirror_source, progress_callback=None):
+async def repair_game_files(
+    version_json,
+    game_directory,
+    version,
+    mirror_source,
+    progress_callback=None,
+    max_core_concurrency=MAX_CORE_CONCURRENCY,
+    max_asset_concurrency=MAX_ASSET_CONCURRENCY,
+    speed_limit_kbps=0,
+    cache_strategy="reuse",
+):
     """校验并补齐当前版本的核心文件、资源索引、资源文件和 natives。"""
     os.makedirs(game_directory, exist_ok=True)
     version_id = version_json.get("id") or version
@@ -554,7 +667,7 @@ async def repair_game_files(version_json, game_directory, version, mirror_source
 
     async with aiohttp.ClientSession(
         timeout=REQUEST_TIMEOUT,
-        connector=aiohttp.TCPConnector(limit=MAX_ASSET_CONCURRENCY * 2, ttl_dns_cache=300),
+        connector=aiohttp.TCPConnector(limit=max_asset_concurrency * 2, ttl_dns_cache=300),
     ) as session:
         asset_jobs = []
         if asset_index_job:
@@ -567,6 +680,9 @@ async def repair_game_files(version_json, game_directory, version, mirror_source
                 asyncio.Semaphore(1),
                 cache_dirs,
                 game_directory,
+                mirror_source=mirror_source,
+                speed_limit_bps=int(speed_limit_kbps or 0) * 1024,
+                cache_strategy=cache_strategy,
             )
 
             with open(asset_index_job.file_path, "r", encoding="utf-8") as file_handle:
@@ -577,9 +693,29 @@ async def repair_game_files(version_json, game_directory, version, mirror_source
         progress.add_totals(sum(job.size for job in core_jobs) + sum(job.size for job in asset_jobs), len(core_jobs) + len(asset_jobs))
 
         progress.set_phase("校验核心文件")
-        await _run_jobs(session, core_jobs, progress, MAX_CORE_CONCURRENCY, cache_dirs, game_directory)
+        await _run_jobs(
+            session,
+            core_jobs,
+            progress,
+            max_core_concurrency,
+            cache_dirs,
+            game_directory,
+            mirror_source=mirror_source,
+            speed_limit_bps=int(speed_limit_kbps or 0) * 1024,
+            cache_strategy=cache_strategy,
+        )
         progress.set_phase("校验资源文件")
-        await _run_jobs(session, asset_jobs, progress, MAX_ASSET_CONCURRENCY, cache_dirs, game_directory)
+        await _run_jobs(
+            session,
+            asset_jobs,
+            progress,
+            max_asset_concurrency,
+            cache_dirs,
+            game_directory,
+            mirror_source=mirror_source,
+            speed_limit_bps=int(speed_limit_kbps or 0) * 1024,
+            cache_strategy=cache_strategy,
+        )
 
     progress.set_phase("补全完成")
     progress.emit(force=True)

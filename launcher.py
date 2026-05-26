@@ -283,7 +283,49 @@ def _library_allowed(library, features=None):
     return any(_rule_allows(rule, features=features) for rule in rules)
 
 
-def build_launch_command(java_path, version_id, game_directory=".minecraft", minecraft_access_token=None, username=None, uuid=None, runtime_directory=None, extra_jvm_args=None):
+def _memory_arguments(min_memory_mb=0, max_memory_mb=0):
+    arguments = []
+    if min_memory_mb:
+        arguments.append(f"-Xms{int(min_memory_mb)}M")
+    if max_memory_mb:
+        arguments.append(f"-Xmx{int(max_memory_mb)}M")
+    return arguments
+
+
+def _gc_arguments(strategy):
+    normalized = (strategy or "G1GC").strip().lower()
+    if normalized in {"none", "默认", "default", "vanilla"}:
+        return []
+    if normalized in {"zgc", "z gc"}:
+        return ["-XX:+UseZGC"]
+    if normalized in {"shenandoah", "shenandoahgc"}:
+        return ["-XX:+UseShenandoahGC"]
+    return [
+        "-XX:+UnlockExperimentalVMOptions",
+        "-XX:+UseG1GC",
+        "-XX:G1NewSizePercent=20",
+        "-XX:G1ReservePercent=20",
+        "-XX:MaxGCPauseMillis=50",
+        "-XX:G1HeapRegionSize=32M",
+    ]
+
+
+def build_launch_command(
+    java_path,
+    version_id,
+    game_directory=".minecraft",
+    minecraft_access_token=None,
+    username=None,
+    uuid=None,
+    runtime_directory=None,
+    extra_jvm_args=None,
+    extra_game_args=None,
+    min_memory_mb=0,
+    max_memory_mb=0,
+    window_width=0,
+    window_height=0,
+    gc_strategy="G1GC",
+):
     """构建 Minecraft 启动命令。"""
     logger.info(
         "Building launch command: version=%s java=%s game_directory=%s runtime_directory=%s extra_jvm_args=%d",
@@ -326,14 +368,11 @@ def build_launch_command(java_path, version_id, game_directory=".minecraft", min
             break
     natives_dir = os.path.join(game_directory, 'versions', natives_version_id, f"{natives_version_id}-natives")
 
+    if not max_memory_mb:
+        max_memory_mb = 2048
     default_jvm_arguments = [
-        "-Xmx2G",
-        "-XX:+UnlockExperimentalVMOptions",
-        "-XX:+UseG1GC",
-        "-XX:G1NewSizePercent=20",
-        "-XX:G1ReservePercent=20",
-        "-XX:MaxGCPauseMillis=50",
-        "-XX:G1HeapRegionSize=32M",
+        *_memory_arguments(min_memory_mb, max_memory_mb),
+        *_gc_arguments(gc_strategy),
         f"-Djava.library.path={natives_dir}",
     ]
 
@@ -383,10 +422,11 @@ def build_launch_command(java_path, version_id, game_directory=".minecraft", min
         "classpath_separator": os.pathsep,
         "classpath": classpath_string,
         "user_properties": "{}",
-        "resolution_width": "854",
-        "resolution_height": "480",
+        "resolution_width": str(window_width or 854),
+        "resolution_height": str(window_height or 480),
     }
 
+    features["has_custom_resolution"] = bool(window_width and window_height)
     modern_arguments = version_json.get("arguments", {})
     if modern_arguments.get("game"):
         game_arguments = _argument_list(modern_arguments.get("game", []), context=context, features=features)
@@ -425,12 +465,29 @@ def build_launch_command(java_path, version_id, game_directory=".minecraft", min
     ]
     if "-cp" not in jvm_arguments and "--class-path" not in jvm_arguments:
         command.extend(["-cp", classpath_string])
+    if extra_game_args:
+        game_arguments.extend(extra_game_args)
     command.extend([version_json["mainClass"], *game_arguments])
     logger.debug("Launch command built: %s", redact_command(command))
     return command
 
 
-def launch_minecraft(java_path, version_id, game_directory=".minecraft", minecraft_access_token=None, username=None, uuid=None, runtime_directory=None, extra_jvm_args=None):
+def launch_minecraft(
+    java_path,
+    version_id,
+    game_directory=".minecraft",
+    minecraft_access_token=None,
+    username=None,
+    uuid=None,
+    runtime_directory=None,
+    extra_jvm_args=None,
+    extra_game_args=None,
+    min_memory_mb=0,
+    max_memory_mb=0,
+    window_width=0,
+    window_height=0,
+    gc_strategy="G1GC",
+):
     """启动 Minecraft。"""
     logger.info("Launching Minecraft: version=%s username=%s", version_id, username or "<config>")
     command = build_launch_command(
@@ -442,6 +499,12 @@ def launch_minecraft(java_path, version_id, game_directory=".minecraft", minecra
         uuid=uuid,
         runtime_directory=runtime_directory,
         extra_jvm_args=extra_jvm_args,
+        extra_game_args=extra_game_args,
+        min_memory_mb=min_memory_mb,
+        max_memory_mb=max_memory_mb,
+        window_width=window_width,
+        window_height=window_height,
+        gc_strategy=gc_strategy,
     )
     process = subprocess.Popen(command, **_hidden_subprocess_kwargs())
     logger.info("Minecraft process started: version=%s pid=%s", version_id, getattr(process, "pid", "unknown"))

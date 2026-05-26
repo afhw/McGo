@@ -25,12 +25,14 @@ from PyQt6.QtCore import (
     QPoint,
     QPropertyAnimation,
     QParallelAnimationGroup,
+    QUrl,
     QThread,
     QTimer,
     Qt,
     QObject,
     pyqtSignal as Signal,
 )
+from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtWidgets import (
     QApplication,
     QAbstractItemView,
@@ -72,6 +74,7 @@ from qfluentwidgets import (
     ScrollArea,
     SegmentedWidget,
     SmoothMode,
+    SpinBox,
     SubtitleLabel,
     TextEdit,
     Theme,
@@ -147,7 +150,13 @@ def load_config():
     config.read(config_file)
     defaults = {
         "USER": {"username": "", "uuid": "", "accessToken": ""},
-        "DOWNLOAD": {"mirror_source": "official"},
+        "DOWNLOAD": {
+            "mirror_source": "official",
+            "max_core_threads": "12",
+            "max_asset_threads": "24",
+            "speed_limit_kbps": "0",
+            "cache_strategy": "reuse",
+        },
         "AUTH": {
             "use_microsoft_login": "False",
             "refresh_token": "",
@@ -155,6 +164,10 @@ def load_config():
         },
         "GAME": {"directory": game_directory, "enable_resource_isolation": "True"},
         "UI": {"advanced_mode": "False", "theme": "dark", "theme_image": ""},
+        "HOME": {"content_source": "", "allow_network": "False"},
+        "MUSIC": {"path": "", "enabled": "False", "volume": "35", "pause_on_launch": "True"},
+        "FEATURES": {"show_download": "True", "show_manage": "True"},
+        "SERVERS": {"items": ""},
         "ACCOUNTS": {"selected_account_id": ""},
     }
     for section, values in defaults.items():
@@ -226,6 +239,41 @@ def save_accounts(accounts):
     logger.debug("Saved %d accounts to %s", len(accounts), os.path.abspath(accounts_file))
 
 
+def fallback_mirror_source(mirror_source):
+    return "bmclapi" if mirror_source == "official" else "official"
+
+
+def mirror_source_sequence(mirror_source):
+    primary = mirror_source if mirror_source in MIRROR_SOURCES else "official"
+    fallback = fallback_mirror_source(primary)
+    return [primary, fallback] if fallback != primary else [primary]
+
+
+def rewrite_download_url_for_mirror(url, mirror_source):
+    mirror = MIRROR_SOURCES.get(mirror_source, MIRROR_SOURCES["official"])
+    if mirror_source == "bmclapi":
+        replacements = {
+            "https://piston-data.mojang.com": mirror,
+            "https://launcher.mojang.com": mirror,
+            "https://libraries.minecraft.net": f"{mirror}/maven",
+            "https://resources.download.minecraft.net": f"{mirror}/assets",
+            "https://launchermeta.mojang.com": mirror,
+        }
+        for source, target in replacements.items():
+            if url.startswith(source):
+                return url.replace(source, target, 1)
+    elif mirror_source == "official":
+        replacements = {
+            f"{MIRROR_SOURCES['bmclapi']}/maven": "https://libraries.minecraft.net",
+            f"{MIRROR_SOURCES['bmclapi']}/assets": "https://resources.download.minecraft.net",
+            MIRROR_SOURCES["bmclapi"]: "https://piston-data.mojang.com",
+        }
+        for source, target in replacements.items():
+            if url.startswith(source):
+                return url.replace(source, target, 1)
+    return url
+
+
 def get_remote_versions(version_type, mirror_source):
     logger.info("Fetching remote versions: type=%s mirror=%s", version_type, mirror_source)
     response = requests.get(f"{MIRROR_SOURCES[mirror_source]}/mc/game/version_manifest.json", timeout=30)
@@ -247,17 +295,52 @@ def get_version_url(version_id, mirror_source):
     return None
 
 
+def get_version_metadata_with_fallback(version_id, mirror_source, status_callback=None):
+    errors = []
+    for source in mirror_source_sequence(mirror_source):
+        try:
+            if status_callback and source != mirror_source:
+                status_callback(f"主下载源失败，正在切换到 {source} 获取版本信息...")
+            version_url = get_version_url(version_id, source)
+            if not version_url:
+                raise RuntimeError(f"无法获取版本 {version_id} 的下载地址")
+            version_url = rewrite_download_url_for_mirror(version_url, source)
+            response = requests.get(version_url, timeout=30)
+            response.raise_for_status()
+            return response.json(), source
+        except Exception as exc:
+            logger.warning("Version metadata fetch failed: version=%s mirror=%s error=%s", version_id, source, exc)
+            errors.append(f"{source}: {exc}")
+    raise RuntimeError("；".join(errors) or f"无法获取版本 {version_id} 的下载地址")
+
+
 def mirror_root(mirror_source):
     return MIRROR_SOURCES.get(mirror_source, MIRROR_SOURCES["official"])
 
 
-def stream_download(url, file_path, progress_callback=None, status_label="下载中"):
+def stream_download(url, file_path, progress_callback=None, status_label="下载中", mirror_source=None):
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
     logger.info("Starting stream download: label=%s target=%s url=%s", status_label, os.path.abspath(file_path), url)
     downloaded = 0
     try:
-        with requests.get(url, stream=True, timeout=60) as response:
-            response.raise_for_status()
+        response = None
+        last_error = None
+        for source in mirror_source_sequence(mirror_source or "official"):
+            candidate_url = rewrite_download_url_for_mirror(url, source)
+            try:
+                response = requests.get(candidate_url, stream=True, timeout=60)
+                response.raise_for_status()
+                url = candidate_url
+                break
+            except Exception as exc:
+                if response is not None:
+                    response.close()
+                response = None
+                last_error = exc
+                logger.warning("Stream download source failed: label=%s mirror=%s url=%s error=%s", status_label, source, candidate_url, exc)
+        if response is None:
+            raise last_error or RuntimeError(f"下载失败：{url}")
+        with response:
             total = int(response.headers.get("content-length") or 0)
             logger.debug(
                 "Stream download response: label=%s status=%s total_bytes=%d target=%s",
@@ -755,6 +838,15 @@ RESOURCE_EXTENSIONS = {
 VERSION_ICON_LABELS = ["自动", "草方块", "金块", "红石", "命令方块", "Fabric", "Forge", "NeoForge", "OptiFine"]
 
 
+DOWNLOAD_PRESETS = {
+    "保守": {"core": 6, "asset": 12, "speed_kbps": 0, "cache": "reuse"},
+    "均衡": {"core": 12, "asset": 24, "speed_kbps": 0, "cache": "reuse"},
+    "激进": {"core": 20, "asset": 40, "speed_kbps": 0, "cache": "reuse"},
+}
+
+GC_STRATEGIES = ["G1GC", "ZGC", "Shenandoah", "默认"]
+
+
 class DownloadTask:
     def __init__(self, task_type, title, start_callback):
         self.task_type = task_type
@@ -1238,8 +1330,39 @@ def list_local_resources(query, resource_type, target_dir):
     return hits[:100]
 
 
+def analyze_local_mod_file(path, mods_dir):
+    basename = os.path.basename(path)
+    lowered = basename.lower()
+    status = "禁用" if lowered.endswith(".jar.disabled") else "启用"
+    hints = []
+    if lowered.endswith(".jar.disabled"):
+        hints.append("当前不会被加载")
+    dependency_markers = {
+        "fabric-api": "Fabric API",
+        "architectury": "Architectury API",
+        "cloth-config": "Cloth Config",
+        "modmenu": "Mod Menu",
+        "geckolib": "GeckoLib",
+        "balm": "Balm",
+        "moonlight": "Moonlight Lib",
+    }
+    available = set()
+    if os.path.isdir(mods_dir):
+        available = {name.lower().replace(".disabled", "") for name in os.listdir(mods_dir)}
+    for marker, label in dependency_markers.items():
+        if marker in lowered:
+            continue
+        if any(marker in name for name in available):
+            continue
+        if marker in {"fabric-api"} and ("fabric" in lowered or basename.endswith(".jar")):
+            hints.append(f"可能需要 {label}")
+            break
+    return status, hints
+
+
 def get_local_resource_detail(path):
     stat = os.stat(path)
+    status, hints = analyze_local_mod_file(path, os.path.dirname(path))
     return {
         "source": "local",
         "title": os.path.basename(path),
@@ -1249,8 +1372,9 @@ def get_local_resource_detail(path):
         "followers": 0,
         "project_url": os.path.abspath(os.path.dirname(path)),
         "screenshots": [],
-        "dependencies": [],
+        "dependencies": [{"dependency_type": "hint", "project_id": hint} for hint in hints],
         "versions": [],
+        "status": status,
     }
 
 
@@ -1860,6 +1984,15 @@ def run_flask_app():
     app.run(port=5000, debug=False, use_reloader=False)
 
 
+def read_download_options():
+    return {
+        "max_core_concurrency": max(1, config.getint("DOWNLOAD", "max_core_threads", fallback=12)),
+        "max_asset_concurrency": max(1, config.getint("DOWNLOAD", "max_asset_threads", fallback=24)),
+        "speed_limit_kbps": max(0, config.getint("DOWNLOAD", "speed_limit_kbps", fallback=0)),
+        "cache_strategy": config.get("DOWNLOAD", "cache_strategy", fallback="reuse"),
+    }
+
+
 class DownloadWorker(QObject):
     progress = Signal(int)
     metrics = Signal(dict)
@@ -1869,13 +2002,14 @@ class DownloadWorker(QObject):
     finished = Signal(dict)
     failed = Signal(str)
 
-    def __init__(self, version_id, mirror_source, game_dir, auto_install_types=None, java_path=""):
+    def __init__(self, version_id, mirror_source, game_dir, auto_install_types=None, java_path="", download_options=None):
         super().__init__()
         self.version_id = version_id
         self.mirror_source = mirror_source
         self.game_dir = os.path.abspath(game_dir)
         self.auto_install_types = list(auto_install_types or [])
         self.java_path = java_path
+        self.download_options = dict(download_options or {})
 
     def run(self):
         try:
@@ -1888,14 +2022,12 @@ class DownloadWorker(QObject):
                 self.java_path,
             )
             self.status.emit(f"正在获取 {self.version_id} 版本信息...")
-            version_url = get_version_url(self.version_id, self.mirror_source)
-            if not version_url:
-                raise Exception(f"无法获取版本 {self.version_id} 的下载地址")
-            logger.debug("Version metadata URL resolved: version=%s url=%s", self.version_id, version_url)
-
-            response = requests.get(version_url, timeout=30)
-            response.raise_for_status()
-            version_json = response.json()
+            version_json, resolved_source = get_version_metadata_with_fallback(
+                self.version_id,
+                self.mirror_source,
+                status_callback=self.status.emit,
+            )
+            resolved_mirror_root = MIRROR_SOURCES[resolved_source]
             logger.debug("Version metadata loaded: version=%s keys=%s", self.version_id, sorted(version_json.keys()))
 
             def on_progress(snapshot):
@@ -1908,8 +2040,9 @@ class DownloadWorker(QObject):
                 version_json,
                 self.game_dir,
                 self.version_id,
-                MIRROR_SOURCES[self.mirror_source],
+                resolved_mirror_root,
                 progress_callback=on_progress,
+                **self.download_options,
             ))
             self.status.emit("正在解压 natives...")
             extract_natives(version_json, self.game_dir, self.version_id)
@@ -1994,11 +2127,12 @@ class RepairWorker(QObject):
     finished = Signal(dict)
     failed = Signal(str)
 
-    def __init__(self, version_id, mirror_source, game_dir):
+    def __init__(self, version_id, mirror_source, game_dir, download_options=None):
         super().__init__()
         self.version_id = version_id
         self.mirror_source = mirror_source
         self.game_dir = os.path.abspath(game_dir)
+        self.download_options = dict(download_options or {})
 
     def run(self):
         try:
@@ -2032,6 +2166,7 @@ class RepairWorker(QObject):
                     version_id,
                     MIRROR_SOURCES[self.mirror_source],
                     progress_callback=on_progress,
+                    **self.download_options,
                 ))
                 missing_after = collect_missing_game_files(version_json, self.game_dir, version_id)
                 logger.info("Repair scan after: version=%s missing=%d", version_id, len(missing_after))
@@ -2131,18 +2266,18 @@ class ModpackImportWorker(QObject):
         if not minecraft_version or get_version_json(self.game_dir, minecraft_version):
             return
         self.status.emit(f"正在下载整合包基础版本 {minecraft_version}...")
-        version_url = get_version_url(minecraft_version, self.mirror_source)
-        if not version_url:
-            raise RuntimeError(f"无法获取 Minecraft {minecraft_version} 的下载地址")
-        response = requests.get(version_url, timeout=30)
-        response.raise_for_status()
-        version_json = response.json()
+        version_json, resolved_source = get_version_metadata_with_fallback(
+            minecraft_version,
+            self.mirror_source,
+            status_callback=self.status.emit,
+        )
         asyncio.run(download_game_files(
             version_json,
             self.game_dir,
             minecraft_version,
-            MIRROR_SOURCES[self.mirror_source],
+            MIRROR_SOURCES[resolved_source],
             progress_callback=None,
+            **read_download_options(),
         ))
         extract_natives(version_json, self.game_dir, minecraft_version)
 
@@ -2995,14 +3130,13 @@ class LaunchWorker(QObject):
     finished = Signal(dict)
     failed = Signal(str)
 
-    def __init__(self, java_path, version, game_dir, account, runtime_directory, extra_jvm_args=None):
+    def __init__(self, java_path, version, game_dir, account, launch_options):
         super().__init__()
         self.java_path = java_path
         self.version = version
         self.game_dir = game_dir
         self.account = dict(account)
-        self.runtime_directory = runtime_directory
-        self.extra_jvm_args = list(extra_jvm_args or [])
+        self.launch_options = dict(launch_options or {})
 
     def run(self):
         try:
@@ -3012,7 +3146,7 @@ class LaunchWorker(QObject):
                 self.version,
                 self.java_path,
                 self.game_dir,
-                self.runtime_directory,
+                self.launch_options.get("runtime_directory") or self.game_dir,
                 redact_mapping({
                     "id": account.get("id"),
                     "type": account.get("type"),
@@ -3021,7 +3155,7 @@ class LaunchWorker(QObject):
                     "access_token": account.get("access_token"),
                     "refresh_token": account.get("refresh_token"),
                 }),
-                len(self.extra_jvm_args),
+                len(self.launch_options.get("extra_jvm_args") or []),
             )
             username = account.get("username") or None
             uuid = account.get("uuid") or None
@@ -3065,8 +3199,18 @@ class LaunchWorker(QObject):
 
             self.stage.emit("构建启动命令")
             self.progress.emit(70)
+            pre_launch_command = (self.launch_options.get("pre_launch_command") or "").strip()
+            if pre_launch_command:
+                self.status.emit("正在执行启动前命令...")
+                subprocess.run(
+                    pre_launch_command,
+                    shell=True,
+                    cwd=self.launch_options.get("runtime_directory") or self.game_dir,
+                    check=True,
+                    **hidden_subprocess_kwargs(),
+                )
             self.status.emit(f"正在启动 Minecraft {self.version}...")
-            jvm_args = list(self.extra_jvm_args)
+            jvm_args = list(self.launch_options.get("extra_jvm_args") or [])
             if account.get("type") == "external":
                 jvm_args = [*authlib_injector_args(account), *jvm_args]
             launched = launch_minecraft(
@@ -3076,8 +3220,14 @@ class LaunchWorker(QObject):
                 token,
                 username,
                 uuid,
-                runtime_directory=self.runtime_directory,
+                runtime_directory=self.launch_options.get("runtime_directory"),
                 extra_jvm_args=jvm_args,
+                extra_game_args=self.launch_options.get("extra_game_args") or [],
+                min_memory_mb=self.launch_options.get("min_memory_mb", 0),
+                max_memory_mb=self.launch_options.get("max_memory_mb", 0),
+                window_width=self.launch_options.get("window_width", 0),
+                window_height=self.launch_options.get("window_height", 0),
+                gc_strategy=self.launch_options.get("gc_strategy", "G1GC"),
             )
             if not launched:
                 raise Exception(f"本地未找到版本 {self.version}，请先下载。")
@@ -3303,10 +3453,14 @@ class LauncherWindow(FluentWindow):
         self.java_versions = {}
         self.accounts = load_accounts()
         self.version_settings = load_version_settings()
+        self.media_player = QMediaPlayer(self)
+        self.audio_output = QAudioOutput(self)
+        self.media_player.setAudioOutput(self.audio_output)
         self.account_index_ids = []
         self.manage_account_index_ids = []
         self.delete_account_index_ids = []
         self.version_display_ids = []
+        self.version_list_ids = []
         self.resource_version_ids = []
         self.selected_account_id = config.get("ACCOUNTS", "selected_account_id", fallback="")
         self.setWindowTitle("McGo")
@@ -3327,6 +3481,8 @@ class LauncherWindow(FluentWindow):
         self.build_pages()
         self.apply_theme_image()
         self.init_navigation()
+        self.apply_feature_visibility()
+        self.apply_music_settings(show_feedback=False)
         self.refresh_account_selector()
         self.remote_version_combo.addItem("点击刷新远程版本")
         self.log("QFluentWidgets 界面已启动。远程版本列表已延后加载。")
@@ -3370,6 +3526,14 @@ class LauncherWindow(FluentWindow):
         self.version_category_combo.currentTextChanged.connect(lambda _: self.refresh_local_versions(show_feedback=False))
         self.version_display_combo = NativeComboBox()
         self.version_display_combo.currentTextChanged.connect(self.on_version_display_selected)
+        self.version_list = ListWidget()
+        self.version_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.version_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.version_list.setWordWrap(True)
+        self.version_list.setMinimumHeight(320)
+        self.version_list.currentItemChanged.connect(self.on_version_list_selected)
+        if hasattr(self.version_list, "setSmoothMode"):
+            self.version_list.setSmoothMode(SmoothMode.NO_SMOOTH)
         self.local_version_combo = NativeComboBox()
         self.local_version_combo.currentTextChanged.connect(self.on_local_version_changed)
         self.remote_version_combo = NativeComboBox()
@@ -3383,6 +3547,23 @@ class LauncherWindow(FluentWindow):
         self.mirror_combo = NativeComboBox()
         self.mirror_combo.addItems(list(MIRROR_SOURCES.keys()))
         self.mirror_combo.setCurrentText(config.get("DOWNLOAD", "mirror_source", fallback="official"))
+        self.download_preset_combo = NativeComboBox()
+        self.download_preset_combo.addItems(list(DOWNLOAD_PRESETS.keys()))
+        self.download_preset_combo.currentTextChanged.connect(self.apply_download_preset)
+        self.download_core_threads_input = SpinBox()
+        self.download_core_threads_input.setRange(1, 64)
+        self.download_core_threads_input.setValue(config.getint("DOWNLOAD", "max_core_threads", fallback=12))
+        self.download_asset_threads_input = SpinBox()
+        self.download_asset_threads_input.setRange(1, 96)
+        self.download_asset_threads_input.setValue(config.getint("DOWNLOAD", "max_asset_threads", fallback=24))
+        self.download_speed_limit_input = SpinBox()
+        self.download_speed_limit_input.setRange(0, 1024 * 1024)
+        self.download_speed_limit_input.setSingleStep(256)
+        self.download_speed_limit_input.setSuffix(" KB/s")
+        self.download_speed_limit_input.setValue(config.getint("DOWNLOAD", "speed_limit_kbps", fallback=0))
+        self.download_cache_combo = NativeComboBox()
+        self.download_cache_combo.addItems(["reuse", "network_only"])
+        self.download_cache_combo.setCurrentText(config.get("DOWNLOAD", "cache_strategy", fallback="reuse"))
         self.login_mode_combo = NativeComboBox()
         self.login_mode_combo.addItems(["offline", "microsoft", "external"])
         self.login_mode_combo.setCurrentText("microsoft" if config.getboolean("AUTH", "use_microsoft_login", fallback=False) else "offline")
@@ -3415,6 +3596,30 @@ class LauncherWindow(FluentWindow):
         self.theme_image_input = LineEdit()
         self.theme_image_input.setText(config.get("UI", "theme_image", fallback=""))
         self.theme_image_input.setPlaceholderText("可选：背景图片路径")
+        self.home_content_input = LineEdit()
+        self.home_content_input.setText(config.get("HOME", "content_source", fallback=""))
+        self.home_content_input.setPlaceholderText("本地 txt/md 文件；高级模式可用 http(s) 纯文本")
+        self.home_network_check = CheckBox("允许联网主页纯文本")
+        self.home_network_check.setChecked(config.getboolean("HOME", "allow_network", fallback=False))
+        self.music_path_input = LineEdit()
+        self.music_path_input.setText(config.get("MUSIC", "path", fallback=""))
+        self.music_path_input.setPlaceholderText("本地音乐文件路径")
+        self.music_enabled_check = CheckBox("启用背景音乐")
+        self.music_enabled_check.setChecked(config.getboolean("MUSIC", "enabled", fallback=False))
+        self.music_pause_on_launch_check = CheckBox("游戏启动后暂停音乐")
+        self.music_pause_on_launch_check.setChecked(config.getboolean("MUSIC", "pause_on_launch", fallback=True))
+        self.music_volume_input = SpinBox()
+        self.music_volume_input.setRange(0, 100)
+        self.music_volume_input.setSuffix("%")
+        self.music_volume_input.setValue(config.getint("MUSIC", "volume", fallback=35))
+        self.server_list_input = TextEdit()
+        self.server_list_input.setAcceptRichText(False)
+        self.server_list_input.setPlainText(config.get("SERVERS", "items", fallback=""))
+        self.server_list_input.setPlaceholderText("每行一个服务器，例如：mc.example.com:25565 | 生存服")
+        self.show_download_check = CheckBox("显示下载页")
+        self.show_download_check.setChecked(config.getboolean("FEATURES", "show_download", fallback=True))
+        self.show_manage_check = CheckBox("显示管理页")
+        self.show_manage_check.setChecked(config.getboolean("FEATURES", "show_manage", fallback=True))
         self.auto_open_browser_check = CheckBox("Microsoft 登录时自动打开浏览器")
         self.auto_open_browser_check.setChecked(config.getboolean("AUTH", "auto_open_browser", fallback=True))
         self.resource_isolation_check = CheckBox("启用资源隔离（每个版本使用独立 versions/<版本名> 运行目录）")
@@ -3440,6 +3645,28 @@ class LauncherWindow(FluentWindow):
         self.version_alias_input.setPlaceholderText("给当前版本起一个更容易识别的名称")
         self.version_jvm_args_input = LineEdit()
         self.version_jvm_args_input.setPlaceholderText("-XX:-OmitStackTraceInFastThrow -Djdk.lang.Process.allowAmbiguousCommands=True -Dfml.ignoreInvalidMinecraftCertificates=True -Dfml.ignorePatchDiscrepancies=True")
+        self.version_game_args_input = LineEdit()
+        self.version_game_args_input.setPlaceholderText("--fullscreen --quickPlaySingleplayer WorldName")
+        self.version_pre_launch_input = LineEdit()
+        self.version_pre_launch_input.setPlaceholderText("启动前命令，例如备份存档或同步配置")
+        self.version_min_memory_input = SpinBox()
+        self.version_min_memory_input.setRange(0, 65536)
+        self.version_min_memory_input.setSingleStep(256)
+        self.version_min_memory_input.setSuffix(" MB")
+        self.version_max_memory_input = SpinBox()
+        self.version_max_memory_input.setRange(0, 65536)
+        self.version_max_memory_input.setSingleStep(512)
+        self.version_max_memory_input.setSuffix(" MB")
+        self.version_window_width_input = SpinBox()
+        self.version_window_width_input.setRange(0, 16384)
+        self.version_window_width_input.setSingleStep(64)
+        self.version_window_width_input.setSuffix(" px")
+        self.version_window_height_input = SpinBox()
+        self.version_window_height_input.setRange(0, 16384)
+        self.version_window_height_input.setSingleStep(64)
+        self.version_window_height_input.setSuffix(" px")
+        self.version_gc_combo = NativeComboBox()
+        self.version_gc_combo.addItems(GC_STRATEGIES)
         self.version_custom_dir_input = LineEdit()
         self.version_custom_dir_input.setPlaceholderText("留空则使用默认游戏目录或 versions/<版本名> 资源隔离目录")
         self.version_isolation_check = CheckBox("当前版本单独使用 versions/<版本名> 资源隔离目录")
@@ -3535,6 +3762,10 @@ class LauncherWindow(FluentWindow):
         self.addSubInterface(self.launch_page, FluentIcon.GAME, "启动")
         self.addSubInterface(self.download_page, FluentIcon.DOWNLOAD, "下载")
         self.addSubInterface(self.manage_page, FluentIcon.SETTING, "管理")
+        self.navigation_pages = {
+            "download": self.download_page,
+            "manage": self.manage_page,
+        }
         self.configure_navigation_animation()
         if hasattr(self, "stackedWidget"):
             self.stackedWidget.currentChanged.connect(self.on_main_stack_changed)
@@ -3615,6 +3846,13 @@ class LauncherWindow(FluentWindow):
         row.addStretch()
         quick_layout.addLayout(row)
 
+        self.home_custom_card, home_custom_layout = self.make_card("自定义主页", "仅显示本地或受信任的纯文本内容")
+        self.home_custom_text = TextEdit()
+        self.home_custom_text.setReadOnly(True)
+        self.home_custom_text.setAcceptRichText(False)
+        self.home_custom_text.setMinimumHeight(180)
+        home_custom_layout.addWidget(self.home_custom_text)
+
         overview_card, overview_layout = self.make_card("当前状态", "启动前只需要确认下面四项是否准备完毕")
         grid = QGridLayout()
         grid.setHorizontalSpacing(24)
@@ -3632,9 +3870,11 @@ class LauncherWindow(FluentWindow):
         overview_layout.addLayout(grid)
 
         self.home_page.layout.addWidget(quick_card)
+        self.home_page.layout.addWidget(self.home_custom_card)
         self.home_page.layout.addWidget(overview_card)
         self.home_page.layout.addStretch()
-        self.home_cards = [quick_card, overview_card]
+        self.home_cards = [quick_card, self.home_custom_card, overview_card]
+        self.refresh_home_content()
 
     def build_launch_page(self):
         start_card, start_layout = self.make_card("立即启动", "先选账号与版本分类，再从版本中心确认要启动的版本")
@@ -3688,7 +3928,8 @@ class LauncherWindow(FluentWindow):
 
         selector_card, selector_layout = self.make_card("选择版本", "按分类查看本地版本，原版、可安装 Mod 和仅 OptiFine 会单独归类")
         self.add_labeled_control(selector_layout, "版本分类", self.version_category_combo)
-        self.add_labeled_control(selector_layout, "版本列表", self.version_display_combo)
+        self.add_labeled_control(selector_layout, "快速选择", self.version_display_combo)
+        selector_layout.addWidget(self.version_list)
         selector_layout.addWidget(self.version_summary_label)
 
         personalization_card, personalization_layout = self.make_card("个性化", "显示名称会出现在版本列表中，便于区分 Forge、Fabric 等实例")
@@ -3704,7 +3945,38 @@ class LauncherWindow(FluentWindow):
         personalization_layout.addLayout(personalization_row)
 
         launch_settings_card, launch_settings_layout = self.make_card("启动设置", "为当前版本单独设置 JVM 参数和运行目录")
+        memory_row = QHBoxLayout()
+        min_memory_container = QWidget()
+        min_memory_layout = QVBoxLayout(min_memory_container)
+        min_memory_layout.setContentsMargins(0, 0, 0, 0)
+        min_memory_layout.addWidget(CaptionLabel("最小内存"))
+        min_memory_layout.addWidget(self.version_min_memory_input)
+        max_memory_container = QWidget()
+        max_memory_layout = QVBoxLayout(max_memory_container)
+        max_memory_layout.setContentsMargins(0, 0, 0, 0)
+        max_memory_layout.addWidget(CaptionLabel("最大内存"))
+        max_memory_layout.addWidget(self.version_max_memory_input)
+        memory_row.addWidget(min_memory_container)
+        memory_row.addWidget(max_memory_container)
+        launch_settings_layout.addLayout(memory_row)
+        window_row = QHBoxLayout()
+        width_container = QWidget()
+        width_layout = QVBoxLayout(width_container)
+        width_layout.setContentsMargins(0, 0, 0, 0)
+        width_layout.addWidget(CaptionLabel("窗口宽度"))
+        width_layout.addWidget(self.version_window_width_input)
+        height_container = QWidget()
+        height_layout = QVBoxLayout(height_container)
+        height_layout.setContentsMargins(0, 0, 0, 0)
+        height_layout.addWidget(CaptionLabel("窗口高度"))
+        height_layout.addWidget(self.version_window_height_input)
+        window_row.addWidget(width_container)
+        window_row.addWidget(height_container)
+        launch_settings_layout.addLayout(window_row)
+        self.add_labeled_control(launch_settings_layout, "GC 策略", self.version_gc_combo)
         self.add_labeled_control(launch_settings_layout, "额外 JVM 参数", self.version_jvm_args_input)
+        self.add_labeled_control(launch_settings_layout, "额外游戏参数", self.version_game_args_input)
+        self.add_labeled_control(launch_settings_layout, "启动前命令", self.version_pre_launch_input)
         launch_settings_layout.addWidget(self.version_isolation_check)
         self.add_labeled_control(launch_settings_layout, "自定义运行目录", self.version_custom_dir_input)
 
@@ -3713,18 +3985,27 @@ class LauncherWindow(FluentWindow):
         self.open_version_folder_button = PushButton("版本文件夹")
         self.open_saves_button = PushButton("存档文件夹")
         self.open_mods_button = PushButton("Mod 文件夹")
+        self.open_resourcepacks_button = PushButton("资源包")
+        self.open_shaderpacks_button = PushButton("光影")
+        self.open_screenshots_button = PushButton("截图")
         self.export_launch_script_button = PushButton("导出启动脚本")
         self.export_modpack_button = PushButton("导出整合包")
         self.analyze_crash_button = PushButton("分析崩溃")
         self.open_version_folder_button.clicked.connect(self.open_current_version_folder)
         self.open_saves_button.clicked.connect(self.open_current_saves_directory)
         self.open_mods_button.clicked.connect(self.open_current_mods_directory)
+        self.open_resourcepacks_button.clicked.connect(self.open_current_resourcepacks_directory)
+        self.open_shaderpacks_button.clicked.connect(self.open_current_shaderpacks_directory)
+        self.open_screenshots_button.clicked.connect(self.open_current_screenshots_directory)
         self.export_launch_script_button.clicked.connect(self.export_current_launch_script)
         self.export_modpack_button.clicked.connect(self.export_current_modpack)
         self.analyze_crash_button.clicked.connect(self.analyze_current_crash)
         shortcut_row.addWidget(self.open_version_folder_button)
         shortcut_row.addWidget(self.open_saves_button)
         shortcut_row.addWidget(self.open_mods_button)
+        shortcut_row.addWidget(self.open_resourcepacks_button)
+        shortcut_row.addWidget(self.open_shaderpacks_button)
+        shortcut_row.addWidget(self.open_screenshots_button)
         shortcut_row.addWidget(self.export_launch_script_button)
         shortcut_row.addWidget(self.export_modpack_button)
         shortcut_row.addWidget(self.analyze_crash_button)
@@ -3836,6 +4117,21 @@ class LauncherWindow(FluentWindow):
         self.add_labeled_control(download_layout, "版本类型", self.version_type_combo)
         self.add_labeled_control(download_layout, "远程版本", self.remote_version_combo)
         self.add_labeled_control(download_layout, "镜像源", self.mirror_combo)
+        self.add_labeled_control(download_layout, "下载预设", self.download_preset_combo)
+        download_tuning_row = QHBoxLayout()
+        for label, control in (
+            ("核心线程", self.download_core_threads_input),
+            ("资源线程", self.download_asset_threads_input),
+            ("速度限制", self.download_speed_limit_input),
+        ):
+            container = QWidget()
+            container_layout = QVBoxLayout(container)
+            container_layout.setContentsMargins(0, 0, 0, 0)
+            container_layout.addWidget(CaptionLabel(label))
+            container_layout.addWidget(control)
+            download_tuning_row.addWidget(container)
+        download_layout.addLayout(download_tuning_row)
+        self.add_labeled_control(download_layout, "缓存策略", self.download_cache_combo)
         addon_row = QHBoxLayout()
         for checkbox in self.download_loader_checks.values():
             addon_row.addWidget(checkbox)
@@ -4070,6 +4366,8 @@ class LauncherWindow(FluentWindow):
         game_layout.addWidget(self.advanced_mode_check)
         self.add_labeled_control(game_layout, "界面主题", self.theme_combo)
         self.add_labeled_control(game_layout, "主题背景图", self.theme_image_input)
+        self.add_labeled_control(game_layout, "主页内容", self.home_content_input)
+        game_layout.addWidget(self.home_network_check)
         game_layout.addWidget(self.resource_isolation_check)
         self.add_labeled_control(game_layout, "Java 路径", self.java_combo)
         game_layout.addWidget(self.java_version_label)
@@ -4077,18 +4375,24 @@ class LauncherWindow(FluentWindow):
         choose_button = PushButton("选择目录")
         open_button = PushButton("打开目录")
         theme_image_button = PushButton("选择背景图")
+        home_content_button = PushButton("选择主页文件")
+        refresh_home_button = PushButton("刷新主页")
         refresh_java_button = PushButton("刷新 Java")
         self.download_java_button = PushButton("下载推荐 Java")
         refresh_versions_button = PushButton("刷新本地版本")
         choose_button.clicked.connect(self.choose_game_directory)
         open_button.clicked.connect(self.open_game_directory)
         theme_image_button.clicked.connect(self.choose_theme_image)
+        home_content_button.clicked.connect(self.choose_home_content)
+        refresh_home_button.clicked.connect(self.refresh_home_content)
         refresh_java_button.clicked.connect(self.refresh_java_paths)
         self.download_java_button.clicked.connect(self.download_recommended_java)
         refresh_versions_button.clicked.connect(self.refresh_local_versions)
         game_row.addWidget(choose_button)
         game_row.addWidget(open_button)
         game_row.addWidget(theme_image_button)
+        game_row.addWidget(home_content_button)
+        game_row.addWidget(refresh_home_button)
         game_row.addWidget(refresh_java_button)
         game_row.addWidget(self.download_java_button)
         game_row.addWidget(refresh_versions_button)
@@ -4096,9 +4400,67 @@ class LauncherWindow(FluentWindow):
         game_layout.addLayout(game_row)
         return game_card
 
+    def build_personalization_section(self):
+        card, layout = self.make_card("个性化与功能", "背景音乐、页面隐藏和低频功能集中配置")
+        layout.addWidget(self.music_enabled_check)
+        self.add_labeled_control(layout, "背景音乐", self.music_path_input)
+        self.add_labeled_control(layout, "音乐音量", self.music_volume_input)
+        layout.addWidget(self.music_pause_on_launch_check)
+        layout.addWidget(self.show_download_check)
+        layout.addWidget(self.show_manage_check)
+        row = QHBoxLayout()
+        choose_music_button = PushButton("选择音乐")
+        play_music_button = PushButton("播放/应用")
+        stop_music_button = PushButton("停止音乐")
+        choose_music_button.clicked.connect(self.choose_music_file)
+        play_music_button.clicked.connect(self.apply_music_settings)
+        stop_music_button.clicked.connect(self.stop_music)
+        row.addWidget(choose_music_button)
+        row.addWidget(play_music_button)
+        row.addWidget(stop_music_button)
+        row.addStretch()
+        layout.addLayout(row)
+        return card
+
+    def build_server_section(self):
+        card, layout = self.make_card("联机入口", "维护常用服务器地址，并可复制到剪贴板")
+        layout.addWidget(self.server_list_input)
+        row = QHBoxLayout()
+        copy_button = PushButton("复制首个服务器")
+        save_button = PushButton("保存服务器列表")
+        copy_button.clicked.connect(self.copy_first_server)
+        save_button.clicked.connect(self.save_settings)
+        row.addWidget(copy_button)
+        row.addWidget(save_button)
+        row.addStretch()
+        layout.addLayout(row)
+        return card
+
     def build_log_section(self):
         card, layout = self.make_card("状态日志", "把下载、登录和启动日志集中到一个分页里，避免单独切主菜单")
         layout.addWidget(self.status_log)
+        return card
+
+    def build_help_section(self):
+        card, layout = self.make_card("帮助与关于", "常见问题、目录说明、版本信息和鸣谢")
+        help_text = TextEdit()
+        help_text.setReadOnly(True)
+        help_text.setAcceptRichText(False)
+        help_text.setMinimumHeight(360)
+        help_text.setPlainText(
+            "常见问题\n"
+            "1. 启动失败先检查 Java 版本是否满足当前 Minecraft 需求，再使用“补全/校验文件”。\n"
+            "2. 下载失败会自动在 official 与 BMCLAPI 间切换；仍失败时可调低下载线程或切换镜像源。\n"
+            "3. Fabric Mod 多数需要 Fabric API，可在下载页安装扩展或资源市场中安装依赖。\n"
+            "4. 外置登录需要 authlib-injector.jar，并确保认证服务器地址可访问。\n\n"
+            "目录说明\n"
+            ".minecraft/versions 保存版本清单与客户端；libraries 保存依赖库；assets 保存资源文件。\n"
+            "启用资源隔离后，存档、Mod、资源包、光影和截图会优先放入 versions/<版本名>/。\n\n"
+            "关于\n"
+            "McGo 是 PyQt6 / QFluentWidgets 编写的 Minecraft 启动器。\n"
+            "鸣谢：Mojang 版本元数据、BMCLAPI 镜像、Modrinth、CurseForge、authlib-injector、QFluentWidgets。"
+        )
+        layout.addWidget(help_text)
         return card
 
     def build_manage_page(self):
@@ -4116,6 +4478,7 @@ class LauncherWindow(FluentWindow):
         self.account_manage_view = QWidget()
         self.environment_manage_view = QWidget()
         self.log_manage_view = QWidget()
+        self.help_manage_view = QWidget()
 
         account_layout = QVBoxLayout(self.account_manage_view)
         account_layout.setContentsMargins(0, 0, 0, 0)
@@ -4125,6 +4488,8 @@ class LauncherWindow(FluentWindow):
         environment_layout = QVBoxLayout(self.environment_manage_view)
         environment_layout.setContentsMargins(0, 0, 0, 0)
         environment_layout.addWidget(self.build_environment_section())
+        environment_layout.addWidget(self.build_personalization_section())
+        environment_layout.addWidget(self.build_server_section())
         environment_layout.addStretch()
 
         log_layout = QVBoxLayout(self.log_manage_view)
@@ -4132,13 +4497,20 @@ class LauncherWindow(FluentWindow):
         log_layout.addWidget(self.build_log_section())
         log_layout.addStretch()
 
+        help_layout = QVBoxLayout(self.help_manage_view)
+        help_layout.setContentsMargins(0, 0, 0, 0)
+        help_layout.addWidget(self.build_help_section())
+        help_layout.addStretch()
+
         self.manage_stack.addWidget(self.account_manage_view)
         self.manage_stack.addWidget(self.environment_manage_view)
         self.manage_stack.addWidget(self.log_manage_view)
+        self.manage_stack.addWidget(self.help_manage_view)
 
         self.manage_pivot.addItem("accounts", "账号", lambda: self.switch_manage_section("accounts"))
         self.manage_pivot.addItem("environment", "环境", lambda: self.switch_manage_section("environment"))
         self.manage_pivot.addItem("logs", "日志", lambda: self.switch_manage_section("logs"))
+        self.manage_pivot.addItem("help", "帮助", lambda: self.switch_manage_section("help"))
         self.manage_pivot.setCurrentItem("accounts")
 
         self.manage_page.layout.addWidget(nav_card)
@@ -4151,10 +4523,16 @@ class LauncherWindow(FluentWindow):
         self.animate_card_group(card_group or [])
 
     def open_manage_section(self, section_key):
+        if not config.getboolean("FEATURES", "show_manage", fallback=True):
+            self.show_warning("页面已隐藏", "请在配置文件中重新启用管理页。")
+            return
         self.switch_main_page(self.manage_page, self.manage_cards)
         self.switch_manage_section(section_key)
 
     def open_download_section(self, section_key):
+        if not config.getboolean("FEATURES", "show_download", fallback=True):
+            self.show_warning("页面已隐藏", "请在管理中心重新启用下载页。")
+            return
         self.switch_main_page(self.download_page, self.download_cards)
         self.switch_download_section(section_key)
         if section_key == "resources":
@@ -4174,11 +4552,106 @@ class LauncherWindow(FluentWindow):
         self.install_log.append(message)
         self.motion.pulse_widget(self.install_log.viewport(), duration=220, start_opacity=0.66, throttle_key="install_log", min_interval=0.12)
 
+    def apply_download_preset(self, preset_name):
+        preset = DOWNLOAD_PRESETS.get(preset_name)
+        if not preset:
+            return
+        self.download_core_threads_input.setValue(preset["core"])
+        self.download_asset_threads_input.setValue(preset["asset"])
+        self.download_speed_limit_input.setValue(preset["speed_kbps"])
+        self.download_cache_combo.setCurrentText(preset["cache"])
+
+    def refresh_home_content(self):
+        if not hasattr(self, "home_custom_text"):
+            return
+        source = self.home_content_input.text().strip() if hasattr(self, "home_content_input") else ""
+        if not source:
+            self.home_custom_text.setPlainText("未配置自定义主页内容。")
+            return
+        try:
+            if source.startswith(("http://", "https://")):
+                if not self.home_network_check.isChecked():
+                    self.home_custom_text.setPlainText("联网主页未启用。")
+                    return
+                response = requests.get(source, timeout=8)
+                response.raise_for_status()
+                text = response.text
+            else:
+                with open(source, "r", encoding="utf-8", errors="replace") as file_handle:
+                    text = file_handle.read()
+            self.home_custom_text.setPlainText(text[:12000])
+        except Exception as exc:
+            self.home_custom_text.setPlainText(f"主页内容加载失败：{exc}")
+
+    def choose_home_content(self):
+        path, _ = QFileDialog.getOpenFileName(self, "选择主页文本", "", "文本文件 (*.txt *.md);;所有文件 (*.*)")
+        if path:
+            self.home_content_input.setText(path)
+            self.refresh_home_content()
+
+    def choose_music_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "选择背景音乐", "", "音频文件 (*.mp3 *.wav *.ogg *.flac);;所有文件 (*.*)")
+        if path:
+            self.music_path_input.setText(path)
+            self.apply_music_settings()
+
+    def apply_music_settings(self, show_feedback=True):
+        if not hasattr(self, "media_player"):
+            return
+        self.audio_output.setVolume(max(0, min(100, self.music_volume_input.value())) / 100)
+        path = self.music_path_input.text().strip()
+        if self.music_enabled_check.isChecked() and path and os.path.isfile(path):
+            self.media_player.setSource(QUrl.fromLocalFile(os.path.abspath(path)))
+            self.media_player.play()
+            if show_feedback:
+                self.show_success("背景音乐", "已开始播放。")
+        else:
+            self.media_player.stop()
+            if show_feedback and self.music_enabled_check.isChecked():
+                self.show_warning("背景音乐", "请选择有效的本地音乐文件。")
+
+    def stop_music(self):
+        self.media_player.stop()
+        self.music_enabled_check.setChecked(False)
+
+    def copy_first_server(self):
+        for line in self.server_list_input.toPlainText().splitlines():
+            server = line.split("|", 1)[0].strip()
+            if server:
+                QApplication.clipboard().setText(server)
+                self.show_success("服务器已复制", server)
+                return
+        self.show_warning("没有服务器", "请先填写服务器地址。")
+
+    def apply_feature_visibility(self):
+        if not hasattr(self, "navigation_pages"):
+            return
+        states = {
+            "download": config.getboolean("FEATURES", "show_download", fallback=True),
+            "manage": config.getboolean("FEATURES", "show_manage", fallback=True),
+        }
+        labels = {"download": "下载", "manage": "管理"}
+        icons = {"download": FluentIcon.DOWNLOAD, "manage": FluentIcon.SETTING}
+        for key, visible in states.items():
+            page = self.navigation_pages[key]
+            navigation = getattr(self, "navigationInterface", None)
+            if visible:
+                try:
+                    self.addSubInterface(page, icons[key], labels[key])
+                except Exception:
+                    pass
+            elif navigation:
+                try:
+                    self.removeInterface(page)
+                except Exception:
+                    pass
+
     def switch_manage_section(self, section_key):
         mapping = {
             "accounts": 0,
             "environment": 1,
             "logs": 2,
+            "help": 3,
         }
         index = mapping.get(section_key, 0)
         self.motion.cross_fade_stack(self.manage_stack, index)
@@ -4220,6 +4693,31 @@ class LauncherWindow(FluentWindow):
 
     def current_selected_version(self):
         return self.local_version_combo.currentText().strip()
+
+    def set_selected_version(self, version_id, sync_display=True):
+        version_id = (version_id or "").strip()
+        if not version_id:
+            return
+        self.local_version_combo.blockSignals(True)
+        if self.local_version_combo.findText(version_id) < 0:
+            self.local_version_combo.addItem(version_id)
+        self.local_version_combo.setCurrentText(version_id)
+        self.local_version_combo.blockSignals(False)
+
+        if sync_display:
+            display_index = self.version_display_ids.index(version_id) if version_id in self.version_display_ids else -1
+            if display_index >= 0 and self.version_display_combo.currentIndex() != display_index:
+                self.version_display_combo.blockSignals(True)
+                self.version_display_combo.setCurrentIndex(display_index)
+                self.version_display_combo.blockSignals(False)
+
+            list_index = self.version_list_ids.index(version_id) if version_id in self.version_list_ids else -1
+            if list_index >= 0 and self.version_list.currentRow() != list_index:
+                self.version_list.blockSignals(True)
+                self.version_list.setCurrentRow(list_index)
+                self.version_list.blockSignals(False)
+
+        self.on_local_version_changed(version_id)
 
     def current_resource_version(self):
         current_index = self.resource_version_combo.currentIndex() if hasattr(self, "resource_version_combo") else -1
@@ -4274,15 +4772,27 @@ class LauncherWindow(FluentWindow):
     def on_version_display_selected(self, version_label):
         current_index = self.version_display_combo.currentIndex()
         version_id = self.version_display_ids[current_index] if 0 <= current_index < len(self.version_display_ids) else ""
-        self.local_version_combo.blockSignals(True)
-        self.local_version_combo.setCurrentText(version_id)
-        self.local_version_combo.blockSignals(False)
-        self.on_local_version_changed(version_id)
+        self.set_selected_version(version_id)
+
+    def on_version_list_selected(self, current, _previous=None):
+        if current is None:
+            return
+        version_id = current.data(Qt.ItemDataRole.UserRole)
+        if isinstance(version_id, str):
+            self.set_selected_version(version_id)
 
     def populate_version_settings_panel(self, version_id):
         entry = self.version_settings_entry(version_id)
         self.version_alias_input.setText(entry.get("alias", ""))
         self.version_jvm_args_input.setText(entry.get("jvm_args", ""))
+        self.version_game_args_input.setText(entry.get("game_args", ""))
+        self.version_pre_launch_input.setText(entry.get("pre_launch_command", ""))
+        self.version_min_memory_input.setValue(max(0, int(entry.get("min_memory_mb", 0) or 0)))
+        self.version_max_memory_input.setValue(max(0, int(entry.get("max_memory_mb", 0) or 0)))
+        self.version_window_width_input.setValue(max(0, int(entry.get("window_width", 0) or 0)))
+        self.version_window_height_input.setValue(max(0, int(entry.get("window_height", 0) or 0)))
+        gc_strategy = entry.get("gc_strategy", "G1GC")
+        self.version_gc_combo.setCurrentText(gc_strategy if gc_strategy in GC_STRATEGIES else "G1GC")
         self.version_custom_dir_input.setText(entry.get("runtime_directory", ""))
         self.version_favorite_check.setChecked(bool(entry.get("favorite", False)))
         self.version_hidden_check.setChecked(bool(entry.get("hidden", False)))
@@ -4301,6 +4811,9 @@ class LauncherWindow(FluentWindow):
         has_version = bool(version_id)
         self.open_version_folder_button.setEnabled(has_version)
         self.open_saves_button.setEnabled(has_version)
+        self.open_resourcepacks_button.setEnabled(has_version)
+        self.open_shaderpacks_button.setEnabled(has_version)
+        self.open_screenshots_button.setEnabled(has_version)
         self.export_launch_script_button.setEnabled(has_version)
         self.export_modpack_button.setEnabled(has_version)
         self.analyze_crash_button.setEnabled(has_version)
@@ -4316,7 +4829,9 @@ class LauncherWindow(FluentWindow):
                     if not (lowered.endswith(".jar") or lowered.endswith(".jar.disabled")):
                         continue
                     enabled = lowered.endswith(".jar")
-                    label = f"{'启用' if enabled else '禁用'} | {item}"
+                    _, hints = analyze_local_mod_file(os.path.join(mods_dir, item), mods_dir)
+                    hint_text = f" | {'；'.join(hints[:2])}" if hints else ""
+                    label = f"{'启用' if enabled else '禁用'} | {item}{hint_text}"
                     widget_item = QListWidgetItem(label)
                     widget_item.setData(Qt.ItemDataRole.UserRole, os.path.join(mods_dir, item))
                     self.version_mods_list.addItem(widget_item)
@@ -4345,14 +4860,21 @@ class LauncherWindow(FluentWindow):
         self.motion.fade_slide_in(self.version_summary_label, offset=8, duration=220)
 
     def save_current_version_settings(self):
-        version_id = self.current_resource_version()
+        version_id = self.current_selected_version()
         if not version_id:
-            self.show_warning("缺少版本", "请先在资源市场里选择安装目标版本。")
+            self.show_warning("缺少版本", "请先选择一个本地版本。")
             return
         entry = self.version_settings_entry(version_id)
         entry["alias"] = self.version_alias_input.text().strip()
         entry["alias_auto"] = False
         entry["jvm_args"] = self.version_jvm_args_input.text().strip()
+        entry["game_args"] = self.version_game_args_input.text().strip()
+        entry["pre_launch_command"] = self.version_pre_launch_input.text().strip()
+        entry["min_memory_mb"] = self.version_min_memory_input.value()
+        entry["max_memory_mb"] = self.version_max_memory_input.value()
+        entry["window_width"] = self.version_window_width_input.value()
+        entry["window_height"] = self.version_window_height_input.value()
+        entry["gc_strategy"] = self.version_gc_combo.currentText().strip()
         entry["runtime_directory"] = self.version_custom_dir_input.text().strip()
         entry["use_isolated_directory"] = self.version_isolation_check.isChecked()
         entry["favorite"] = self.version_favorite_check.isChecked()
@@ -4414,6 +4936,18 @@ class LauncherWindow(FluentWindow):
     def current_saves_directory(self):
         version_id = self.current_selected_version()
         return os.path.join(self.runtime_directory_for_version(version_id), "saves") if version_id else ""
+
+    def current_resourcepack_directory(self):
+        version_id = self.current_selected_version()
+        return os.path.join(self.runtime_directory_for_version(version_id), "resourcepacks") if version_id else ""
+
+    def current_shaderpack_directory(self):
+        version_id = self.current_selected_version()
+        return os.path.join(self.runtime_directory_for_version(version_id), "shaderpacks") if version_id else ""
+
+    def current_screenshot_directory(self):
+        version_id = self.current_selected_version()
+        return os.path.join(self.runtime_directory_for_version(version_id), "screenshots") if version_id else ""
 
     def current_resource_directory(self, resource_type):
         return self.resource_directory_for_version(self.current_resource_version(), resource_type)
@@ -4481,6 +5015,30 @@ class LauncherWindow(FluentWindow):
         os.makedirs(saves_dir, exist_ok=True)
         os.startfile(os.path.abspath(saves_dir))
 
+    def open_current_resourcepacks_directory(self):
+        path = self.current_resourcepack_directory()
+        if not path:
+            self.show_warning("缺少版本", "请先选择一个本地版本。")
+            return
+        os.makedirs(path, exist_ok=True)
+        os.startfile(os.path.abspath(path))
+
+    def open_current_shaderpacks_directory(self):
+        path = self.current_shaderpack_directory()
+        if not path:
+            self.show_warning("缺少版本", "请先选择一个本地版本。")
+            return
+        os.makedirs(path, exist_ok=True)
+        os.startfile(os.path.abspath(path))
+
+    def open_current_screenshots_directory(self):
+        path = self.current_screenshot_directory()
+        if not path:
+            self.show_warning("缺少版本", "请先选择一个本地版本。")
+            return
+        os.makedirs(path, exist_ok=True)
+        os.startfile(os.path.abspath(path))
+
     def export_current_launch_script(self):
         version_id = self.current_selected_version()
         java_path = self.java_combo.currentText().strip()
@@ -4514,6 +5072,12 @@ class LauncherWindow(FluentWindow):
                 uuid=account.get("uuid", ""),
                 runtime_directory=launch_options["runtime_directory"],
                 extra_jvm_args=extra_jvm_args,
+                extra_game_args=launch_options.get("extra_game_args") or [],
+                min_memory_mb=launch_options.get("min_memory_mb", 0),
+                max_memory_mb=launch_options.get("max_memory_mb", 0),
+                window_width=launch_options.get("window_width", 0),
+                window_height=launch_options.get("window_height", 0),
+                gc_strategy=launch_options.get("gc_strategy", "G1GC"),
             )
         except Exception as exc:
             self.show_warning("导出失败", str(exc))
@@ -4526,6 +5090,9 @@ class LauncherWindow(FluentWindow):
         with open(script_path, "w", encoding="utf-8-sig", newline="\r\n") as file_handle:
             file_handle.write("@echo off\r\n")
             file_handle.write("cd /d %~dp0\\..\r\n")
+            pre_launch_command = launch_options.get("pre_launch_command", "")
+            if pre_launch_command:
+                file_handle.write(f"{pre_launch_command}\r\n")
             file_handle.write(f"{subprocess.list2cmdline(command)}\r\n")
             file_handle.write("pause\r\n")
         self.show_success("启动脚本已导出", script_path)
@@ -4595,6 +5162,7 @@ class LauncherWindow(FluentWindow):
             return
         mirror_key = self.mirror_combo.currentText()
         game_dir = self.current_game_dir()
+        self.save_settings(show_feedback=False)
         task = DownloadTask(
             "repair",
             f"补全版本文件 {version_id}",
@@ -4612,7 +5180,7 @@ class LauncherWindow(FluentWindow):
         self.set_download_running(True)
         self.show_info("开始补全", f"正在校验 {version_id} 的缺失文件。")
         self.repair_thread = QThread()
-        self.repair_worker = RepairWorker(version_id, mirror_key, game_dir)
+        self.repair_worker = RepairWorker(version_id, mirror_key, game_dir, download_options=read_download_options())
         self.repair_worker.moveToThread(self.repair_thread)
         self.repair_thread.started.connect(self.repair_worker.run)
         self.repair_worker.progress.connect(self.repair_progress_bar.setValue)
@@ -4944,6 +5512,15 @@ class LauncherWindow(FluentWindow):
                 checkbox.setEnabled(not running)
             if not running:
                 self.update_download_addon_controls()
+        for name in (
+            "download_preset_combo",
+            "download_core_threads_input",
+            "download_asset_threads_input",
+            "download_speed_limit_input",
+            "download_cache_combo",
+        ):
+            if hasattr(self, name):
+                getattr(self, name).setEnabled(not running)
         self.update_download_queue_label()
 
     def set_launch_running(self, running):
@@ -5470,6 +6047,25 @@ class LauncherWindow(FluentWindow):
             self.version_display_combo.clear()
             self.version_display_ids = list(filtered)
             self.version_display_combo.addItems([self.version_display_name(version) for version in filtered])
+            self.version_list.blockSignals(True)
+            self.version_list.clear()
+            self.version_list_ids = list(filtered)
+            for version in filtered:
+                entry = self.version_settings_entry(version)
+                badges = []
+                if entry.get("favorite"):
+                    badges.append("收藏")
+                if entry.get("hidden"):
+                    badges.append("隐藏")
+                version_type = version_type_label(self.current_game_dir(), version)
+                base_version = self.base_version_for(version)
+                badge_text = f" [{' / '.join(badges)}]" if badges else ""
+                item = QListWidgetItem(
+                    f"{self.version_display_name(version)}{badge_text}\n"
+                    f"{version_type} | Minecraft {base_version} | {self.runtime_directory_for_version(version)}"
+                )
+                item.setData(Qt.ItemDataRole.UserRole, version)
+                self.version_list.addItem(item)
             selected_version = current_version if current_version in filtered else ""
             if not selected_version and last_version in filtered:
                 selected_version = last_version
@@ -5480,17 +6076,21 @@ class LauncherWindow(FluentWindow):
                 display_index = self.version_display_combo.findText(display_name)
                 if display_index >= 0:
                     self.version_display_combo.setCurrentIndex(display_index)
+                list_index = self.version_list_ids.index(selected_version) if selected_version in self.version_list_ids else -1
+                if list_index >= 0:
+                    self.version_list.setCurrentRow(list_index)
             self.version_display_combo.blockSignals(False)
+            self.version_list.blockSignals(False)
             if selected_version:
-                local_index = self.local_version_combo.findText(selected_version)
-                if local_index >= 0:
-                    self.local_version_combo.setCurrentIndex(local_index)
+                self.set_selected_version(selected_version, sync_display=False)
             self.refresh_install_versions(versions)
             self.refresh_resource_target_versions(versions)
-            self.motion.pulse_list(self.version_mods_list)
+            self.motion.pulse_list(self.version_list)
             self.log(f"本地版本数量：{len(versions)}")
-            if versions:
-                self.on_local_version_changed(self.local_version_combo.currentText().strip())
+            if selected_version:
+                self.on_local_version_changed(selected_version)
+            elif versions:
+                self.launch_status_label.setText("当前分类没有可显示的版本")
             else:
                 self.launch_status_label.setText("当前游戏目录下没有可启动的本地版本")
             self.update_home_summary()
@@ -5810,14 +6410,30 @@ class LauncherWindow(FluentWindow):
                 self.upsert_account(account)
             config["ACCOUNTS"]["selected_account_id"] = account.get("id", "")
         config["DOWNLOAD"]["mirror_source"] = self.mirror_combo.currentText()
+        config["DOWNLOAD"]["max_core_threads"] = str(self.download_core_threads_input.value())
+        config["DOWNLOAD"]["max_asset_threads"] = str(self.download_asset_threads_input.value())
+        config["DOWNLOAD"]["speed_limit_kbps"] = str(self.download_speed_limit_input.value())
+        config["DOWNLOAD"]["cache_strategy"] = self.download_cache_combo.currentText()
         config["AUTH"]["auto_open_browser"] = str(self.auto_open_browser_check.isChecked())
         config["GAME"]["directory"] = self.current_game_dir()
         config["GAME"]["enable_resource_isolation"] = str(self.resource_isolation_check.isChecked())
         config["UI"]["advanced_mode"] = str(self.advanced_mode_check.isChecked())
         config["UI"]["theme"] = self.theme_combo.currentText()
         config["UI"]["theme_image"] = self.theme_image_input.text().strip()
+        config["HOME"]["content_source"] = self.home_content_input.text().strip()
+        config["HOME"]["allow_network"] = str(self.home_network_check.isChecked())
+        config["MUSIC"]["path"] = self.music_path_input.text().strip()
+        config["MUSIC"]["enabled"] = str(self.music_enabled_check.isChecked())
+        config["MUSIC"]["volume"] = str(self.music_volume_input.value())
+        config["MUSIC"]["pause_on_launch"] = str(self.music_pause_on_launch_check.isChecked())
+        config["FEATURES"]["show_download"] = str(self.show_download_check.isChecked())
+        config["FEATURES"]["show_manage"] = str(self.show_manage_check.isChecked())
+        config["SERVERS"]["items"] = self.server_list_input.toPlainText().strip()
         save_config()
         self.apply_theme_image()
+        self.refresh_home_content()
+        self.apply_music_settings(show_feedback=False)
+        self.apply_feature_visibility()
         self.log("设置已保存。")
         self.update_home_summary()
         if show_feedback:
@@ -5918,9 +6534,6 @@ class LauncherWindow(FluentWindow):
             version,
             global_isolation=self.resource_isolation_check.isChecked(),
         )
-        runtime_directory = launch_options["runtime_directory"]
-        extra_jvm_args = launch_options["extra_jvm_args"]
-
         if self.launch_thread and self.launch_thread.isRunning():
             self.show_warning("启动进行中", "当前已有启动任务在运行。")
             return
@@ -5938,8 +6551,7 @@ class LauncherWindow(FluentWindow):
             version,
             self.current_game_dir(),
             account,
-            runtime_directory,
-            extra_jvm_args=extra_jvm_args,
+            launch_options,
         )
         self.launch_worker.moveToThread(self.launch_thread)
         self.launch_thread.started.connect(self.launch_worker.run)
@@ -5979,6 +6591,8 @@ class LauncherWindow(FluentWindow):
         logger.info("Launch finished in UI: payload=%s", redact_mapping(payload))
         self.set_launch_running(False)
         account = payload.get("account", {})
+        if self.music_pause_on_launch_check.isChecked():
+            self.media_player.pause()
         if account.get("id"):
             self.upsert_account(account)
         version = payload.get("version", "")
@@ -6068,6 +6682,7 @@ class LauncherWindow(FluentWindow):
             game_dir,
             auto_install_types=auto_install_types,
             java_path=java_path,
+            download_options=read_download_options(),
         )
         self.download_worker.moveToThread(self.download_thread)
         self.download_thread.started.connect(self.download_worker.run)
@@ -6407,6 +7022,8 @@ class LauncherWindow(FluentWindow):
             parts.append(f"<p>链接：<a href='{url}'>{url}</a></p>")
         if detail.get("description"):
             parts.append(f"<p>{html.escape(str(detail.get('description', '')))}</p>")
+        if detail.get("status"):
+            parts.append(f"<p>状态：{html.escape(str(detail.get('status')))}</p>")
         screenshots = detail.get("screenshots", [])
         if screenshots:
             parts.append("<p>截图：</p>")

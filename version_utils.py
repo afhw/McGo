@@ -77,11 +77,28 @@ def launch_options_for_version(game_dir, settings, version_id, global_isolation=
         global_isolation=global_isolation,
     )
     raw_jvm_args = (entry.get("jvm_args") or "").strip()
+    raw_game_args = (entry.get("game_args") or "").strip()
     extra_jvm_args = shlex.split(raw_jvm_args, posix=False) if raw_jvm_args else []
+    extra_game_args = shlex.split(raw_game_args, posix=False) if raw_game_args else []
     return {
         "runtime_directory": runtime_directory,
         "extra_jvm_args": extra_jvm_args,
+        "extra_game_args": extra_game_args,
+        "min_memory_mb": _positive_int(entry.get("min_memory_mb"), 0),
+        "max_memory_mb": _positive_int(entry.get("max_memory_mb"), 0),
+        "window_width": _positive_int(entry.get("window_width"), 0),
+        "window_height": _positive_int(entry.get("window_height"), 0),
+        "pre_launch_command": (entry.get("pre_launch_command") or "").strip(),
+        "gc_strategy": (entry.get("gc_strategy") or "G1GC").strip() or "G1GC",
     }
+
+
+def _positive_int(value, fallback=0):
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        return fallback
+    return parsed if parsed > 0 else fallback
 
 
 def resolve_base_minecraft_version(game_dir, version_id):
