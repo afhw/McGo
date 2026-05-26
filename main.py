@@ -17,9 +17,11 @@ import zipfile
 import html
 from io import BytesIO
 from collections import deque
+from urllib.parse import urlparse
 
 import requests
 from flask import Flask, request
+from markupsafe import escape
 from PyQt6.QtCore import (
     QEasingCurve,
     QPoint,
@@ -59,7 +61,6 @@ from qfluentwidgets import (
     ComboBox,
     FluentIcon,
     FluentWindow,
-    HyperlinkButton,
     IndeterminateProgressRing,
     InfoBar,
     InfoBarPosition,
@@ -140,9 +141,132 @@ def hidden_subprocess_kwargs():
 
 @app.route("/login/callback")
 def login_callback():
-    authenticator.authorization_code = request.args.get("code")
+    error = request.args.get("error")
+    if error:
+        logger.warning("Microsoft OAuth callback failed: error=%s", error)
+        return render_oauth_callback_page(
+            "Microsoft 登录失败",
+            "Microsoft 返回了错误，请回到 McGo 查看状态日志并重新登录。",
+            status="error",
+            detail=request.args.get("error_description", error),
+        ), 400
+
+    code = request.args.get("code")
+    if not code:
+        logger.warning("Microsoft OAuth callback missing authorization code")
+        return render_oauth_callback_page(
+            "缺少授权码",
+            "回调地址没有收到授权码，请回到 McGo 重新发起 Microsoft 登录。",
+            status="error",
+        ), 400
+
+    authenticator.authorization_code = code
     logger.info("Microsoft OAuth callback received: has_code=%s", bool(authenticator.authorization_code))
-    return "登录成功，你可以关闭此窗口"
+    return render_oauth_callback_page(
+        "登录成功",
+        "McGo 已收到 Microsoft 授权码。你可以关闭此页面，回到启动器继续。",
+    )
+
+
+@app.route("/")
+def oauth_callback_index():
+    return render_oauth_callback_page(
+        "McGo 登录回调服务",
+        "这个本地页面用于接收 Microsoft 登录回调。请从 McGo 启动器中发起登录。",
+    )
+
+
+def render_oauth_callback_page(title, message, status="success", detail=""):
+    is_success = status == "success"
+    accent = "#2e7d32" if is_success else "#b3261e"
+    icon = "✓" if is_success else "!"
+    escaped_title = escape(title)
+    escaped_message = escape(message)
+    escaped_detail = escape(detail)
+    detail_html = f"<p class='detail'>{escaped_detail}</p>" if detail else ""
+    return f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{escaped_title}</title>
+  <style>
+    :root {{
+      color-scheme: light dark;
+      font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+    }}
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #f4f6f8;
+      color: #1f1f1f;
+    }}
+    main {{
+      width: min(520px, calc(100vw - 32px));
+      padding: 32px;
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      border-radius: 10px;
+      background: white;
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.10);
+    }}
+    .icon {{
+      width: 48px;
+      height: 48px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: {accent};
+      color: white;
+      font-size: 28px;
+      font-weight: 700;
+      margin-bottom: 18px;
+    }}
+    h1 {{
+      margin: 0 0 10px;
+      font-size: 24px;
+      font-weight: 650;
+    }}
+    p {{
+      margin: 0;
+      line-height: 1.65;
+      color: #4b5563;
+    }}
+    .detail {{
+      margin-top: 12px;
+      padding: 12px;
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.04);
+      word-break: break-word;
+    }}
+    @media (prefers-color-scheme: dark) {{
+      body {{
+        background: #171717;
+        color: #f5f5f5;
+      }}
+      main {{
+        background: #242424;
+        border-color: rgba(255, 255, 255, 0.10);
+      }}
+      p {{
+        color: #c9c9c9;
+      }}
+      .detail {{
+        background: rgba(255, 255, 255, 0.08);
+      }}
+    }}
+  </style>
+</head>
+<body>
+  <main>
+    <div class="icon">{icon}</div>
+    <h1>{escaped_title}</h1>
+    <p>{escaped_message}</p>
+    {detail_html}
+  </main>
+</body>
+</html>"""
 
 
 def load_config():
@@ -1479,28 +1603,105 @@ def normalize_auth_server(server_url):
         raise RuntimeError("请填写外置登录服务器地址。")
     if not server.startswith(("http://", "https://")):
         server = "https://" + server
+    parsed = urlparse(server)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError("外置登录服务器地址格式不正确。")
+    if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+        raise RuntimeError("外置登录服务器必须使用 HTTPS，本机测试地址除外。")
+    if server.endswith("/authserver"):
+        server = server[: -len("/authserver")]
     return server
 
 
-def authenticate_external_account(server_url, username, password):
+def external_auth_endpoint(server, action):
+    return f"{normalize_auth_server(server)}/authserver/{action}"
+
+
+def external_auth_headers():
+    return {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "McGo/1.0"}
+
+
+def external_auth_error(response, action):
+    labels = {
+        "authenticate": "登录",
+        "refresh": "刷新",
+        "validate": "验证",
+    }
+    action_label = labels.get(action, action)
+    detail = ""
+    try:
+        data = response.json()
+        detail = data.get("errorMessage") or data.get("error") or ""
+    except ValueError:
+        detail = response.text[:300].strip()
+    if response.status_code in {401, 403}:
+        return f"外置登录{action_label}被拒绝，请检查用户名、密码或令牌。{('详情：' + detail) if detail else ''}"
+    if response.status_code == 404:
+        return "认证端点不存在，请确认地址是 Yggdrasil/Authlib-Injector 根地址，例如 https://example.com/api/yggdrasil。"
+    if response.status_code >= 500:
+        return f"认证服务器内部错误（{response.status_code}）。{('详情：' + detail) if detail else ''}"
+    return f"外置登录{action_label}失败（HTTP {response.status_code}）。{('详情：' + detail) if detail else ''}"
+
+
+def raise_for_external_auth(response, action):
+    if 200 <= response.status_code < 300:
+        return
+    raise RuntimeError(external_auth_error(response, action))
+
+
+def probe_external_auth_server(server_url):
+    server = normalize_auth_server(server_url)
+    probes = [
+        f"{server}/authserver",
+        f"{server}/authserver/validate",
+        server,
+    ]
+    errors = []
+    for url in probes:
+        try:
+            if url.endswith("/validate"):
+                response = requests.post(url, json={"accessToken": "mcgo-probe"}, headers=external_auth_headers(), timeout=10)
+            else:
+                response = requests.get(url, headers={"Accept": "application/json", "User-Agent": "McGo/1.0"}, timeout=10)
+            if response.status_code < 500:
+                return {
+                    "server": server,
+                    "status": response.status_code,
+                    "message": f"服务器可访问，探测端点返回 HTTP {response.status_code}",
+                }
+            errors.append(f"{url}: HTTP {response.status_code}")
+        except requests.RequestException as exc:
+            errors.append(f"{url}: {exc}")
+    raise RuntimeError("认证服务器不可访问：" + "；".join(errors[-2:]))
+
+
+def authenticate_external_account(server_url, username, password, client_token=""):
     server = normalize_auth_server(server_url)
     if not username.strip() or not password:
         raise RuntimeError("外置登录需要用户名和密码。")
+    client_token = client_token or str(uuidlib.uuid4())
     logger.info("Authenticating external account: server=%s username=%s", server, username.strip())
     payload = {
         "agent": {"name": "Minecraft", "version": 1},
         "username": username.strip(),
         "password": password,
+        "clientToken": client_token,
         "requestUser": True,
     }
-    response = requests.post(
-        f"{server}/authserver/authenticate",
-        json=payload,
-        headers={"Content-Type": "application/json", "User-Agent": "McGo/1.0"},
-        timeout=30,
-    )
-    response.raise_for_status()
-    data = response.json()
+    try:
+        response = requests.post(
+            external_auth_endpoint(server, "authenticate"),
+            json=payload,
+            headers=external_auth_headers(),
+            timeout=30,
+        )
+    except requests.RequestException as exc:
+        raise RuntimeError(f"无法连接外置登录服务器：{exc}") from exc
+    raise_for_external_auth(response, "authenticate")
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise RuntimeError("外置登录服务器返回的不是有效 JSON。") from exc
     selected = data.get("selectedProfile") or {}
     if not selected.get("id") or not selected.get("name") or not data.get("accessToken"):
         raise RuntimeError("外置登录服务器返回的数据不完整。")
@@ -1511,7 +1712,7 @@ def authenticate_external_account(server_url, username, password):
         "display_name": selected.get("name"),
         "uuid": selected.get("id"),
         "access_token": data.get("accessToken"),
-        "client_token": data.get("clientToken", ""),
+        "client_token": data.get("clientToken", client_token),
     }
 
 
@@ -1532,25 +1733,34 @@ def refresh_external_account(account):
         "clientToken": client_token,
         "requestUser": True,
     }
-    response = requests.post(
-        f"{server}/authserver/refresh",
-        json=payload,
-        headers={"Content-Type": "application/json", "User-Agent": "McGo/1.0"},
-        timeout=30,
-    )
-    if response.status_code == 403:
-        validate_payload = {"accessToken": access_token, "clientToken": client_token}
-        validate_response = requests.post(
-            f"{server}/authserver/validate",
-            json=validate_payload,
-            headers={"Content-Type": "application/json", "User-Agent": "McGo/1.0"},
+    try:
+        response = requests.post(
+            external_auth_endpoint(server, "refresh"),
+            json=payload,
+            headers=external_auth_headers(),
             timeout=30,
         )
-        validate_response.raise_for_status()
+    except requests.RequestException as exc:
+        raise RuntimeError(f"无法连接外置登录服务器：{exc}") from exc
+    if response.status_code == 403:
+        validate_payload = {"accessToken": access_token, "clientToken": client_token}
+        try:
+            validate_response = requests.post(
+                external_auth_endpoint(server, "validate"),
+                json=validate_payload,
+                headers=external_auth_headers(),
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise RuntimeError(f"无法验证外置登录令牌：{exc}") from exc
+        raise_for_external_auth(validate_response, "validate")
         logger.info("External account token validated without refresh: server=%s username=%s", server, account.get("username", ""))
         return dict(account)
-    response.raise_for_status()
-    data = response.json()
+    raise_for_external_auth(response, "refresh")
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise RuntimeError("外置登录刷新接口返回的不是有效 JSON。") from exc
     selected = data.get("selectedProfile") or {}
     refreshed = dict(account)
     refreshed["access_token"] = data.get("accessToken", access_token)
@@ -3073,6 +3283,52 @@ class AuthWorker(QObject):
             self.failed.emit(str(e))
 
 
+class ExternalAuthWorker(QObject):
+    status = Signal(str)
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, action, server="", username="", password="", injector_path="", account=None):
+        super().__init__()
+        self.action = action
+        self.server = server
+        self.username = username
+        self.password = password
+        self.injector_path = injector_path
+        self.account = dict(account or {})
+
+    def run(self):
+        try:
+            if self.action == "probe":
+                self.status.emit("正在探测外置登录服务器...")
+                payload = probe_external_auth_server(self.server)
+                payload["action"] = "probe"
+                self.finished.emit(payload)
+                return
+
+            if self.action == "login":
+                if not self.injector_path or not os.path.isfile(self.injector_path):
+                    raise RuntimeError("请选择有效的 authlib-injector.jar。")
+                self.status.emit("正在连接外置登录服务器...")
+                auth_payload = authenticate_external_account(self.server, self.username, self.password)
+                auth_payload["action"] = "login"
+                auth_payload["authlib_injector_path"] = self.injector_path
+                self.finished.emit(auth_payload)
+                return
+
+            if self.action == "refresh":
+                self.status.emit("正在刷新或验证外置登录账号...")
+                refreshed = refresh_external_account(self.account)
+                refreshed["action"] = "refresh"
+                self.finished.emit(refreshed)
+                return
+
+            raise RuntimeError(f"未知外置登录任务：{self.action}")
+        except Exception as exc:
+            logger.exception("ExternalAuthWorker failed: action=%s", self.action)
+            self.failed.emit(str(exc))
+
+
 class ScanWorker(QObject):
     status = Signal(str)
     finished = Signal(dict)
@@ -3441,6 +3697,8 @@ class LauncherWindow(FluentWindow):
         self.java_download_worker = None
         self.auth_thread = None
         self.auth_worker = None
+        self.external_auth_thread = None
+        self.external_auth_worker = None
         self.launch_thread = None
         self.launch_worker = None
         self.download_task_queue = deque()
@@ -3586,6 +3844,10 @@ class LauncherWindow(FluentWindow):
         self.external_password_input.setPlaceholderText("密码不会保存")
         self.authlib_injector_input = LineEdit()
         self.authlib_injector_input.setPlaceholderText("authlib-injector.jar 路径")
+        self.external_status_label = BodyLabel("外置登录未连接")
+        self.external_server_input.textChanged.connect(self.on_external_form_changed)
+        self.external_username_input.textChanged.connect(self.on_external_form_changed)
+        self.authlib_injector_input.textChanged.connect(self.on_external_form_changed)
         self.advanced_mode_check = CheckBox("高级模式：显示更多启动器选项")
         self.advanced_mode_check.setChecked(config.getboolean("UI", "advanced_mode", fallback=False))
         self.advanced_mode_check.stateChanged.connect(self.on_advanced_mode_changed)
@@ -3630,7 +3892,7 @@ class LauncherWindow(FluentWindow):
         self.login_link_input = LineEdit()
         self.login_link_input.setReadOnly(True)
         self.login_link_input.setPlaceholderText("关闭自动打开后，Microsoft 登录链接会显示在这里")
-        self.login_link_button = HyperlinkButton("", "打开登录链接")
+        self.login_link_button = PushButton("打开登录链接")
         self.login_link_button.setVisible(False)
         self.delete_account_combo = NativeComboBox()
         self.progress_bar = ProgressBar()
@@ -3765,6 +4027,10 @@ class LauncherWindow(FluentWindow):
         self.navigation_pages = {
             "download": self.download_page,
             "manage": self.manage_page,
+        }
+        self.navigation_visible_keys = {
+            "download": True,
+            "manage": True,
         }
         self.configure_navigation_animation()
         if hasattr(self, "stackedWidget"):
@@ -4292,7 +4558,7 @@ class LauncherWindow(FluentWindow):
         link_button_row = QHBoxLayout()
         login_button = PrimaryPushButton("添加 Microsoft 账号")
         copy_link_button = PushButton("复制登录链接")
-        self.login_link_button.clicked.connect(lambda: webbrowser.open(self.login_link_input.text().strip()))
+        self.login_link_button.clicked.connect(self.open_login_link)
         login_button.clicked.connect(self.start_microsoft_login)
         copy_link_button.clicked.connect(self.copy_login_link)
         link_button_row.addWidget(login_button)
@@ -4306,17 +4572,21 @@ class LauncherWindow(FluentWindow):
         self.external_username_row = self.add_labeled_control(external_layout, "用户名/邮箱", self.external_username_input)
         self.external_password_row = self.add_labeled_control(external_layout, "密码", self.external_password_input)
         self.authlib_injector_row = self.add_labeled_control(external_layout, "Authlib Injector", self.authlib_injector_input)
+        external_layout.addWidget(self.external_status_label)
         external_row = QHBoxLayout()
         choose_injector_button = PushButton("选择 Jar")
         download_injector_button = PushButton("自动下载")
+        probe_server_button = PushButton("测试服务器")
         self.refresh_external_button = PushButton("刷新/验证当前外置账号")
         add_external_button = PrimaryPushButton("登录并添加外置账号")
         choose_injector_button.clicked.connect(self.choose_authlib_injector)
         download_injector_button.clicked.connect(self.download_authlib_injector)
+        probe_server_button.clicked.connect(self.probe_external_server)
         self.refresh_external_button.clicked.connect(self.refresh_current_external_account)
         add_external_button.clicked.connect(self.add_external_account)
         external_row.addWidget(choose_injector_button)
         external_row.addWidget(download_injector_button)
+        external_row.addWidget(probe_server_button)
         external_row.addWidget(self.refresh_external_button)
         external_row.addWidget(add_external_button)
         external_row.addStretch()
@@ -4633,18 +4903,25 @@ class LauncherWindow(FluentWindow):
         labels = {"download": "下载", "manage": "管理"}
         icons = {"download": FluentIcon.DOWNLOAD, "manage": FluentIcon.SETTING}
         for key, visible in states.items():
+            currently_visible = self.navigation_visible_keys.get(key, True)
+            if visible == currently_visible:
+                continue
             page = self.navigation_pages[key]
             navigation = getattr(self, "navigationInterface", None)
             if visible:
                 try:
                     self.addSubInterface(page, icons[key], labels[key])
+                    self.navigation_visible_keys[key] = True
                 except Exception:
-                    pass
+                    logger.exception("Failed to show navigation page: %s", key)
             elif navigation:
                 try:
+                    if hasattr(self, "stackedWidget") and self.stackedWidget.currentWidget() is page:
+                        self.switchTo(self.home_page)
                     self.removeInterface(page)
+                    self.navigation_visible_keys[key] = False
                 except Exception:
-                    pass
+                    logger.exception("Failed to hide navigation page: %s", key)
 
     def switch_manage_section(self, section_key):
         mapping = {
@@ -5655,6 +5932,7 @@ class LauncherWindow(FluentWindow):
             self.external_server_input.setText(account.get("auth_server", ""))
             self.external_username_input.setText(account.get("username", ""))
             self.authlib_injector_input.setText(account.get("authlib_injector_path", ""))
+            self.external_status_label.setText(f"当前外置账号：{account_label(account)}")
         self.update_account_field_visibility()
 
     def update_account_field_visibility(self, *_):
@@ -5852,6 +6130,65 @@ class LauncherWindow(FluentWindow):
         self.show_warning("下载失败", message)
         self.log(f"authlib-injector 下载失败：{message}")
 
+    def on_external_form_changed(self, *_):
+        if not hasattr(self, "external_status_label"):
+            return
+        try:
+            server = normalize_auth_server(self.external_server_input.text().strip()) if self.external_server_input.text().strip() else ""
+        except Exception as exc:
+            self.external_status_label.setText(f"服务器地址无效：{exc}")
+            return
+        injector_path = self.authlib_injector_input.text().strip()
+        parts = []
+        if server:
+            parts.append(f"服务器：{server}")
+        else:
+            parts.append("服务器：未填写")
+        parts.append("Authlib：已选择" if injector_path and os.path.isfile(injector_path) else "Authlib：未选择或不存在")
+        if self.external_username_input.text().strip():
+            parts.append(f"用户：{self.external_username_input.text().strip()}")
+        self.external_status_label.setText(" | ".join(parts))
+
+    def set_external_auth_running(self, running):
+        for widget_name in (
+            "external_server_input",
+            "external_username_input",
+            "external_password_input",
+            "authlib_injector_input",
+            "refresh_external_button",
+        ):
+            if hasattr(self, widget_name):
+                getattr(self, widget_name).setEnabled(not running)
+
+    def start_external_auth_worker(self, worker):
+        if self.external_auth_thread and self.external_auth_thread.isRunning():
+            self.show_warning("外置登录进行中", "请等待当前外置登录任务完成。")
+            return False
+        self.set_external_auth_running(True)
+        self.external_auth_thread = QThread()
+        self.external_auth_worker = worker
+        worker.moveToThread(self.external_auth_thread)
+        self.external_auth_thread.started.connect(worker.run)
+        worker.status.connect(self.on_external_auth_status)
+        worker.finished.connect(self.on_external_auth_finished)
+        worker.failed.connect(self.on_external_auth_failed)
+        worker.finished.connect(self.external_auth_thread.quit)
+        worker.failed.connect(self.external_auth_thread.quit)
+        self.external_auth_thread.finished.connect(lambda: self.set_external_auth_running(False))
+        self.external_auth_thread.start()
+        return True
+
+    def on_external_auth_status(self, message):
+        self.external_status_label.setText(message)
+        self.log(message)
+
+    def probe_external_server(self):
+        server = self.external_server_input.text().strip()
+        if not server:
+            self.show_warning("缺少服务器", "请先填写外置登录服务器地址。")
+            return
+        self.start_external_auth_worker(ExternalAuthWorker("probe", server=server))
+
     def refresh_current_external_account(self):
         account = self.current_account()
         if not account or account.get("type") != "external":
@@ -5860,14 +6197,10 @@ class LauncherWindow(FluentWindow):
         try:
             account["auth_server"] = normalize_auth_server(self.external_server_input.text().strip() or account.get("auth_server", ""))
             account["authlib_injector_path"] = self.authlib_injector_input.text().strip() or account.get("authlib_injector_path", "")
-            refreshed = refresh_external_account(account)
         except Exception as exc:
-            self.show_warning("刷新失败", str(exc))
-            self.log(f"外置登录刷新失败：{exc}")
+            self.show_warning("外置账号配置无效", str(exc))
             return
-        self.upsert_account(refreshed)
-        self.show_success("外置登录有效", account_label(refreshed))
-        self.log(f"外置登录已刷新/验证：{account_label(refreshed)}")
+        self.start_external_auth_worker(ExternalAuthWorker("refresh", account=account))
 
     def add_external_account(self):
         server = self.external_server_input.text().strip()
@@ -5878,33 +6211,55 @@ class LauncherWindow(FluentWindow):
             self.show_warning("缺少 Authlib Injector", "请选择 authlib-injector.jar。")
             return
 
-        try:
-            auth_payload = authenticate_external_account(server, username, password)
-        except Exception as exc:
-            self.show_warning("外置登录失败", str(exc))
-            self.log(f"外置登录失败：{exc}")
+        self.start_external_auth_worker(ExternalAuthWorker(
+            "login",
+            server=server,
+            username=username,
+            password=password,
+            injector_path=injector_path,
+        ))
+
+    def on_external_auth_finished(self, payload):
+        action = payload.get("action", "")
+        if action == "probe":
+            self.external_status_label.setText(payload.get("message", "服务器可访问"))
+            self.show_success("服务器可访问", payload.get("server", ""))
             return
 
-        account_id = str(uuidlib.uuid4())
-        duplicate = self.find_duplicate_account("external", auth_payload.get("username", ""), auth_payload.get("uuid", ""))
-        if duplicate:
-            account_id = duplicate.get("id", account_id)
-        account = {
-            "id": account_id,
-            "type": "external",
-            "display_name": auth_payload.get("display_name", auth_payload.get("username", "")),
-            "username": auth_payload.get("username", ""),
-            "uuid": auth_payload.get("uuid", ""),
-            "access_token": auth_payload.get("access_token", ""),
-            "refresh_token": "",
-            "client_token": auth_payload.get("client_token", ""),
-            "auth_server": auth_payload.get("server", normalize_auth_server(server)),
-            "authlib_injector_path": injector_path,
-        }
-        self.external_password_input.clear()
-        self.upsert_account(account)
-        self.log(f"外置登录成功：{account_label(account)}")
-        self.show_success("外置登录成功", account_label(account))
+        if action == "refresh":
+            self.upsert_account(payload)
+            self.external_status_label.setText(f"外置登录有效：{account_label(payload)}")
+            self.show_success("外置登录有效", account_label(payload))
+            self.log(f"外置登录已刷新/验证：{account_label(payload)}")
+            return
+
+        if action == "login":
+            account_id = str(uuidlib.uuid4())
+            duplicate = self.find_duplicate_account("external", payload.get("username", ""), payload.get("uuid", ""))
+            if duplicate:
+                account_id = duplicate.get("id", account_id)
+            account = {
+                "id": account_id,
+                "type": "external",
+                "display_name": payload.get("display_name", payload.get("username", "")),
+                "username": payload.get("username", ""),
+                "uuid": payload.get("uuid", ""),
+                "access_token": payload.get("access_token", ""),
+                "refresh_token": "",
+                "client_token": payload.get("client_token", ""),
+                "auth_server": payload.get("server", normalize_auth_server(self.external_server_input.text().strip())),
+                "authlib_injector_path": payload.get("authlib_injector_path", self.authlib_injector_input.text().strip()),
+            }
+            self.external_password_input.clear()
+            self.upsert_account(account)
+            self.external_status_label.setText(f"外置登录成功：{account_label(account)}")
+            self.log(f"外置登录成功：{account_label(account)}")
+            self.show_success("外置登录成功", account_label(account))
+
+    def on_external_auth_failed(self, message):
+        self.external_status_label.setText(f"外置登录失败：{message}")
+        self.show_warning("外置登录失败", message)
+        self.log(f"外置登录失败：{message}")
 
     def delete_selected_account(self):
         account = self.current_delete_account()
@@ -5924,16 +6279,26 @@ class LauncherWindow(FluentWindow):
         if not login_url:
             login_url = authenticator.get_login_url()
             self.login_link_input.setText(login_url)
-            if hasattr(self, "login_link_button"):
-                self.login_link_button.setUrl(login_url)
         QApplication.clipboard().setText(login_url)
+        self.update_account_field_visibility()
+        if hasattr(self, "account_stack"):
+            self.switch_account_section("microsoft")
         self.show_success("已复制", "Microsoft 登录链接已复制到剪贴板。")
+
+    def open_login_link(self):
+        login_url = self.login_link_input.text().strip()
+        if not login_url:
+            login_url = authenticator.get_login_url()
+            self.login_link_input.setText(login_url)
+            self.update_account_field_visibility()
+        webbrowser.open(login_url)
 
     def on_login_url_ready(self, login_url):
         self.login_link_input.setText(login_url)
-        self.login_link_button.setUrl(login_url)
         self.log(f"Microsoft 登录链接：{login_url}")
         self.update_account_field_visibility()
+        if hasattr(self, "account_stack"):
+            self.switch_account_section("microsoft")
         if not self.auto_open_browser_check.isChecked():
             QMessageBox.information(
                 self,
@@ -6405,7 +6770,11 @@ class LauncherWindow(FluentWindow):
                 account["access_token"] = self.access_token_input.text().strip()
                 self.upsert_account(account)
             elif account.get("type") == "external":
-                account["auth_server"] = normalize_auth_server(self.external_server_input.text().strip() or account.get("auth_server", ""))
+                try:
+                    account["auth_server"] = normalize_auth_server(self.external_server_input.text().strip() or account.get("auth_server", ""))
+                except Exception as exc:
+                    self.show_warning("外置服务器地址无效", str(exc))
+                    return False
                 account["authlib_injector_path"] = self.authlib_injector_input.text().strip() or account.get("authlib_injector_path", "")
                 self.upsert_account(account)
             config["ACCOUNTS"]["selected_account_id"] = account.get("id", "")
