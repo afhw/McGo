@@ -6,8 +6,11 @@ import re
 import platform
 import shlex
 
+from log_utils import get_logger, redact_command
+
 config = configparser.ConfigParser()
 config.read("launcher_config.ini")
+logger = get_logger(__name__)
 
 
 def _top_level_version_files(version_dir, suffix):
@@ -26,7 +29,8 @@ def _load_json_file(path):
         with open(path, "r", encoding="utf-8") as file_handle:
             data = json.load(file_handle)
         return data if isinstance(data, dict) else None
-    except Exception:
+    except Exception as exc:
+        logger.debug("Failed to load json file: path=%s error=%s", path, exc)
         return None
 
 
@@ -281,12 +285,26 @@ def _library_allowed(library, features=None):
 
 def build_launch_command(java_path, version_id, game_directory=".minecraft", minecraft_access_token=None, username=None, uuid=None, runtime_directory=None, extra_jvm_args=None):
     """构建 Minecraft 启动命令。"""
+    logger.info(
+        "Building launch command: version=%s java=%s game_directory=%s runtime_directory=%s extra_jvm_args=%d",
+        version_id,
+        java_path,
+        os.path.abspath(game_directory),
+        os.path.abspath(runtime_directory or game_directory),
+        len(extra_jvm_args or []),
+    )
     version_json = get_version_json(game_directory, version_id)
     if not version_json:
+        logger.error("Version manifest not found: version=%s game_directory=%s", version_id, os.path.abspath(game_directory))
         raise FileNotFoundError(f"未找到版本清单：{version_id}")
 
     chain = get_version_inheritance_chain(game_directory, version_id)
     version_json = _merge_version_chain(chain)
+    logger.debug(
+        "Version inheritance chain resolved: version=%s chain=%s",
+        version_id,
+        [item.get("id") for item in chain],
+    )
 
     version_jars = []
     for item in chain:
@@ -298,6 +316,7 @@ def build_launch_command(java_path, version_id, game_directory=".minecraft", min
             version_jars.append(jar_path)
 
     if not version_jars:
+        logger.error("Launch jar not found: version=%s chain=%s", version_id, [item.get("id") for item in chain])
         raise FileNotFoundError(f"未找到可启动的版本 JAR：{version_id}")
 
     natives_version_id = version_json["id"]
@@ -336,6 +355,13 @@ def build_launch_command(java_path, version_id, game_directory=".minecraft", min
             classpath.append(path)
     classpath.extend(version_jars)
     classpath_string = os.pathsep.join(classpath)
+    logger.info(
+        "Launch classpath prepared: version=%s libraries=%d version_jars=%d natives=%s",
+        version_id,
+        max(0, len(classpath) - len(version_jars)),
+        len(version_jars),
+        natives_dir,
+    )
 
     context = {
         "auth_player_name": username if username else config.get("USER", "username", fallback="Player"),
@@ -400,11 +426,13 @@ def build_launch_command(java_path, version_id, game_directory=".minecraft", min
     if "-cp" not in jvm_arguments and "--class-path" not in jvm_arguments:
         command.extend(["-cp", classpath_string])
     command.extend([version_json["mainClass"], *game_arguments])
+    logger.debug("Launch command built: %s", redact_command(command))
     return command
 
 
 def launch_minecraft(java_path, version_id, game_directory=".minecraft", minecraft_access_token=None, username=None, uuid=None, runtime_directory=None, extra_jvm_args=None):
     """启动 Minecraft。"""
+    logger.info("Launching Minecraft: version=%s username=%s", version_id, username or "<config>")
     command = build_launch_command(
         java_path,
         version_id,
@@ -415,7 +443,8 @@ def launch_minecraft(java_path, version_id, game_directory=".minecraft", minecra
         runtime_directory=runtime_directory,
         extra_jvm_args=extra_jvm_args,
     )
-    subprocess.Popen(command, **_hidden_subprocess_kwargs())
+    process = subprocess.Popen(command, **_hidden_subprocess_kwargs())
+    logger.info("Minecraft process started: version=%s pid=%s", version_id, getattr(process, "pid", "unknown"))
     return True
 
 
@@ -428,6 +457,7 @@ def get_local_versions(game_directory=".minecraft"):
             full_dir = os.path.join(versions_dir, version_dir)
             if os.path.isdir(full_dir) and find_version_json_path(game_directory, version_dir):
                 versions.append(version_dir)
+    logger.debug("Local versions scanned: game_directory=%s count=%d", os.path.abspath(game_directory), len(versions))
     return versions
 
 

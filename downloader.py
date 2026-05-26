@@ -1,5 +1,6 @@
 # downloader.py
 import asyncio
+import hashlib
 import json
 import os
 import shutil
@@ -9,10 +10,13 @@ from dataclasses import dataclass
 
 import aiohttp
 
+from log_utils import get_logger
+
 CHUNK_SIZE = 128 * 1024
 MAX_CORE_CONCURRENCY = 12
 MAX_ASSET_CONCURRENCY = 24
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=None, sock_connect=20, sock_read=60)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -21,6 +25,7 @@ class DownloadJob:
     file_path: str
     relative_path: str
     size: int = 0
+    sha1: str = ""
     label: str = ""
 
 
@@ -119,11 +124,25 @@ def _file_size(path):
         return 0
 
 
-def _matches_size(path, expected_size):
+def _sha1_file(path):
+    sha1 = hashlib.sha1()
+    with open(path, "rb") as file_handle:
+        for chunk in iter(lambda: file_handle.read(CHUNK_SIZE), b""):
+            sha1.update(chunk)
+    return sha1.hexdigest()
+
+
+def _matches_file(path, expected_size=0, expected_sha1=""):
     if not os.path.exists(path):
         return False
     if expected_size and _file_size(path) != expected_size:
         return False
+    if expected_sha1:
+        try:
+            if _sha1_file(path).lower() != expected_sha1.lower():
+                return False
+        except OSError:
+            return False
     return os.path.isfile(path)
 
 
@@ -155,11 +174,12 @@ def _try_copy_from_cache(job, cache_dirs, target_game_dir):
             continue
 
         source_path = os.path.join(cache_root, job.relative_path)
-        if not _matches_size(source_path, job.size):
+        if not _matches_file(source_path, job.size, job.sha1):
             continue
 
         _ensure_parent(job.file_path)
         shutil.copy2(source_path, job.file_path)
+        logger.debug("Reused cached file: %s <- %s", job.relative_path, source_path)
         return True
 
     return False
@@ -187,15 +207,31 @@ async def _download_with_retries(session, job, progress, semaphore, retries=5):
             async with semaphore:
                 await _download_single(session, job, progress)
             return
-        except Exception:
+        except Exception as exc:
             if attempt == retries - 1:
+                logger.exception(
+                    "Download failed after %d attempts: label=%s url=%s target=%s",
+                    retries,
+                    job.label,
+                    job.url,
+                    job.file_path,
+                )
                 raise
+            logger.warning(
+                "Download attempt %d/%d failed: label=%s url=%s error=%s",
+                attempt + 1,
+                retries,
+                job.label,
+                job.url,
+                exc,
+            )
             await asyncio.sleep(min(2 ** attempt, 5))
 
 
 async def _download_single(session, job, progress):
     _ensure_parent(job.file_path)
     progress.set_current_file(job.label)
+    logger.debug("Downloading file: label=%s size=%s url=%s target=%s", job.label, job.size, job.url, job.file_path)
 
     async with session.get(job.url) as response:
         response.raise_for_status()
@@ -205,13 +241,15 @@ async def _download_single(session, job, progress):
                     continue
                 file_handle.write(chunk)
                 progress.advance_network(len(chunk))
+    logger.debug("Downloaded file: label=%s bytes=%s target=%s", job.label, _file_size(job.file_path), job.file_path)
 
 
 async def _process_job(session, job, progress, semaphore, cache_dirs, target_game_dir):
-    if _matches_size(job.file_path, job.size):
+    if _matches_file(job.file_path, job.size, job.sha1):
         progress.set_current_file(f"{job.label}（已存在）")
         progress.advance_reused(job.size or _file_size(job.file_path))
         progress.finish_file()
+        logger.debug("File already valid: %s", job.relative_path)
         return "reused"
 
     if _try_copy_from_cache(job, cache_dirs, target_game_dir):
@@ -239,14 +277,16 @@ def _build_core_jobs(version_json, game_directory, version_id, mirror_source):
     jobs = []
 
     client_info = version_json.get("downloads", {}).get("client", {})
-    client_relative = os.path.join("versions", version_id, f"{version_id}.jar")
-    jobs.append(DownloadJob(
-        url=_rewrite_url(client_info["url"], mirror_source),
-        file_path=os.path.join(game_directory, client_relative),
-        relative_path=client_relative,
-        size=client_info.get("size", 0),
-        label=f"{version_id}.jar",
-    ))
+    if client_info.get("url"):
+        client_relative = os.path.join("versions", version_id, f"{version_id}.jar")
+        jobs.append(DownloadJob(
+            url=_rewrite_url(client_info["url"], mirror_source),
+            file_path=os.path.join(game_directory, client_relative),
+            relative_path=client_relative,
+            size=client_info.get("size", 0),
+            sha1=client_info.get("sha1", ""),
+            label=f"{version_id}.jar",
+        ))
 
     for library in version_json.get("libraries", []):
         downloads = library.get("downloads", {})
@@ -257,6 +297,7 @@ def _build_core_jobs(version_json, game_directory, version_id, mirror_source):
                 file_path=os.path.join(game_directory, "libraries", artifact["path"]),
                 relative_path=os.path.join("libraries", artifact["path"]),
                 size=artifact.get("size", 0),
+                sha1=artifact.get("sha1", ""),
                 label=os.path.basename(artifact["path"]),
             ))
 
@@ -267,6 +308,7 @@ def _build_core_jobs(version_json, game_directory, version_id, mirror_source):
                 file_path=os.path.join(game_directory, "libraries", natives["path"]),
                 relative_path=os.path.join("libraries", natives["path"]),
                 size=natives.get("size", 0),
+                sha1=natives.get("sha1", ""),
                 label=os.path.basename(natives["path"]),
             ))
     return jobs
@@ -274,12 +316,15 @@ def _build_core_jobs(version_json, game_directory, version_id, mirror_source):
 
 def _build_asset_index_job(version_json, game_directory, mirror_source):
     asset_index = version_json.get("assetIndex", {})
+    if not asset_index.get("id") or not asset_index.get("url"):
+        return None
     asset_index_relative = os.path.join("assets", "indexes", f"{asset_index['id']}.json")
     return DownloadJob(
         url=_rewrite_url(asset_index["url"], mirror_source),
         file_path=os.path.join(game_directory, asset_index_relative),
         relative_path=asset_index_relative,
         size=asset_index.get("size", 0),
+        sha1=asset_index.get("sha1", ""),
         label=f"{asset_index['id']}.json",
     )
 
@@ -296,12 +341,67 @@ def _build_asset_jobs(asset_index_json, game_directory, mirror_source):
             file_path=os.path.join(game_directory, relative_path),
             relative_path=relative_path,
             size=object_info.get("size", 0),
+            sha1=object_hash,
             label=object_hash,
         ))
     return jobs
 
 
+def collect_missing_game_files(version_json, game_directory, version_id, include_assets=True):
+    """Return files that are missing or fail size/SHA1 validation."""
+    logger.info(
+        "Collecting missing files: version=%s game_directory=%s include_assets=%s",
+        version_id,
+        os.path.abspath(game_directory),
+        include_assets,
+    )
+    missing = []
+    asset_index_job = _build_asset_index_job(version_json, game_directory, "")
+    core_jobs = _build_core_jobs(version_json, game_directory, version_id, "")
+    jobs = [*core_jobs]
+
+    if asset_index_job:
+        jobs.append(asset_index_job)
+
+    if include_assets and asset_index_job and os.path.isfile(asset_index_job.file_path):
+        try:
+            with open(asset_index_job.file_path, "r", encoding="utf-8") as file_handle:
+                asset_index_json = json.load(file_handle)
+            jobs.extend(_build_asset_jobs(asset_index_json, game_directory, ""))
+        except Exception as exc:
+            missing.append({
+                "path": asset_index_job.relative_path,
+                "label": asset_index_job.label,
+                "reason": f"资源索引无法读取：{exc}",
+                "size": asset_index_job.size,
+                "sha1": asset_index_job.sha1,
+            })
+
+    for job in jobs:
+        if _matches_file(job.file_path, job.size, job.sha1):
+            continue
+        reason = "缺失"
+        if os.path.exists(job.file_path):
+            reason = "校验失败"
+        missing.append({
+            "path": job.relative_path,
+            "label": job.label,
+            "reason": reason,
+            "size": job.size,
+            "sha1": job.sha1,
+            "url": job.url,
+        })
+    logger.info("Missing file scan finished: version=%s missing=%d", version_id, len(missing))
+    return missing
+
+
 async def download_assets(version_json, game_directory, version_id, mirror_source, progress_callback=None):
+    logger.info(
+        "Starting asset download: version=%s game_directory=%s mirror=%s",
+        version_id,
+        os.path.abspath(game_directory),
+        mirror_source,
+    )
     progress = DownloadProgress(progress_callback)
     cache_dirs = _candidate_cache_dirs(game_directory)
     asset_index_path = os.path.join(
@@ -315,11 +415,13 @@ async def download_assets(version_json, game_directory, version_id, mirror_sourc
         with open(asset_index_path, "r", encoding="utf-8") as file_handle:
             asset_index_json = json.load(file_handle)
         jobs = _build_asset_jobs(asset_index_json, game_directory, mirror_source)
+        logger.info("Asset jobs prepared: version=%s jobs=%d bytes=%d", version_id, len(jobs), sum(job.size for job in jobs))
         progress.set_phase("下载资源文件")
         progress.add_totals(sum(job.size for job in jobs), len(jobs))
         await _run_jobs(session, jobs, progress, MAX_ASSET_CONCURRENCY, cache_dirs, game_directory)
         progress.set_phase("资源文件下载完成")
         progress.emit(force=True)
+    logger.info("Asset download finished: version=%s", version_id)
 
 
 def extract_natives(version_json, game_directory, version_id):
@@ -327,6 +429,7 @@ def extract_natives(version_json, game_directory, version_id):
         game_directory, "versions", version_id, f"{version_id}-natives"
     )
     os.makedirs(natives_directory, exist_ok=True)
+    logger.info("Extracting natives: version=%s target=%s", version_id, natives_directory)
 
     for library in version_json.get("libraries", []):
         classifiers = library.get("downloads", {}).get("classifiers", {})
@@ -343,25 +446,32 @@ def extract_natives(version_json, game_directory, version_id):
 
                     extract_path = os.path.normpath(os.path.join(natives_directory, file_info.filename))
                     if not extract_path.startswith(os.path.normpath(natives_directory)):
-                        print(f"警告: 跳过可疑路径 {file_info.filename}")
+                        logger.warning("Skipping suspicious native path: archive=%s entry=%s", library_path, file_info.filename)
                         continue
 
                     zip_ref.extract(file_info, natives_directory)
         except FileNotFoundError:
-            print(f"警告: natives 文件不存在: {library_path}")
+            logger.warning("Native library file does not exist: %s", library_path)
         except Exception as exc:
-            print(f"解压 natives 文件时出错：{exc}")
+            logger.exception("Failed to extract natives from %s: %s", library_path, exc)
 
     file_count = 0
     for _, _, files in os.walk(natives_directory):
         file_count += len(files)
-    print(f"已解压 {file_count} 个 natives 文件到 {natives_directory}")
+    logger.info("Extracted natives: version=%s files=%d target=%s", version_id, file_count, natives_directory)
 
 
 async def download_game_files(version_json, game_directory, version, mirror_source, progress_callback=None):
     os.makedirs(game_directory, exist_ok=True)
 
     version_id = version_json["id"]
+    logger.info(
+        "Starting game file download: requested=%s resolved=%s game_directory=%s mirror=%s",
+        version,
+        version_id,
+        os.path.abspath(game_directory),
+        mirror_source,
+    )
     version_json_relative = os.path.join("versions", version_id, f"{version_id}.json")
     version_json_path = os.path.join(game_directory, version_json_relative)
     _ensure_parent(version_json_path)
@@ -372,38 +482,47 @@ async def download_game_files(version_json, game_directory, version, mirror_sour
     cache_dirs = _candidate_cache_dirs(game_directory)
     asset_index_job = _build_asset_index_job(version_json, game_directory, mirror_source)
     core_jobs = _build_core_jobs(version_json, game_directory, version_id, mirror_source)
+    logger.info(
+        "Core jobs prepared: version=%s core_jobs=%d has_asset_index=%s",
+        version_id,
+        len(core_jobs),
+        bool(asset_index_job),
+    )
 
     async with aiohttp.ClientSession(
         timeout=REQUEST_TIMEOUT,
         connector=aiohttp.TCPConnector(limit=MAX_ASSET_CONCURRENCY * 2, ttl_dns_cache=300),
     ) as session:
-        asset_index_result = await _process_job(
-            session,
-            asset_index_job,
-            DownloadProgress(),
-            asyncio.Semaphore(1),
-            cache_dirs,
-            game_directory,
-        )
+        asset_index_result = ""
+        asset_jobs = []
+        if asset_index_job:
+            asset_index_result = await _process_job(
+                session,
+                asset_index_job,
+                DownloadProgress(),
+                asyncio.Semaphore(1),
+                cache_dirs,
+                game_directory,
+            )
 
-        asset_index_path = os.path.join(
-            game_directory, "assets", "indexes", f"{version_json['assetIndex']['id']}.json"
-        )
-        with open(asset_index_path, "r", encoding="utf-8") as file_handle:
-            asset_index_json = json.load(file_handle)
+            with open(asset_index_job.file_path, "r", encoding="utf-8") as file_handle:
+                asset_index_json = json.load(file_handle)
+            asset_jobs = _build_asset_jobs(asset_index_json, game_directory, mirror_source)
+            logger.info("Asset jobs prepared: version=%s asset_jobs=%d", version_id, len(asset_jobs))
 
-        asset_jobs = _build_asset_jobs(asset_index_json, game_directory, mirror_source)
-        all_jobs = [asset_index_job, *core_jobs, *asset_jobs]
+        all_jobs = [job for job in [asset_index_job, *core_jobs, *asset_jobs] if job]
+        logger.info("Download totals: version=%s jobs=%d bytes=%d", version_id, len(all_jobs), sum(job.size for job in all_jobs))
         progress.add_totals(sum(job.size for job in all_jobs), len(all_jobs))
 
         progress.set_phase("准备下载")
-        progress.set_current_file(asset_index_job.label)
-        if asset_index_result == "reused":
-            progress.advance_reused(asset_index_job.size or _file_size(asset_index_job.file_path))
-        else:
-            progress.ready_bytes += asset_index_job.size or _file_size(asset_index_job.file_path)
-            progress.emit(force=True)
-        progress.finish_file()
+        if asset_index_job:
+            progress.set_current_file(asset_index_job.label)
+            if asset_index_result == "reused":
+                progress.advance_reused(asset_index_job.size or _file_size(asset_index_job.file_path))
+            else:
+                progress.ready_bytes += asset_index_job.size or _file_size(asset_index_job.file_path)
+                progress.emit(force=True)
+            progress.finish_file()
 
         progress.set_phase("下载核心文件")
         await _run_jobs(session, core_jobs, progress, MAX_CORE_CONCURRENCY, cache_dirs, game_directory)
@@ -412,37 +531,49 @@ async def download_game_files(version_json, game_directory, version, mirror_sour
 
     progress.set_phase("下载完成")
     progress.emit(force=True)
+    logger.info("Game file download finished: version=%s", version_id)
 
 
 async def repair_game_files(version_json, game_directory, version, mirror_source, progress_callback=None):
     """校验并补齐当前版本的核心文件、资源索引、资源文件和 natives。"""
     os.makedirs(game_directory, exist_ok=True)
     version_id = version_json.get("id") or version
+    logger.info(
+        "Starting game file repair: requested=%s resolved=%s game_directory=%s mirror=%s",
+        version,
+        version_id,
+        os.path.abspath(game_directory),
+        mirror_source,
+    )
 
     progress = DownloadProgress(progress_callback)
     cache_dirs = _candidate_cache_dirs(game_directory)
     asset_index_job = _build_asset_index_job(version_json, game_directory, mirror_source)
     core_jobs = _build_core_jobs(version_json, game_directory, version_id, mirror_source)
+    logger.info("Repair jobs prepared: version=%s core_jobs=%d has_asset_index=%s", version_id, len(core_jobs), bool(asset_index_job))
 
     async with aiohttp.ClientSession(
         timeout=REQUEST_TIMEOUT,
         connector=aiohttp.TCPConnector(limit=MAX_ASSET_CONCURRENCY * 2, ttl_dns_cache=300),
     ) as session:
-        progress.set_phase("校验资源索引", asset_index_job.label)
-        progress.add_totals(asset_index_job.size, 1)
-        await _process_job(
-            session,
-            asset_index_job,
-            progress,
-            asyncio.Semaphore(1),
-            cache_dirs,
-            game_directory,
-        )
+        asset_jobs = []
+        if asset_index_job:
+            progress.set_phase("校验资源索引", asset_index_job.label)
+            progress.add_totals(asset_index_job.size, 1)
+            await _process_job(
+                session,
+                asset_index_job,
+                progress,
+                asyncio.Semaphore(1),
+                cache_dirs,
+                game_directory,
+            )
 
-        with open(asset_index_job.file_path, "r", encoding="utf-8") as file_handle:
-            asset_index_json = json.load(file_handle)
+            with open(asset_index_job.file_path, "r", encoding="utf-8") as file_handle:
+                asset_index_json = json.load(file_handle)
+            asset_jobs = _build_asset_jobs(asset_index_json, game_directory, mirror_source)
+            logger.info("Repair asset jobs prepared: version=%s asset_jobs=%d", version_id, len(asset_jobs))
 
-        asset_jobs = _build_asset_jobs(asset_index_json, game_directory, mirror_source)
         progress.add_totals(sum(job.size for job in core_jobs) + sum(job.size for job in asset_jobs), len(core_jobs) + len(asset_jobs))
 
         progress.set_phase("校验核心文件")
@@ -453,3 +584,4 @@ async def repair_game_files(version_json, game_directory, version, mirror_source
     progress.set_phase("补全完成")
     progress.emit(force=True)
     extract_natives(version_json, game_directory, version_id)
+    logger.info("Game file repair finished: version=%s", version_id)

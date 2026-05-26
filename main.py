@@ -6,6 +6,7 @@ import re
 import sys
 import shutil
 import subprocess
+import tarfile
 import threading
 import tempfile
 import time
@@ -13,7 +14,9 @@ import types
 import uuid as uuidlib
 import webbrowser
 import zipfile
+import html
 from io import BytesIO
+from collections import deque
 
 import requests
 from flask import Flask, request
@@ -55,6 +58,7 @@ from qfluentwidgets import (
     FluentIcon,
     FluentWindow,
     HyperlinkButton,
+    IndeterminateProgressRing,
     InfoBar,
     InfoBarPosition,
     LineEdit,
@@ -80,9 +84,10 @@ from qfluentwidgets.components.navigation.navigation_panel import NavigationDisp
 from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
 
 from auth import MicrosoftAuthenticator
-from downloader import download_game_files, extract_natives, repair_game_files
+from downloader import collect_missing_game_files, download_game_files, extract_natives, repair_game_files
 from java_utils import find_java_paths, get_java_major_version, get_java_version
 from launcher import build_launch_command, get_local_versions, get_version_inheritance_chain, infer_required_java_version, launch_minecraft, get_version_json
+from log_utils import get_logger, redact_mapping, setup_logging
 from version_utils import (
     find_matching_fabric_versions,
     launch_options_for_version,
@@ -103,6 +108,7 @@ redirect_uri = "http://localhost:5000/login/callback"
 game_directory = ".minecraft"
 config_file = "launcher_config.ini"
 accounts_file = "accounts.json"
+AUTHLIB_INJECTOR_METADATA_URL = "https://authlib-injector.yushi.moe/artifact/latest.json"
 
 MIRROR_SOURCES = {
     "official": "https://launchermeta.mojang.com",
@@ -112,6 +118,8 @@ MIRROR_SOURCES = {
 config = configparser.ConfigParser()
 authenticator = MicrosoftAuthenticator(client_id, redirect_uri)
 app = Flask(__name__)
+LOG_PATH = setup_logging()
+logger = get_logger(__name__)
 
 
 def hidden_subprocess_kwargs():
@@ -130,10 +138,12 @@ def hidden_subprocess_kwargs():
 @app.route("/login/callback")
 def login_callback():
     authenticator.authorization_code = request.args.get("code")
+    logger.info("Microsoft OAuth callback received: has_code=%s", bool(authenticator.authorization_code))
     return "登录成功，你可以关闭此窗口"
 
 
 def load_config():
+    logger.debug("Loading config from %s", os.path.abspath(config_file))
     config.read(config_file)
     defaults = {
         "USER": {"username": "", "uuid": "", "accessToken": ""},
@@ -144,7 +154,7 @@ def load_config():
             "auto_open_browser": "True",
         },
         "GAME": {"directory": game_directory, "enable_resource_isolation": "True"},
-        "UI": {"advanced_mode": "False"},
+        "UI": {"advanced_mode": "False", "theme": "dark", "theme_image": ""},
         "ACCOUNTS": {"selected_account_id": ""},
     }
     for section, values in defaults.items():
@@ -154,22 +164,31 @@ def load_config():
             if not config.has_option(section, key):
                 config.set(section, key, value)
     save_config()
+    logger.debug("Config loaded with sections: %s", config.sections())
 
 
 def save_config():
     with open(config_file, "w") as f:
         config.write(f)
+    logger.debug("Config saved to %s", os.path.abspath(config_file))
 
 
 def account_label(account):
-    account_type = "Microsoft" if account.get("type") == "microsoft" else "离线"
+    labels = {
+        "microsoft": "Microsoft",
+        "external": "外置登录",
+        "offline": "离线",
+    }
+    account_type = labels.get(account.get("type"), account.get("type", "离线"))
     return f"{account.get('display_name', account.get('username', '未命名'))} ({account_type})"
 
 
 def load_accounts():
     if os.path.exists(accounts_file):
         with open(accounts_file, "r", encoding="utf-8") as f:
-            return json.load(f)
+            accounts = json.load(f)
+        logger.debug("Loaded %d accounts from %s", len(accounts), os.path.abspath(accounts_file))
+        return accounts
 
     accounts = []
     username = config.get("USER", "username", fallback="").strip()
@@ -197,26 +216,34 @@ def load_accounts():
         })
 
     save_accounts(accounts)
+    logger.debug("Migrated %d accounts from launcher_config.ini", len(accounts))
     return accounts
 
 
 def save_accounts(accounts):
     with open(accounts_file, "w", encoding="utf-8") as f:
         json.dump(accounts, f, ensure_ascii=False, indent=2)
+    logger.debug("Saved %d accounts to %s", len(accounts), os.path.abspath(accounts_file))
 
 
 def get_remote_versions(version_type, mirror_source):
+    logger.info("Fetching remote versions: type=%s mirror=%s", version_type, mirror_source)
     response = requests.get(f"{MIRROR_SOURCES[mirror_source]}/mc/game/version_manifest.json", timeout=30)
     response.raise_for_status()
-    return [v["id"] for v in response.json()["versions"] if v["type"] == version_type]
+    versions = [v["id"] for v in response.json()["versions"] if v["type"] == version_type]
+    logger.info("Fetched %d remote versions: type=%s mirror=%s", len(versions), version_type, mirror_source)
+    return versions
 
 
 def get_version_url(version_id, mirror_source):
+    logger.debug("Resolving version metadata URL: version=%s mirror=%s", version_id, mirror_source)
     response = requests.get(f"{MIRROR_SOURCES[mirror_source]}/mc/game/version_manifest.json", timeout=30)
     response.raise_for_status()
     for version in response.json()["versions"]:
         if version["id"] == version_id:
+            logger.debug("Resolved version metadata URL: version=%s url=%s", version_id, version["url"])
             return version["url"]
+    logger.warning("Version metadata URL not found: version=%s mirror=%s", version_id, mirror_source)
     return None
 
 
@@ -226,49 +253,62 @@ def mirror_root(mirror_source):
 
 def stream_download(url, file_path, progress_callback=None, status_label="下载中"):
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
-    with requests.get(url, stream=True, timeout=60) as response:
-        response.raise_for_status()
-        total = int(response.headers.get("content-length") or 0)
-        downloaded = 0
-        last_tick = time.monotonic()
-        last_bytes = 0
-        with open(file_path, "wb") as file_handle:
-            for chunk in response.iter_content(chunk_size=128 * 1024):
-                if not chunk:
-                    continue
-                file_handle.write(chunk)
-                downloaded += len(chunk)
-                now = time.monotonic()
-                if progress_callback and total:
-                    speed = 0
-                    elapsed = max(now - last_tick, 1e-6)
-                    if downloaded > last_bytes:
-                        speed = max(0, int((downloaded - last_bytes) / elapsed))
-                        last_bytes = downloaded
-                        last_tick = now
-                    progress_callback({
-                        "progress": min(1.0, downloaded / total),
-                        "phase": status_label,
-                        "current_file": os.path.basename(file_path),
-                        "downloaded_bytes": downloaded,
-                        "total_bytes": total,
-                        "speed_bytes": speed,
-                        "completed_files": 0,
-                        "total_files": 1,
-                        "reused_files": 0,
-                    })
-        if progress_callback and total:
-            progress_callback({
-                "progress": 1.0,
-                "phase": status_label,
-                "current_file": os.path.basename(file_path),
-                "downloaded_bytes": downloaded,
-                "total_bytes": total,
-                "speed_bytes": 0,
-                "completed_files": 1,
-                "total_files": 1,
-                "reused_files": 0,
-            })
+    logger.info("Starting stream download: label=%s target=%s url=%s", status_label, os.path.abspath(file_path), url)
+    downloaded = 0
+    try:
+        with requests.get(url, stream=True, timeout=60) as response:
+            response.raise_for_status()
+            total = int(response.headers.get("content-length") or 0)
+            logger.debug(
+                "Stream download response: label=%s status=%s total_bytes=%d target=%s",
+                status_label,
+                response.status_code,
+                total,
+                os.path.abspath(file_path),
+            )
+            last_tick = time.monotonic()
+            last_bytes = 0
+            with open(file_path, "wb") as file_handle:
+                for chunk in response.iter_content(chunk_size=128 * 1024):
+                    if not chunk:
+                        continue
+                    file_handle.write(chunk)
+                    downloaded += len(chunk)
+                    now = time.monotonic()
+                    if progress_callback and total:
+                        speed = 0
+                        elapsed = max(now - last_tick, 1e-6)
+                        if downloaded > last_bytes:
+                            speed = max(0, int((downloaded - last_bytes) / elapsed))
+                            last_bytes = downloaded
+                            last_tick = now
+                        progress_callback({
+                            "progress": min(1.0, downloaded / total),
+                            "phase": status_label,
+                            "current_file": os.path.basename(file_path),
+                            "downloaded_bytes": downloaded,
+                            "total_bytes": total,
+                            "speed_bytes": speed,
+                            "completed_files": 0,
+                            "total_files": 1,
+                            "reused_files": 0,
+                        })
+            if progress_callback and total:
+                progress_callback({
+                    "progress": 1.0,
+                    "phase": status_label,
+                    "current_file": os.path.basename(file_path),
+                    "downloaded_bytes": downloaded,
+                    "total_bytes": total,
+                    "speed_bytes": 0,
+                    "completed_files": 1,
+                    "total_files": 1,
+                    "reused_files": 0,
+                })
+        logger.info("Stream download finished: label=%s bytes=%d target=%s", status_label, downloaded, os.path.abspath(file_path))
+    except Exception:
+        logger.exception("Stream download failed: label=%s bytes=%d target=%s url=%s", status_label, downloaded, os.path.abspath(file_path), url)
+        raise
 
 
 def extract_zip_bytes(zip_bytes, target_dir):
@@ -478,6 +518,960 @@ INSTALL_TYPE_LABELS = {
     "optifine": "OptiFine",
     "fabric_api": "Fabric API",
 }
+
+
+def sanitize_filename(value, fallback="ImportedPack"):
+    cleaned = re.sub(r'[<>:"/\\|?*]+', "_", str(value or "").strip()).strip(". ")
+    return cleaned or fallback
+
+
+def sha1_file(path):
+    import hashlib
+
+    digest = hashlib.sha1()
+    with open(path, "rb") as file_handle:
+        for chunk in iter(lambda: file_handle.read(128 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def should_skip_pack_file(relative_path):
+    normalized = relative_path.replace("\\", "/").strip("/")
+    lowered = normalized.lower()
+    if not normalized:
+        return True
+    if lowered.startswith((".git/", "__pycache__/", "logs/", "crash-reports/")):
+        return True
+    if lowered in {"options.txt", "launcher_profiles.json"}:
+        return True
+    if lowered.endswith((".log", ".tmp", ".lock")):
+        return True
+    return False
+
+
+def iter_pack_files(root_dir):
+    for current_root, _, files in os.walk(root_dir):
+        for filename in files:
+            path = os.path.join(current_root, filename)
+            relative = os.path.relpath(path, root_dir).replace("\\", "/")
+            if should_skip_pack_file(relative):
+                continue
+            yield path, relative
+
+
+def detect_export_loader(game_dir, version_id):
+    version_json = get_version_json(game_dir, version_id) or {}
+    text = " ".join([
+        version_id,
+        version_json.get("id", ""),
+        version_json.get("inheritsFrom", ""),
+        " ".join(lib.get("name", "") for lib in version_json.get("libraries", []) if isinstance(lib, dict)),
+    ]).lower()
+    if "fabric-loader" in text:
+        match = re.search(r"fabric-loader[:/-]([0-9][^:\s/]*)", text)
+        return "fabric-loader", match.group(1) if match else ""
+    if "neoforge" in text:
+        match = re.search(r"neoforge[:/-]([0-9][^:\s/]*)", text)
+        return "neoforge", match.group(1) if match else ""
+    if "net.minecraftforge" in text or "forge-" in text:
+        match = re.search(r"forge[:/-]([0-9][^:\s/]*)", text)
+        return "forge", match.group(1) if match else ""
+    if "quilt-loader" in text:
+        match = re.search(r"quilt-loader[:/-]([0-9][^:\s/]*)", text)
+        return "quilt-loader", match.group(1) if match else ""
+    return "", ""
+
+
+def export_modpack(game_dir, settings, version_id, target_path, pack_format="modrinth", global_isolation=False):
+    runtime_dir = runtime_directory_for_version(game_dir, settings, version_id, global_isolation=global_isolation)
+    if not os.path.isdir(runtime_dir):
+        raise RuntimeError(f"运行目录不存在：{runtime_dir}")
+
+    minecraft_version = resolve_base_minecraft_version(game_dir, version_id)
+    pack_name = version_display_name(settings, version_id)
+    extension = os.path.splitext(target_path)[1].lower()
+    if extension == ".mrpack":
+        pack_format = "modrinth"
+    loader_key, loader_version = detect_export_loader(game_dir, version_id)
+    added = 0
+
+    with zipfile.ZipFile(target_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for file_path, relative in iter_pack_files(runtime_dir):
+            archive.write(file_path, f"overrides/{relative}")
+            added += 1
+
+        if pack_format == "modrinth":
+            dependencies = {"minecraft": minecraft_version}
+            if loader_key and loader_version:
+                dependencies[loader_key] = loader_version
+            index = {
+                "formatVersion": 1,
+                "game": "minecraft",
+                "versionId": sanitize_filename(version_id, "version"),
+                "name": pack_name,
+                "summary": f"Exported by McGo from {version_id}",
+                "files": [],
+                "dependencies": dependencies,
+            }
+            archive.writestr("modrinth.index.json", json.dumps(index, ensure_ascii=False, indent=2))
+        elif pack_format == "curseforge":
+            loader_id = ""
+            if loader_key == "fabric-loader":
+                loader_id = f"fabric-{loader_version}" if loader_version else "fabric"
+            elif loader_key:
+                loader_id = f"{loader_key}-{loader_version}" if loader_version else loader_key
+            manifest = {
+                "minecraft": {
+                    "version": minecraft_version,
+                    "modLoaders": [{"id": loader_id, "primary": True}] if loader_id else [],
+                },
+                "manifestType": "minecraftModpack",
+                "manifestVersion": 1,
+                "name": pack_name,
+                "version": "1.0.0",
+                "author": "McGo",
+                "files": [],
+                "overrides": "overrides",
+            }
+            archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+    return added
+
+
+def analyze_crash_logs(game_dir, version_id, runtime_dir):
+    candidates = []
+    for base in (runtime_dir, os.path.join(game_dir, "versions", version_id), game_dir):
+        if not base:
+            continue
+        latest_log = os.path.join(base, "logs", "latest.log")
+        if os.path.isfile(latest_log):
+            candidates.append(latest_log)
+        crash_dir = os.path.join(base, "crash-reports")
+        if os.path.isdir(crash_dir):
+            reports = [
+                os.path.join(crash_dir, name)
+                for name in os.listdir(crash_dir)
+                if name.lower().endswith(".txt")
+            ]
+            candidates.extend(sorted(reports, key=os.path.getmtime, reverse=True)[:3])
+
+    unique = []
+    seen = set()
+    for path in candidates:
+        absolute = os.path.abspath(path)
+        if absolute not in seen:
+            seen.add(absolute)
+            unique.append(absolute)
+
+    if not unique:
+        return "未找到 latest.log 或 crash-reports。"
+
+    text_parts = []
+    for path in unique[:4]:
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as file_handle:
+                text_parts.append(file_handle.read()[-120000:])
+        except OSError:
+            pass
+    text = "\n".join(text_parts)
+    lowered = text.lower()
+    findings = []
+
+    patterns = [
+        ("Java 版本不兼容", ["unsupported class file major version", "has been compiled by a more recent version", "java.lang.unsupportedclassversionerror"]),
+        ("Mod 缺少依赖", ["mod requires", "requires version", "missing dependencies", "modresolutionexception"]),
+        ("Mod 冲突或加载失败", ["failed to load mod", "mod loading has failed", "exception loading mod", "mixin apply failed"]),
+        ("显卡驱动/OpenGL 问题", ["opengl", "glfw error", "pixel format not accelerated", "lwjgl"]),
+        ("内存不足", ["outofmemoryerror", "java heap space", "unable to allocate"]),
+        ("认证或网络问题", ["authentication", "invalid session", "connection timed out", "unknownhostexception"]),
+        ("资源包或配置损坏", ["malformed", "jsonparseexception", "invalid byte", "could not parse"]),
+    ]
+    for label, needles in patterns:
+        if any(needle in lowered for needle in needles):
+            findings.append(label)
+
+    exception_lines = []
+    for line in text.splitlines():
+        if any(token in line for token in ("Exception", "Error", "Caused by:", "Failed to")):
+            cleaned = line.strip()
+            if cleaned and cleaned not in exception_lines:
+                exception_lines.append(cleaned)
+        if len(exception_lines) >= 8:
+            break
+
+    result = [f"分析文件：{len(unique)} 个"]
+    if findings:
+        result.append("可能原因：" + "；".join(findings))
+    else:
+        result.append("未匹配到常见崩溃类型，请查看下方关键行。")
+    if exception_lines:
+        result.append("关键行：")
+        result.extend(exception_lines[:8])
+    result.append(f"最新文件：{unique[0]}")
+    return "\n".join(result)
+
+
+RESOURCE_TYPE_LABELS = {
+    "mod": "Mod",
+    "resourcepack": "资源包",
+    "shader": "光影",
+    "datapack": "数据包",
+}
+
+
+RESOURCE_TYPE_FACETS = {
+    "mod": "project_type:mod",
+    "resourcepack": "project_type:resourcepack",
+    "shader": "project_type:shader",
+    "datapack": "project_type:datapack",
+}
+
+RESOURCE_SOURCE_LABELS = {
+    "modrinth": "Modrinth",
+    "curseforge": "CurseForge",
+    "local": "本地",
+}
+
+RESOURCE_SEARCH_SORTS = {
+    "相关度": "relevance",
+    "下载量": "downloads",
+    "收藏数": "follows",
+    "最近更新": "updated",
+}
+
+CURSEFORGE_CLASS_IDS = {
+    "mod": 6,
+    "resourcepack": 12,
+    "shader": 6552,
+    "datapack": 6945,
+}
+
+RESOURCE_EXTENSIONS = {
+    "mod": (".jar", ".jar.disabled"),
+    "resourcepack": (".zip",),
+    "shader": (".zip",),
+    "datapack": (".zip",),
+}
+
+VERSION_ICON_LABELS = ["自动", "草方块", "金块", "红石", "命令方块", "Fabric", "Forge", "NeoForge", "OptiFine"]
+
+
+class DownloadTask:
+    def __init__(self, task_type, title, start_callback):
+        self.task_type = task_type
+        self.title = title
+        self.start_callback = start_callback
+
+    def start(self):
+        self.start_callback()
+
+
+def modrinth_loader_for_version(game_dir, version_id):
+    version_type = version_type_label(game_dir, version_id)
+    mapping = {
+        "Fabric": "fabric",
+        "Forge": "forge",
+        "NeoForge": "neoforge",
+        "OptiFine": "optifine",
+    }
+    return mapping.get(version_type, "")
+
+
+def normalize_minecraft_version_for_api(game_dir, version_id):
+    base_version = resolve_base_minecraft_version(game_dir, version_id)
+    match = re.search(r"(?<![\d.])(?:1|2|3|4|20|21|22|23|24|25|26|27|28|29|30)(?:\.\d{1,2}){1,2}(?:[-_](?:pre|rc)\d+)?(?![\d.])", str(base_version), flags=re.IGNORECASE)
+    if match:
+        logger.debug("Normalized Minecraft version for API: version_id=%s base=%s normalized=%s", version_id, base_version, match.group(0))
+        return match.group(0)
+    snapshot = re.search(r"(?<![0-9a-z])(\d{2}w\d{2}[a-z])(?![0-9a-z])", str(base_version), flags=re.IGNORECASE)
+    if snapshot:
+        logger.debug("Normalized Minecraft snapshot for API: version_id=%s base=%s normalized=%s", version_id, base_version, snapshot.group(1))
+        return snapshot.group(1)
+    logger.warning("Could not normalize Minecraft version for API: version_id=%s base=%s", version_id, base_version)
+    return base_version
+
+
+def resource_directory_for_type(game_dir, settings, version_id, resource_type, global_isolation=False):
+    runtime_dir = runtime_directory_for_version(game_dir, settings, version_id, global_isolation=global_isolation)
+    if resource_type == "mod":
+        return mods_directory_for_version(game_dir, settings, version_id, global_isolation=global_isolation)
+    if resource_type == "resourcepack":
+        return os.path.join(runtime_dir, "resourcepacks")
+    if resource_type == "shader":
+        return os.path.join(runtime_dir, "shaderpacks")
+    if resource_type == "datapack":
+        return os.path.join(runtime_dir, "saves")
+    return runtime_dir
+
+
+def search_modrinth_resources(query, resource_type, game_version="", loader="", limit=25, index="relevance"):
+    def run_search(current_game_version="", current_loader=""):
+        facets = [[RESOURCE_TYPE_FACETS.get(resource_type, "project_type:mod")]]
+        if current_game_version:
+            facets.append([f"versions:{current_game_version}"])
+        if resource_type == "mod" and current_loader:
+            facets.append([f"categories:{current_loader}"])
+        response = requests.get(
+            "https://api.modrinth.com/v2/search",
+            params={
+                "query": query,
+                "limit": limit,
+                "index": index,
+                "facets": json.dumps(facets),
+            },
+            headers={"User-Agent": "McGo/1.0"},
+            timeout=30,
+        )
+        response.raise_for_status()
+        result_hits = response.json().get("hits", [])
+        logger.info(
+            "Modrinth search attempt: query=%s type=%s game=%s loader=%s index=%s hits=%d",
+            query,
+            resource_type,
+            current_game_version or "<any>",
+            current_loader or "<any>",
+            index,
+            len(result_hits),
+        )
+        return result_hits
+
+    logger.info(
+        "Modrinth search started: query=%s type=%s game=%s loader=%s index=%s limit=%d",
+        query,
+        resource_type,
+        game_version or "<any>",
+        loader or "<any>",
+        index,
+        limit,
+    )
+    attempts = [(game_version, loader)]
+    if loader:
+        attempts.append((game_version, ""))
+    if game_version:
+        attempts.append(("", loader))
+    attempts.append(("", ""))
+
+    seen_attempts = set()
+    hits = []
+    relaxed = False
+    for current_game_version, current_loader in attempts:
+        key = (current_game_version, current_loader)
+        if key in seen_attempts:
+            continue
+        seen_attempts.add(key)
+        hits = run_search(current_game_version, current_loader)
+        if hits:
+            relaxed = key != (game_version, loader)
+            break
+
+    for hit in hits:
+        hit["source"] = "modrinth"
+        hit["relaxed_search"] = relaxed
+    logger.info(
+        "Modrinth search finished: query=%s type=%s game=%s loader=%s hits=%d relaxed=%s",
+        query,
+        resource_type,
+        game_version or "<any>",
+        loader or "<any>",
+        len(hits),
+        relaxed,
+    )
+    return hits
+
+
+def strict_modrinth_search(query, resource_type, game_version="", loader="", limit=25, index="relevance"):
+    facets = [[RESOURCE_TYPE_FACETS.get(resource_type, "project_type:mod")]]
+    if game_version:
+        facets.append([f"versions:{game_version}"])
+    if resource_type == "mod" and loader:
+        facets.append([f"categories:{loader}"])
+    response = requests.get(
+        "https://api.modrinth.com/v2/search",
+        params={
+            "query": query,
+            "limit": limit,
+            "index": index,
+            "facets": json.dumps(facets),
+        },
+        headers={"User-Agent": "McGo/1.0"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    hits = response.json().get("hits", [])
+    for hit in hits:
+        hit["source"] = "modrinth"
+    return hits
+
+
+def get_modrinth_versions(project_id, resource_type, game_version, loader):
+    params = {"game_versions": json.dumps([game_version])} if game_version else {}
+    if resource_type == "mod" and loader:
+        params["loaders"] = json.dumps([loader])
+    logger.debug(
+        "Fetching Modrinth versions: project=%s type=%s game=%s loader=%s",
+        project_id,
+        resource_type,
+        game_version or "<any>",
+        loader or "<any>",
+    )
+    response = requests.get(
+        f"https://api.modrinth.com/v2/project/{project_id}/version",
+        params=params,
+        headers={"User-Agent": "McGo/1.0"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    versions = response.json()
+    logger.info(
+        "Fetched Modrinth versions: project=%s type=%s game=%s loader=%s count=%d",
+        project_id,
+        resource_type,
+        game_version or "<any>",
+        loader or "<any>",
+        len(versions),
+    )
+    return versions
+
+
+def modrinth_version_is_compatible(version, resource_type, game_version="", loader=""):
+    game_versions = {str(item).lower() for item in version.get("game_versions", [])}
+    loaders = {str(item).lower() for item in version.get("loaders", [])}
+    if game_version and str(game_version).lower() not in game_versions:
+        return False
+    if resource_type == "mod" and loader and str(loader).lower() not in loaders:
+        return False
+    return True
+
+
+def find_compatible_modrinth_version(project_id, resource_type, game_version, loader):
+    versions = get_modrinth_versions(project_id, resource_type, game_version, loader)
+    if not versions and (game_version or loader):
+        logger.info(
+            "Modrinth exact version query returned no results, falling back to local filtering: project=%s type=%s game=%s loader=%s",
+            project_id,
+            resource_type,
+            game_version or "<any>",
+            loader or "<any>",
+        )
+        try:
+            versions = get_modrinth_versions(project_id, resource_type, "", "")
+        except Exception:
+            logger.exception("Modrinth fallback version query failed: project=%s", project_id)
+            versions = []
+        versions = [
+            item for item in versions
+            if modrinth_version_is_compatible(item, resource_type, game_version, loader)
+        ]
+    preferred = [item for item in versions if item.get("version_type") == "release"]
+    selected = (preferred or versions)[0] if versions else None
+    if selected:
+        logger.info(
+            "Selected Modrinth version: project=%s version=%s type=%s game_versions=%s loaders=%s",
+            project_id,
+            selected.get("version_number", ""),
+            selected.get("version_type", ""),
+            ",".join(str(item) for item in selected.get("game_versions", [])),
+            ",".join(str(item) for item in selected.get("loaders", [])),
+        )
+    else:
+        logger.warning(
+            "No compatible Modrinth version selected: project=%s type=%s game=%s loader=%s",
+            project_id,
+            resource_type,
+            game_version or "<any>",
+            loader or "<any>",
+        )
+    return selected
+
+
+def hit_has_modrinth_compatibility(hit, resource_type, game_version="", loader=""):
+    if game_version:
+        versions = {str(item).lower() for item in hit.get("versions", [])}
+        if versions and str(game_version).lower() not in versions:
+            return False
+    if resource_type == "mod" and loader:
+        categories = {str(item).lower() for item in hit.get("categories", [])}
+        display_categories = {str(item).lower() for item in hit.get("display_categories", [])}
+        all_categories = categories | display_categories
+        if all_categories and str(loader).lower() not in all_categories:
+            return False
+    return True
+
+
+def select_modrinth_version(project_id, resource_type, game_version, loader):
+    selected = find_compatible_modrinth_version(project_id, resource_type, game_version, loader)
+    if not selected:
+        target = f"Minecraft {game_version}" if game_version else "当前 Minecraft 版本"
+        if resource_type == "mod" and loader:
+            target += f" / {loader}"
+        raise RuntimeError(f"这个资源没有适配 {target} 的可安装文件。")
+    return selected
+
+
+def install_modrinth_resource(project_id, resource_type, game_version, loader, target_dir, install_dependencies=False, installed=None, status_callback=None, progress_callback=None):
+    installed = installed if installed is not None else set()
+    project_key = f"modrinth:{project_id}"
+    if project_key in installed:
+        logger.debug("Skipping already installed Modrinth dependency: project=%s", project_id)
+        return {"filename": "", "path": "", "version": "", "dependencies_installed": []}
+    installed.add(project_key)
+
+    logger.info(
+        "Installing Modrinth resource: project=%s type=%s game=%s loader=%s target=%s dependencies=%s",
+        project_id,
+        resource_type,
+        game_version or "<any>",
+        loader or "<any>",
+        os.path.abspath(target_dir),
+        install_dependencies,
+    )
+    selected = select_modrinth_version(project_id, resource_type, game_version, loader)
+    dependencies_installed = []
+    if install_dependencies:
+        for dependency in selected.get("dependencies", []):
+            if dependency.get("dependency_type") != "required":
+                continue
+            dep_project_id = dependency.get("project_id")
+            if not dep_project_id:
+                continue
+            logger.info(
+                "Installing required Modrinth dependency: parent=%s dependency=%s",
+                project_id,
+                dep_project_id,
+            )
+            if status_callback:
+                status_callback(f"正在安装依赖：{dep_project_id}")
+            dep_payload = install_modrinth_resource(
+                dep_project_id,
+                resource_type,
+                game_version,
+                loader,
+                target_dir,
+                install_dependencies=True,
+                installed=installed,
+                status_callback=status_callback,
+                progress_callback=progress_callback,
+            )
+            if dep_payload.get("filename"):
+                dependencies_installed.append(dep_payload.get("filename", dep_project_id))
+            dependencies_installed.extend(dep_payload.get("dependencies_installed", []))
+
+    files = selected.get("files", [])
+    primary = next((item for item in files if item.get("primary")), None) or (files[0] if files else None)
+    if not primary or not primary.get("url"):
+        logger.error(
+            "Selected Modrinth version has no downloadable file: project=%s version=%s",
+            project_id,
+            selected.get("version_number", ""),
+        )
+        raise RuntimeError("资源版本缺少可下载文件。")
+
+    filename = sanitize_filename(primary.get("filename") or f"{project_id}.jar", f"{project_id}.jar")
+    os.makedirs(target_dir, exist_ok=True)
+    target_path = os.path.join(target_dir, filename)
+    logger.info(
+        "Downloading Modrinth resource file: project=%s version=%s filename=%s size=%s target=%s",
+        project_id,
+        selected.get("version_number", ""),
+        filename,
+        primary.get("size", 0),
+        os.path.abspath(target_path),
+    )
+    stream_download(primary["url"], target_path, progress_callback, "下载资源")
+    expected_hash = primary.get("hashes", {}).get("sha1", "")
+    if expected_hash and sha1_file(target_path).lower() != expected_hash.lower():
+        logger.error("Modrinth resource SHA1 mismatch: project=%s target=%s", project_id, os.path.abspath(target_path))
+        raise RuntimeError("资源文件 SHA1 校验失败。")
+    logger.info(
+        "Modrinth resource installed: project=%s version=%s filename=%s dependencies=%d",
+        project_id,
+        selected.get("version_number", ""),
+        filename,
+        len(dependencies_installed),
+    )
+    return {
+        "filename": filename,
+        "path": target_path,
+        "version": selected.get("version_number", ""),
+        "dependencies_installed": dependencies_installed,
+    }
+
+
+def get_modrinth_resource_detail(project_id, resource_type, game_version, loader):
+    project_response = requests.get(
+        f"https://api.modrinth.com/v2/project/{project_id}",
+        headers={"User-Agent": "McGo/1.0"},
+        timeout=30,
+    )
+    project_response.raise_for_status()
+    project = project_response.json()
+    versions = get_modrinth_versions(project_id, resource_type, game_version, loader)
+    selected = (versions or [{}])[0]
+    screenshots = project.get("gallery", [])[:5]
+    dependencies = [
+        item for item in selected.get("dependencies", [])
+        if item.get("dependency_type") in {"required", "optional"}
+    ]
+    return {
+        "source": "modrinth",
+        "title": project.get("title", project_id),
+        "description": project.get("description", ""),
+        "body": project.get("body", ""),
+        "downloads": project.get("downloads", 0),
+        "followers": project.get("followers", 0),
+        "project_url": f"https://modrinth.com/{project.get('project_type', 'mod')}/{project.get('slug', project_id)}",
+        "screenshots": [item.get("url", "") for item in screenshots if item.get("url")],
+        "dependencies": dependencies,
+        "versions": versions[:8],
+    }
+
+
+def curseforge_headers():
+    api_key = os.environ.get("CURSEFORGE_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("CurseForge 官方 API 需要 CURSEFORGE_API_KEY 环境变量。")
+    return {"Accept": "application/json", "x-api-key": api_key, "User-Agent": "McGo/1.0"}
+
+
+def search_curseforge_resources(query, resource_type, game_version="", loader="", limit=25):
+    params = {
+        "gameId": 432,
+        "searchFilter": query,
+        "pageSize": limit,
+        "sortField": 2,
+        "sortOrder": "desc",
+    }
+    class_id = CURSEFORGE_CLASS_IDS.get(resource_type)
+    if class_id:
+        params["classId"] = class_id
+    if game_version:
+        params["gameVersion"] = game_version
+    response = requests.get(
+        "https://api.curseforge.com/v1/mods/search",
+        params=params,
+        headers=curseforge_headers(),
+        timeout=30,
+    )
+    response.raise_for_status()
+    hits = []
+    for item in response.json().get("data", []):
+        links = item.get("links", {})
+        logo = item.get("logo") or {}
+        hits.append({
+            "source": "curseforge",
+            "project_id": item.get("id"),
+            "title": item.get("name", ""),
+            "slug": item.get("slug", ""),
+            "description": item.get("summary", ""),
+            "downloads": item.get("downloadCount", 0),
+            "follows": item.get("thumbsUpCount", 0),
+            "project_url": links.get("websiteUrl", ""),
+            "icon_url": logo.get("thumbnailUrl", ""),
+        })
+    return hits
+
+
+def get_curseforge_resource_detail(project_id):
+    response = requests.get(
+        f"https://api.curseforge.com/v1/mods/{project_id}",
+        headers=curseforge_headers(),
+        timeout=30,
+    )
+    response.raise_for_status()
+    project = response.json().get("data", {})
+    files_response = requests.get(
+        f"https://api.curseforge.com/v1/mods/{project_id}/files",
+        headers=curseforge_headers(),
+        timeout=30,
+    )
+    files_response.raise_for_status()
+    files = files_response.json().get("data", [])[:8]
+    links = project.get("links", {})
+    screenshots = [
+        screenshot.get("url", "")
+        for screenshot in project.get("screenshots", [])[:5]
+        if screenshot.get("url")
+    ]
+    return {
+        "source": "curseforge",
+        "title": project.get("name", str(project_id)),
+        "description": project.get("summary", ""),
+        "body": "",
+        "downloads": project.get("downloadCount", 0),
+        "followers": project.get("thumbsUpCount", 0),
+        "project_url": links.get("websiteUrl", ""),
+        "screenshots": screenshots,
+        "dependencies": [],
+        "versions": files,
+    }
+
+
+def list_local_resources(query, resource_type, target_dir):
+    lowered_query = query.lower()
+    extensions = RESOURCE_EXTENSIONS.get(resource_type, (".jar", ".zip"))
+    hits = []
+    if not os.path.isdir(target_dir):
+        return hits
+    for current_root, _, files in os.walk(target_dir):
+        for filename in files:
+            lowered = filename.lower()
+            if not lowered.endswith(extensions):
+                continue
+            if lowered_query and lowered_query not in lowered:
+                continue
+            path = os.path.join(current_root, filename)
+            try:
+                stat = os.stat(path)
+            except OSError:
+                continue
+            hits.append({
+                "source": "local",
+                "project_id": path,
+                "title": filename,
+                "slug": filename,
+                "description": os.path.relpath(path, target_dir),
+                "downloads": stat.st_size,
+                "follows": 0,
+                "path": path,
+                "updated": stat.st_mtime,
+            })
+    hits.sort(key=lambda item: item.get("updated", 0), reverse=True)
+    return hits[:100]
+
+
+def get_local_resource_detail(path):
+    stat = os.stat(path)
+    return {
+        "source": "local",
+        "title": os.path.basename(path),
+        "description": os.path.abspath(path),
+        "body": "",
+        "downloads": stat.st_size,
+        "followers": 0,
+        "project_url": os.path.abspath(os.path.dirname(path)),
+        "screenshots": [],
+        "dependencies": [],
+        "versions": [],
+    }
+
+
+def cache_resource_screenshot(url):
+    if not url:
+        return ""
+    cache_dir = os.path.join(tempfile.gettempdir(), "mcgo-resource-screenshots")
+    os.makedirs(cache_dir, exist_ok=True)
+    extension = os.path.splitext(url.split("?", 1)[0])[1].lower()
+    if extension not in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}:
+        extension = ".jpg"
+    safe_name = sanitize_filename(sha1_text(url), "screenshot") + extension
+    target_path = os.path.join(cache_dir, safe_name)
+    if os.path.isfile(target_path) and os.path.getsize(target_path) > 0:
+        return target_path
+    response = requests.get(url, headers={"User-Agent": "McGo/1.0"}, timeout=30)
+    response.raise_for_status()
+    with open(target_path, "wb") as file_handle:
+        file_handle.write(response.content)
+    return target_path
+
+
+def sha1_text(value):
+    import hashlib
+
+    return hashlib.sha1(str(value).encode("utf-8", errors="ignore")).hexdigest()
+
+
+def current_platform_name():
+    if sys.platform.startswith("win"):
+        return "windows"
+    if sys.platform == "darwin":
+        return "mac"
+    return "linux"
+
+
+def current_arch_name():
+    machine = os.environ.get("PROCESSOR_ARCHITECTURE", "")
+    if not machine and hasattr(os, "uname"):
+        machine = os.uname().machine
+    machine = str(machine).lower()
+    if machine in {"amd64", "x86_64"}:
+        return "x64"
+    if machine in {"aarch64", "arm64"}:
+        return "aarch64"
+    if machine in {"x86", "i386", "i686"}:
+        return "x32"
+    return "x64"
+
+
+def java_runtime_download_url(major_version):
+    response = requests.get(
+        f"https://api.adoptium.net/v3/assets/latest/{major_version}/hotspot",
+        params={
+            "architecture": current_arch_name(),
+            "image_type": "jre",
+            "os": current_platform_name(),
+            "vendor": "eclipse",
+        },
+        headers={"User-Agent": "McGo/1.0"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    data = response.json()
+    if not data:
+        raise RuntimeError(f"未找到 Java {major_version} 的可下载运行时。")
+    package = data[0].get("binary", {}).get("package", {})
+    link = package.get("link")
+    if not link:
+        raise RuntimeError("Adoptium 返回数据缺少下载链接。")
+    return link, package.get("name") or os.path.basename(link)
+
+
+def find_java_in_directory(root_dir):
+    candidates = []
+    for current_root, _, files in os.walk(root_dir):
+        for filename in files:
+            if filename not in ("java", "java.exe"):
+                continue
+            path = os.path.join(current_root, filename)
+            if os.path.basename(os.path.dirname(path)).lower() == "bin":
+                candidates.append(path)
+    candidates.sort(key=lambda path: (len(path), path))
+    return candidates[0] if candidates else ""
+
+
+def extract_java_archive(archive_path, target_dir):
+    if zipfile.is_zipfile(archive_path):
+        with zipfile.ZipFile(archive_path, "r") as archive:
+            archive.extractall(target_dir)
+        return
+    if tarfile.is_tarfile(archive_path):
+        with tarfile.open(archive_path, "r:*") as archive:
+            archive.extractall(target_dir)
+        return
+    raise RuntimeError("Java 运行时压缩包格式不受支持。")
+
+
+def normalize_auth_server(server_url):
+    server = (server_url or "").strip().rstrip("/")
+    if not server:
+        raise RuntimeError("请填写外置登录服务器地址。")
+    if not server.startswith(("http://", "https://")):
+        server = "https://" + server
+    return server
+
+
+def authenticate_external_account(server_url, username, password):
+    server = normalize_auth_server(server_url)
+    if not username.strip() or not password:
+        raise RuntimeError("外置登录需要用户名和密码。")
+    logger.info("Authenticating external account: server=%s username=%s", server, username.strip())
+    payload = {
+        "agent": {"name": "Minecraft", "version": 1},
+        "username": username.strip(),
+        "password": password,
+        "requestUser": True,
+    }
+    response = requests.post(
+        f"{server}/authserver/authenticate",
+        json=payload,
+        headers={"Content-Type": "application/json", "User-Agent": "McGo/1.0"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    data = response.json()
+    selected = data.get("selectedProfile") or {}
+    if not selected.get("id") or not selected.get("name") or not data.get("accessToken"):
+        raise RuntimeError("外置登录服务器返回的数据不完整。")
+    logger.info("External account authenticated: server=%s username=%s uuid=%s", server, selected.get("name"), selected.get("id"))
+    return {
+        "server": server,
+        "username": selected.get("name"),
+        "display_name": selected.get("name"),
+        "uuid": selected.get("id"),
+        "access_token": data.get("accessToken"),
+        "client_token": data.get("clientToken", ""),
+    }
+
+
+def refresh_external_account(account):
+    server = normalize_auth_server(account.get("auth_server", ""))
+    access_token = account.get("access_token", "")
+    client_token = account.get("client_token", "")
+    if not access_token:
+        raise RuntimeError("外置登录账号缺少 Access Token，请重新登录。")
+    logger.info(
+        "Refreshing external account: server=%s username=%s uuid=%s",
+        server,
+        account.get("username", ""),
+        account.get("uuid", ""),
+    )
+    payload = {
+        "accessToken": access_token,
+        "clientToken": client_token,
+        "requestUser": True,
+    }
+    response = requests.post(
+        f"{server}/authserver/refresh",
+        json=payload,
+        headers={"Content-Type": "application/json", "User-Agent": "McGo/1.0"},
+        timeout=30,
+    )
+    if response.status_code == 403:
+        validate_payload = {"accessToken": access_token, "clientToken": client_token}
+        validate_response = requests.post(
+            f"{server}/authserver/validate",
+            json=validate_payload,
+            headers={"Content-Type": "application/json", "User-Agent": "McGo/1.0"},
+            timeout=30,
+        )
+        validate_response.raise_for_status()
+        logger.info("External account token validated without refresh: server=%s username=%s", server, account.get("username", ""))
+        return dict(account)
+    response.raise_for_status()
+    data = response.json()
+    selected = data.get("selectedProfile") or {}
+    refreshed = dict(account)
+    refreshed["access_token"] = data.get("accessToken", access_token)
+    refreshed["client_token"] = data.get("clientToken", client_token)
+    if selected.get("id"):
+        refreshed["uuid"] = selected.get("id")
+    if selected.get("name"):
+        refreshed["username"] = selected.get("name")
+        refreshed["display_name"] = selected.get("name")
+    logger.info("External account refreshed: server=%s username=%s uuid=%s", server, refreshed.get("username", ""), refreshed.get("uuid", ""))
+    return refreshed
+
+
+def authlib_injector_download_url():
+    logger.info("Fetching authlib-injector metadata: url=%s", AUTHLIB_INJECTOR_METADATA_URL)
+    response = requests.get(AUTHLIB_INJECTOR_METADATA_URL, headers={"User-Agent": "McGo/1.0"}, timeout=30)
+    response.raise_for_status()
+    data = response.json()
+    version = data.get("version") or "latest"
+    checksums = data.get("checksums") or {}
+    url = (
+        data.get("download_url")
+        or data.get("downloadUrl")
+        or data.get("url")
+        or f"https://authlib-injector.yushi.moe/artifact/{version}/authlib-injector.jar"
+    )
+    filename = data.get("fileName") or data.get("filename") or f"authlib-injector-{version}.jar"
+    logger.info("Authlib-injector metadata fetched: filename=%s url=%s has_sha256=%s", filename, url, bool(checksums.get("sha256", "")))
+    return url, filename, checksums.get("sha256", "")
+
+
+def authlib_injector_args(account):
+    if account.get("type") != "external":
+        return []
+    injector_path = (account.get("authlib_injector_path") or "").strip()
+    server = normalize_auth_server(account.get("auth_server", ""))
+    if not injector_path:
+        raise RuntimeError("外置登录账号缺少 authlib-injector jar 路径。")
+    if not os.path.isfile(injector_path):
+        raise RuntimeError(f"authlib-injector jar 不存在：{injector_path}")
+    logger.debug("Authlib-injector args prepared: server=%s injector=%s", server, injector_path)
+    return [
+        f"-javaagent:{injector_path}={server}",
+        f"-Dauthlibinjector.yggdrasil.prefetched={server}",
+    ]
 
 
 class InstallerEngine:
@@ -885,14 +1879,24 @@ class DownloadWorker(QObject):
 
     def run(self):
         try:
+            logger.info(
+                "DownloadWorker started: version=%s mirror=%s game_dir=%s auto_install=%s java=%s",
+                self.version_id,
+                self.mirror_source,
+                self.game_dir,
+                self.auto_install_types,
+                self.java_path,
+            )
             self.status.emit(f"正在获取 {self.version_id} 版本信息...")
             version_url = get_version_url(self.version_id, self.mirror_source)
             if not version_url:
                 raise Exception(f"无法获取版本 {self.version_id} 的下载地址")
+            logger.debug("Version metadata URL resolved: version=%s url=%s", self.version_id, version_url)
 
             response = requests.get(version_url, timeout=30)
             response.raise_for_status()
             version_json = response.json()
+            logger.debug("Version metadata loaded: version=%s keys=%s", self.version_id, sorted(version_json.keys()))
 
             def on_progress(snapshot):
                 value = snapshot.get("progress", 0.0)
@@ -928,8 +1932,10 @@ class DownloadWorker(QObject):
                 install_payload = engine.install_sequence(self.auto_install_types)
                 payload["post_install"] = install_payload
             self.progress.emit(100)
+            logger.info("DownloadWorker finished: payload=%s", payload)
             self.finished.emit(payload)
         except Exception as e:
+            logger.exception("DownloadWorker failed: version=%s", self.version_id)
             self.failed.emit(str(e))
 
 
@@ -955,6 +1961,14 @@ class InstallWorker(QObject):
 
     def run(self):
         try:
+            logger.info(
+                "InstallWorker started: install_type=%s minecraft_version=%s mirror=%s game_dir=%s java=%s",
+                self.install_type,
+                self.minecraft_version,
+                self.mirror_source,
+                self.game_dir,
+                self.java_path,
+            )
             engine = InstallerEngine(
                 self.minecraft_version,
                 self.mirror_source,
@@ -966,8 +1980,10 @@ class InstallWorker(QObject):
             payload = engine.install(self.install_type)
             payload["install_type"] = self.install_type
             self.progress.emit(100)
+            logger.info("InstallWorker finished: payload=%s", payload)
             self.finished.emit(payload)
         except Exception as exc:
+            logger.exception("InstallWorker failed: install_type=%s minecraft_version=%s", self.install_type, self.minecraft_version)
             self.failed.emit(str(exc))
 
 
@@ -986,6 +2002,12 @@ class RepairWorker(QObject):
 
     def run(self):
         try:
+            logger.info(
+                "RepairWorker started: version=%s mirror=%s game_dir=%s",
+                self.version_id,
+                self.mirror_source,
+                self.game_dir,
+            )
             chain = get_version_inheritance_chain(self.game_dir, self.version_id)
             if not chain:
                 raise RuntimeError(f"未找到版本清单：{self.version_id}")
@@ -995,9 +2017,15 @@ class RepairWorker(QObject):
                 self.progress.emit(max(0, min(100, int(value * 100))))
                 self.metrics.emit(snapshot)
 
+            total_missing_before = 0
+            total_missing_after = 0
+            report_path = ""
             for index, version_json in enumerate(reversed(chain), start=1):
                 version_id = version_json.get("id", self.version_id)
                 self.status.emit(f"正在校验并补全 {version_id}（{index}/{len(chain)}）...")
+                missing_before = collect_missing_game_files(version_json, self.game_dir, version_id)
+                logger.info("Repair scan before: version=%s missing=%d", version_id, len(missing_before))
+                total_missing_before += len(missing_before)
                 asyncio.run(repair_game_files(
                     version_json,
                     self.game_dir,
@@ -1005,9 +2033,32 @@ class RepairWorker(QObject):
                     MIRROR_SOURCES[self.mirror_source],
                     progress_callback=on_progress,
                 ))
+                missing_after = collect_missing_game_files(version_json, self.game_dir, version_id)
+                logger.info("Repair scan after: version=%s missing=%d", version_id, len(missing_after))
+                total_missing_after += len(missing_after)
+                if missing_after:
+                    report_path = os.path.join(self.game_dir, "versions", self.version_id, "repair-missing-files.json")
+                    os.makedirs(os.path.dirname(report_path), exist_ok=True)
+                    with open(report_path, "w", encoding="utf-8") as file_handle:
+                        json.dump(missing_after, file_handle, ensure_ascii=False, indent=2)
             self.progress.emit(100)
-            self.finished.emit({"version": self.version_id})
+            logger.info(
+                "RepairWorker finished: version=%s checked=%d missing_before=%d missing_after=%d report=%s",
+                self.version_id,
+                len(chain),
+                total_missing_before,
+                total_missing_after,
+                report_path,
+            )
+            self.finished.emit({
+                "version": self.version_id,
+                "checked_versions": len(chain),
+                "missing_before": total_missing_before,
+                "missing_after": total_missing_after,
+                "report_path": report_path,
+            })
         except Exception as exc:
+            logger.exception("RepairWorker failed: version=%s", self.version_id)
             self.failed.emit(str(exc))
 
 
@@ -1017,10 +2068,13 @@ class ModpackImportWorker(QObject):
     finished = Signal(dict)
     failed = Signal(str)
 
-    def __init__(self, pack_path, game_dir):
+    def __init__(self, pack_path, game_dir, mirror_source="official", java_path=""):
         super().__init__()
         self.pack_path = pack_path
         self.game_dir = os.path.abspath(game_dir)
+        self.mirror_source = mirror_source
+        self.java_path = java_path
+        self.missing_files = []
 
     def _safe_join(self, root, relative_path):
         normalized = os.path.normpath(relative_path).replace("\\", os.sep).lstrip(os.sep)
@@ -1073,20 +2127,314 @@ class ModpackImportWorker(QObject):
                     if chunk:
                         handle.write(chunk)
 
+    def _ensure_minecraft_version(self, minecraft_version):
+        if not minecraft_version or get_version_json(self.game_dir, minecraft_version):
+            return
+        self.status.emit(f"正在下载整合包基础版本 {minecraft_version}...")
+        version_url = get_version_url(minecraft_version, self.mirror_source)
+        if not version_url:
+            raise RuntimeError(f"无法获取 Minecraft {minecraft_version} 的下载地址")
+        response = requests.get(version_url, timeout=30)
+        response.raise_for_status()
+        version_json = response.json()
+        asyncio.run(download_game_files(
+            version_json,
+            self.game_dir,
+            minecraft_version,
+            MIRROR_SOURCES[self.mirror_source],
+            progress_callback=None,
+        ))
+        extract_natives(version_json, self.game_dir, minecraft_version)
+
+    def _install_declared_loader(self, minecraft_version, loader_key):
+        if not minecraft_version or not loader_key:
+            return minecraft_version
+
+        normalized_loader = str(loader_key).lower().strip()
+        if normalized_loader.startswith("fabric"):
+            normalized_loader = "fabric"
+        elif normalized_loader.startswith("forge"):
+            normalized_loader = "forge"
+        elif normalized_loader.startswith("neoforge"):
+            normalized_loader = "neoforge"
+
+        install_type = {
+            "fabric-loader": "fabric",
+            "fabric": "fabric",
+            "forge": "forge",
+            "neoforge": "neoforge",
+        }.get(normalized_loader)
+        if not install_type:
+            self.missing_files.append({
+                "path": "loader",
+                "reason": f"暂不支持自动安装加载器：{loader_key}",
+            })
+            return minecraft_version
+        if install_type in {"forge", "neoforge"} and not self.java_path:
+            raise RuntimeError(f"整合包声明需要 {INSTALL_TYPE_LABELS[install_type]}，请先在环境中选择 Java。")
+
+        self.status.emit(f"正在安装整合包加载器 {INSTALL_TYPE_LABELS.get(install_type, install_type)}...")
+        engine = InstallerEngine(
+            minecraft_version,
+            self.mirror_source,
+            self.game_dir,
+            self.java_path,
+            status_callback=self.status.emit,
+            progress_callback=None,
+        )
+        payload = engine.install(install_type)
+        return payload.get("installed_version") or minecraft_version
+
+    def _write_imported_version(self, version_id, minecraft_version, installed_base_version):
+        version_dir = os.path.join(self.game_dir, "versions", version_id)
+        os.makedirs(version_dir, exist_ok=True)
+        source_json = get_version_json(self.game_dir, installed_base_version or minecraft_version)
+        if not source_json:
+            return
+
+        version_json = dict(source_json)
+        version_json["id"] = version_id
+        if installed_base_version and installed_base_version != version_id:
+            version_json = {
+                "id": version_id,
+                "inheritsFrom": installed_base_version,
+                "type": source_json.get("type", "release"),
+                "time": source_json.get("time", ""),
+                "releaseTime": source_json.get("releaseTime", ""),
+            }
+        with open(os.path.join(version_dir, f"{version_id}.json"), "w", encoding="utf-8") as file_handle:
+            json.dump(version_json, file_handle, ensure_ascii=False, indent=4)
+
+    def _write_missing_report(self, version_id):
+        if not self.missing_files:
+            return ""
+        report_dir = os.path.join(self.game_dir, "versions", version_id)
+        os.makedirs(report_dir, exist_ok=True)
+        report_path = os.path.join(report_dir, "missing-modpack-files.json")
+        with open(report_path, "w", encoding="utf-8") as file_handle:
+            json.dump(self.missing_files, file_handle, ensure_ascii=False, indent=2)
+        return report_path
+
+    def _copy_override_file(self, archive, item, runtime_dir, prefix):
+        name = item.filename.replace("\\", "/")
+        relative = name[len(prefix):] if prefix else name
+        if not relative:
+            return False
+        target = self._safe_join(runtime_dir, relative)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with archive.open(item) as src, open(target, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+        return True
+
+    def _extract_overrides(self, archive, runtime_dir, prefixes):
+        copied = 0
+        normalized_prefixes = []
+        for prefix in prefixes:
+            prefix = prefix.strip("/")
+            normalized_prefixes.append(f"{prefix}/" if prefix else "")
+        for item in archive.infolist():
+            name = item.filename.replace("\\", "/")
+            if item.is_dir():
+                continue
+            for prefix in normalized_prefixes:
+                if prefix and not name.startswith(prefix):
+                    continue
+                if self._copy_override_file(archive, item, runtime_dir, prefix):
+                    copied += 1
+                break
+        return copied
+
+    def _curseforge_file_url(self, project_id, file_id):
+        return f"https://edge.forgecdn.net/files/{str(file_id)[:-3]}/{str(file_id)[-3:]}/{file_id}"
+
+    def _download_curseforge_files(self, files, runtime_dir):
+        downloaded = 0
+        optional = 0
+        for idx, item in enumerate(files, start=1):
+            project_id = item.get("projectID")
+            file_id = item.get("fileID")
+            required = item.get("required", True)
+            if not project_id or not file_id:
+                continue
+            if not required:
+                optional += 1
+                self.missing_files.append({
+                    "projectID": project_id,
+                    "fileID": file_id,
+                    "reason": "可选文件，未自动下载",
+                })
+                continue
+            self.status.emit(f"正在下载 CurseForge 文件 {idx}/{len(files)}：{project_id}/{file_id}")
+            self.progress.emit(min(95, int(idx / max(len(files), 1) * 75) + 15))
+            try:
+                meta_response = requests.get(
+                    f"https://api.cfwidget.com/minecraft/mc-mods/{project_id}",
+                    timeout=20,
+                )
+                filename = f"{project_id}-{file_id}.jar"
+                if meta_response.ok:
+                    data = meta_response.json()
+                    for candidate in data.get("files", []):
+                        if str(candidate.get("id")) == str(file_id):
+                            filename = candidate.get("name") or candidate.get("displayName") or filename
+                            if not filename.lower().endswith(".jar"):
+                                filename = f"{filename}.jar"
+                            break
+                target_path = os.path.join(runtime_dir, "mods", sanitize_filename(filename, f"{project_id}-{file_id}.jar"))
+                self._download_file(self._curseforge_file_url(project_id, file_id), target_path)
+                downloaded += 1
+            except Exception as exc:
+                self.missing_files.append({
+                    "projectID": project_id,
+                    "fileID": file_id,
+                    "reason": str(exc),
+                    "manual_url": f"https://www.curseforge.com/minecraft/mc-mods/{project_id}/files/{file_id}",
+                })
+        return downloaded, optional
+
+    def _discover_import_metadata(self, payload):
+        minecraft_version = ""
+        loader_key = ""
+        pack_name = ""
+
+        if not isinstance(payload, dict):
+            return minecraft_version, loader_key, pack_name
+
+        pack_name = (
+            payload.get("name")
+            or payload.get("displayName")
+            or payload.get("instanceName")
+            or payload.get("title")
+            or ""
+        )
+        minecraft_version = (
+            payload.get("minecraft")
+            or payload.get("minecraftVersion")
+            or payload.get("gameVersion")
+            or payload.get("mcversion")
+            or ""
+        )
+        loader_key = payload.get("loader") or payload.get("modLoader") or payload.get("loaderType") or ""
+
+        components = payload.get("components") or payload.get("addons") or payload.get("loaders") or []
+        if isinstance(components, dict):
+            components = [{"uid": key, "version": value} for key, value in components.items()]
+        for component in components if isinstance(components, list) else []:
+            if not isinstance(component, dict):
+                continue
+            uid = str(component.get("uid") or component.get("id") or component.get("name") or "").lower()
+            version = str(component.get("version") or component.get("versionNumber") or "")
+            if not minecraft_version and ("minecraft" == uid or uid.endswith("minecraft")):
+                minecraft_version = version
+            if not loader_key:
+                if "fabric" in uid:
+                    loader_key = "fabric"
+                elif "neoforge" in uid:
+                    loader_key = "neoforge"
+                elif "forge" in uid:
+                    loader_key = "forge"
+                elif "quilt" in uid:
+                    loader_key = "quilt"
+
+        launch = payload.get("launch") or payload.get("version") or {}
+        if isinstance(launch, dict):
+            minecraft_version = minecraft_version or launch.get("minecraft") or launch.get("minecraftVersion") or ""
+            loader_key = loader_key or launch.get("loader") or launch.get("modLoader") or ""
+
+        return str(minecraft_version), str(loader_key).lower(), str(pack_name)
+
+    def _read_text(self, archive, name):
+        with archive.open(name) as handle:
+            return handle.read().decode("utf-8-sig", errors="replace")
+
+    def _parse_instance_cfg(self, text):
+        payload = {"components": []}
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+            lowered = key.lower()
+            if lowered in {"name", "instancename"}:
+                payload["name"] = value
+            elif "minecraft" in lowered and "version" in lowered:
+                payload["minecraftVersion"] = value
+            elif "fabric" in lowered:
+                payload["components"].append({"uid": "fabric", "version": value})
+            elif "neoforge" in lowered:
+                payload["components"].append({"uid": "neoforge", "version": value})
+            elif "forge" in lowered:
+                payload["components"].append({"uid": "forge", "version": value})
+            elif "quilt" in lowered:
+                payload["components"].append({"uid": "quilt", "version": value})
+        return payload
+
+    def _install_generic_manifest_pack(self, archive, manifest_entry, pack_kind):
+        if manifest_entry.lower().endswith(".json") or manifest_entry.lower().endswith(".packmeta"):
+            manifest = self._read_json(archive, manifest_entry)
+        else:
+            manifest = self._parse_instance_cfg(self._read_text(archive, manifest_entry))
+        minecraft_version, loader_key, manifest_name = self._discover_import_metadata(manifest)
+        pack_name = (manifest_name or os.path.splitext(os.path.basename(self.pack_path))[0]).strip()
+        version_id = sanitize_filename(pack_name, f"{pack_kind}-{minecraft_version or 'Imported'}")
+        runtime_dir = os.path.join(self.game_dir, "versions", version_id)
+        os.makedirs(runtime_dir, exist_ok=True)
+
+        if minecraft_version:
+            self.status.emit("正在准备基础版本和加载器...")
+            self._ensure_minecraft_version(minecraft_version)
+            installed_base_version = self._install_declared_loader(minecraft_version, loader_key)
+            self._write_imported_version(version_id, minecraft_version, installed_base_version)
+        else:
+            self.missing_files.append({
+                "path": manifest_entry,
+                "reason": "未识别到 Minecraft 版本，已按普通覆写包导入。",
+            })
+
+        base = manifest_entry.replace("\\", "/").rsplit("/", 1)[0]
+        base_prefix = f"{base}/" if base else ""
+        prefixes = [
+            base_prefix + "overrides",
+            base_prefix + "minecraft",
+            base_prefix + ".minecraft",
+            base_prefix + "instance",
+            base_prefix + "mmc-pack",
+        ]
+        copied = self._extract_overrides(archive, runtime_dir, prefixes)
+        if copied == 0:
+            copied = self._extract_prefix(archive, "", runtime_dir)
+
+        missing_report = self._write_missing_report(version_id)
+        return {
+            "version": version_id,
+            "alias": pack_name,
+            "minecraft": minecraft_version,
+            "loader": loader_key,
+            "message": f"{pack_kind} 整合包已导入：覆写 {copied} 个文件，缺失 {len(self.missing_files)} 项。",
+            "missing_report": missing_report,
+        }
+
     def _install_modrinth(self, archive, index_entry):
         index = self._read_json(archive, index_entry)
         dependencies = index.get("dependencies", {})
         minecraft_version = dependencies.get("minecraft", "")
         pack_name = (index.get("name") or os.path.splitext(os.path.basename(self.pack_path))[0]).strip()
-        version_id = re.sub(r'[<>:"/\\|?*]+', "_", pack_name) or f"Modrinth-{minecraft_version}"
+        version_id = sanitize_filename(pack_name, f"Modrinth-{minecraft_version}")
         runtime_dir = os.path.join(self.game_dir, "versions", version_id)
         os.makedirs(runtime_dir, exist_ok=True)
+
+        self.status.emit("正在准备基础版本和加载器...")
+        loader_key = next((key for key in ("fabric-loader", "forge", "neoforge", "quilt-loader") if dependencies.get(key)), "")
+        self._ensure_minecraft_version(minecraft_version)
+        installed_base_version = self._install_declared_loader(minecraft_version, loader_key)
+        self._write_imported_version(version_id, minecraft_version, installed_base_version)
 
         self.status.emit("正在解压 overrides...")
         base = index_entry.replace("\\", "/").rsplit("/", 1)[0]
         base_prefix = f"{base}/" if base else ""
-        self._extract_prefix(archive, base_prefix + "overrides", runtime_dir)
-        self._extract_prefix(archive, base_prefix + "client-overrides", runtime_dir)
+        copied = self._extract_overrides(archive, runtime_dir, [base_prefix + "overrides", base_prefix + "client-overrides"])
 
         files = index.get("files", [])
         for idx, item in enumerate(files, start=1):
@@ -1096,43 +2444,64 @@ class ModpackImportWorker(QObject):
                 continue
             self.status.emit(f"正在下载整合包文件 {idx}/{len(files)}：{os.path.basename(path)}")
             self.progress.emit(min(95, int(idx / max(len(files), 1) * 90)))
-            self._download_file(downloads[0], self._safe_join(runtime_dir, path))
+            try:
+                self._download_file(downloads[0], self._safe_join(runtime_dir, path))
+            except Exception as exc:
+                self.missing_files.append({"path": path, "downloads": downloads, "reason": str(exc)})
+
+        missing_report = self._write_missing_report(version_id)
 
         return {
             "version": version_id,
             "alias": pack_name,
             "minecraft": minecraft_version,
-            "loader": next((key for key in ("fabric-loader", "forge", "neoforge", "quilt-loader") if dependencies.get(key)), ""),
-            "message": f"Modrinth 整合包已导入：{pack_name}",
+            "loader": loader_key,
+            "message": f"Modrinth 整合包已导入：{pack_name}，覆写 {copied} 个文件，缺失 {len(self.missing_files)} 项",
+            "missing_report": missing_report,
         }
 
     def _install_curseforge(self, archive, manifest_entry):
         manifest = self._read_json(archive, manifest_entry)
         minecraft_version = manifest.get("minecraft", {}).get("version", "")
         pack_name = (manifest.get("name") or os.path.splitext(os.path.basename(self.pack_path))[0]).strip()
-        version_id = re.sub(r'[<>:"/\\|?*]+', "_", pack_name) or f"CurseForge-{minecraft_version}"
+        version_id = sanitize_filename(pack_name, f"CurseForge-{minecraft_version}")
         runtime_dir = os.path.join(self.game_dir, "versions", version_id)
         os.makedirs(runtime_dir, exist_ok=True)
+
+        mod_loaders = manifest.get("minecraft", {}).get("modLoaders", [])
+        primary_loader = next((item.get("id", "") for item in mod_loaders if item.get("primary")), "")
+        if not primary_loader and mod_loaders:
+            primary_loader = mod_loaders[0].get("id", "")
+        loader_key = primary_loader.split("-", 1)[0] if primary_loader else ""
+
+        self.status.emit("正在准备基础版本和加载器...")
+        self._ensure_minecraft_version(minecraft_version)
+        installed_base_version = self._install_declared_loader(minecraft_version, loader_key)
+        self._write_imported_version(version_id, minecraft_version, installed_base_version)
 
         override_dir = (manifest.get("overrides") or "overrides").strip("/\\")
         base = manifest_entry.replace("\\", "/").rsplit("/", 1)[0]
         base_prefix = f"{base}/" if base else ""
         copied = self._extract_prefix(archive, base_prefix + override_dir, runtime_dir)
-        file_count = len(manifest.get("files", []))
+        files = manifest.get("files", [])
+        downloaded, optional = self._download_curseforge_files(files, runtime_dir)
+        missing_report = self._write_missing_report(version_id)
         return {
             "version": version_id,
             "alias": pack_name,
             "minecraft": minecraft_version,
-            "loader": "",
-            "message": f"CurseForge 整合包已导入 overrides（{copied} 个文件）。外部 Mod 清单 {file_count} 项需后续下载支持。",
+            "loader": loader_key,
+            "message": f"CurseForge 整合包已导入：覆写 {copied} 个，下载 {downloaded} 个，可选 {optional} 个，缺失 {len(self.missing_files)} 项。",
+            "missing_report": missing_report,
         }
 
     def _install_plain_zip(self, archive):
         pack_name = os.path.splitext(os.path.basename(self.pack_path))[0].strip()
-        version_id = re.sub(r'[<>:"/\\|?*]+', "_", pack_name) or "ImportedPack"
+        version_id = sanitize_filename(pack_name, "ImportedPack")
         runtime_dir = os.path.join(self.game_dir, "versions", version_id)
         os.makedirs(runtime_dir, exist_ok=True)
         copied = self._extract_prefix(archive, "", runtime_dir)
+        self._write_missing_report(version_id)
         return {
             "version": version_id,
             "alias": pack_name,
@@ -1150,16 +2519,382 @@ class ModpackImportWorker(QObject):
             with zipfile.ZipFile(self.pack_path, "r") as archive:
                 modrinth_entry = self._find_entry(archive, ["modrinth.index.json"])
                 manifest_entry = self._find_entry(archive, ["manifest.json"])
+                mmc_entry = self._find_entry(archive, ["mmc-pack.json", "instance.cfg"])
+                hmcl_entry = self._find_entry(archive, ["modpack.json", "hmcl.json"])
+                mcbbs_entry = self._find_entry(archive, ["mcbbs.packmeta", "mcbbs-pack.json", "pack.json"])
                 if modrinth_entry:
                     payload = self._install_modrinth(archive, modrinth_entry)
                 elif manifest_entry:
                     payload = self._install_curseforge(archive, manifest_entry)
+                elif mmc_entry:
+                    payload = self._install_generic_manifest_pack(archive, mmc_entry, "MMC")
+                elif hmcl_entry:
+                    payload = self._install_generic_manifest_pack(archive, hmcl_entry, "HMCL")
+                elif mcbbs_entry:
+                    payload = self._install_generic_manifest_pack(archive, mcbbs_entry, "MCBBS")
                 else:
                     payload = self._install_plain_zip(archive)
             self.progress.emit(100)
             self.finished.emit(payload)
         except Exception as exc:
             self.failed.emit(str(exc))
+
+
+class ResourceSearchWorker(QObject):
+    status = Signal(str)
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, query, resource_type, game_version, loader, source="modrinth", sort_index="relevance", target_dir=""):
+        super().__init__()
+        self.query = query
+        self.resource_type = resource_type
+        self.game_version = game_version
+        self.loader = loader
+        self.source = source
+        self.sort_index = sort_index
+        self.target_dir = target_dir
+
+    def run(self):
+        try:
+            logger.info(
+                "ResourceSearchWorker started: source=%s query=%s type=%s game=%s loader=%s sort=%s target=%s",
+                self.source,
+                self.query,
+                self.resource_type,
+                self.game_version or "<any>",
+                self.loader or "<any>",
+                self.sort_index,
+                self.target_dir,
+            )
+            self.status.emit("正在搜索资源市场...")
+            if self.source == "modrinth":
+                hits = search_modrinth_resources(
+                    self.query,
+                    self.resource_type,
+                    self.game_version,
+                    self.loader,
+                    index=self.sort_index,
+                )
+            elif self.source == "curseforge":
+                hits = search_curseforge_resources(self.query, self.resource_type, self.game_version, self.loader)
+            elif self.source == "local":
+                hits = list_local_resources(self.query, self.resource_type, self.target_dir)
+            else:
+                raise RuntimeError(f"不支持的资源来源：{self.source}")
+            for hit in hits:
+                hit["target_game_version"] = self.game_version
+                hit["target_loader"] = self.loader
+                hit["compatible"] = True
+                if self.source == "modrinth":
+                    search_hint_compatible = hit_has_modrinth_compatibility(
+                        hit,
+                        self.resource_type,
+                        self.game_version,
+                        self.loader,
+                    )
+                    hit["compatibility_unverified"] = True
+                    hit["compatibility_checking"] = True
+                    if not search_hint_compatible:
+                        hit["compatibility_hint"] = "搜索结果未列出目标版本或加载器，安装时会重新确认"
+            compatible_count = sum(1 for hit in hits if hit.get("compatible", True))
+            unverified_count = sum(1 for hit in hits if hit.get("compatibility_unverified"))
+            logger.info(
+                "ResourceSearchWorker finished: source=%s query=%s hits=%d compatible=%d unverified=%d",
+                self.source,
+                self.query,
+                len(hits),
+                compatible_count,
+                unverified_count,
+            )
+            self.finished.emit({
+                "resource_type": self.resource_type,
+                "query": self.query,
+                "source": self.source,
+                "hits": hits,
+            })
+        except Exception as exc:
+            logger.exception("ResourceSearchWorker failed: source=%s query=%s", self.source, self.query)
+            self.failed.emit(str(exc))
+
+
+class ResourceCompatibilityWorker(QObject):
+    checked = Signal(dict)
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, hits, resource_type, game_version, loader, generation=0):
+        super().__init__()
+        self.hits = [dict(hit) for hit in hits]
+        self.resource_type = resource_type
+        self.game_version = game_version
+        self.loader = loader
+        self.generation = generation
+
+    def run(self):
+        checked_count = 0
+        compatible_count = 0
+        try:
+            logger.info(
+                "ResourceCompatibilityWorker started: hits=%d type=%s game=%s loader=%s",
+                len(self.hits),
+                self.resource_type,
+                self.game_version or "<any>",
+                self.loader or "<any>",
+            )
+            for index, hit in enumerate(self.hits):
+                thread = QThread.currentThread()
+                if thread.isInterruptionRequested():
+                    logger.info("ResourceCompatibilityWorker interrupted: checked=%d", checked_count)
+                    break
+                project_id = hit.get("project_id") or hit.get("slug")
+                if hit.get("source") != "modrinth" or not project_id:
+                    continue
+                updated = dict(hit)
+                updated["compatibility_index"] = index
+                try:
+                    compatible_version = find_compatible_modrinth_version(
+                        project_id,
+                        self.resource_type,
+                        self.game_version,
+                        self.loader,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to verify Modrinth compatibility: project=%s game=%s loader=%s error=%s",
+                        project_id,
+                        self.game_version,
+                        self.loader,
+                        exc,
+                    )
+                    compatible_version = None
+                    updated["compatibility_error"] = str(exc)
+                checked_count += 1
+                updated["compatibility_generation"] = self.generation
+                updated["compatibility_checking"] = False
+                updated["compatibility_unverified"] = False
+                updated["compatible"] = bool(compatible_version)
+                if compatible_version:
+                    compatible_count += 1
+                    updated["compatible_version"] = compatible_version.get("version_number", "")
+                    updated.pop("compatibility_error", None)
+                else:
+                    updated["compatible_version"] = ""
+                self.checked.emit(updated)
+            logger.info(
+                "ResourceCompatibilityWorker finished: checked=%d compatible=%d",
+                checked_count,
+                compatible_count,
+            )
+            self.finished.emit({"checked": checked_count, "compatible": compatible_count, "generation": self.generation})
+        except Exception as exc:
+            logger.exception("ResourceCompatibilityWorker failed")
+            self.failed.emit(str(exc))
+
+
+class ResourceDetailWorker(QObject):
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, hit, resource_type, game_version, loader):
+        super().__init__()
+        self.hit = dict(hit)
+        self.resource_type = resource_type
+        self.game_version = game_version
+        self.loader = loader
+
+    def run(self):
+        try:
+            source = self.hit.get("source", "modrinth")
+            logger.info(
+                "ResourceDetailWorker started: source=%s project=%s type=%s game=%s loader=%s",
+                source,
+                self.hit.get("project_id") or self.hit.get("slug") or self.hit.get("path"),
+                self.resource_type,
+                self.game_version or "<any>",
+                self.loader or "<any>",
+            )
+            if source == "modrinth":
+                detail = get_modrinth_resource_detail(
+                    self.hit.get("project_id") or self.hit.get("slug"),
+                    self.resource_type,
+                    self.game_version,
+                    self.loader,
+                )
+            elif source == "curseforge":
+                detail = get_curseforge_resource_detail(self.hit.get("project_id"))
+            elif source == "local":
+                detail = get_local_resource_detail(self.hit.get("path") or self.hit.get("project_id"))
+            else:
+                raise RuntimeError(f"不支持的资源来源：{source}")
+            detail["hit"] = self.hit
+            cached_screenshots = []
+            for screenshot in detail.get("screenshots", [])[:5]:
+                try:
+                    cached = cache_resource_screenshot(screenshot)
+                except Exception:
+                    cached = ""
+                cached_screenshots.append({
+                    "url": screenshot,
+                    "path": cached,
+                })
+            detail["screenshots"] = cached_screenshots
+            logger.info(
+                "ResourceDetailWorker finished: source=%s title=%s versions=%d screenshots=%d",
+                source,
+                detail.get("title", ""),
+                len(detail.get("versions", [])),
+                len(detail.get("screenshots", [])),
+            )
+            self.finished.emit(detail)
+        except Exception as exc:
+            logger.exception(
+                "ResourceDetailWorker failed: source=%s project=%s",
+                self.hit.get("source", "modrinth"),
+                self.hit.get("project_id") or self.hit.get("slug") or self.hit.get("path"),
+            )
+            self.failed.emit(str(exc))
+
+
+class ResourceInstallWorker(QObject):
+    progress = Signal(int)
+    metrics = Signal(dict)
+    status = Signal(str)
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, project_id, title, resource_type, game_version, loader, target_dir, source="modrinth", install_dependencies=False):
+        super().__init__()
+        self.project_id = project_id
+        self.title = title
+        self.resource_type = resource_type
+        self.game_version = game_version
+        self.loader = loader
+        self.target_dir = target_dir
+        self.source = source
+        self.install_dependencies = install_dependencies
+
+    def run(self):
+        try:
+            logger.info(
+                "ResourceInstallWorker started: source=%s project=%s title=%s type=%s game=%s loader=%s target=%s dependencies=%s",
+                self.source,
+                self.project_id,
+                self.title,
+                self.resource_type,
+                self.game_version or "<any>",
+                self.loader or "<any>",
+                self.target_dir,
+                self.install_dependencies,
+            )
+            if self.source != "modrinth":
+                raise RuntimeError("当前只支持从 Modrinth 一键安装；CurseForge 需要手动下载或使用整合包导入。")
+            self.status.emit(f"正在安装资源：{self.title}")
+            self.progress.emit(20)
+
+            def on_progress(snapshot):
+                value = snapshot.get("progress", 0.0)
+                self.progress.emit(max(20, min(96, int(20 + value * 76))))
+                self.metrics.emit(snapshot)
+
+            payload = install_modrinth_resource(
+                self.project_id,
+                self.resource_type,
+                self.game_version,
+                self.loader,
+                self.target_dir,
+                install_dependencies=self.install_dependencies,
+                status_callback=self.status.emit,
+                progress_callback=on_progress,
+            )
+            payload.update({
+                "project_id": self.project_id,
+                "title": self.title,
+                "resource_type": self.resource_type,
+                "source": self.source,
+            })
+            self.progress.emit(100)
+            logger.info("ResourceInstallWorker finished: project=%s payload=%s", self.project_id, payload)
+            self.finished.emit(payload)
+        except Exception as exc:
+            logger.exception("ResourceInstallWorker failed: source=%s project=%s", self.source, self.project_id)
+            self.failed.emit(str(exc))
+
+
+class AuthlibInjectorDownloadWorker(QObject):
+    progress = Signal(int)
+    status = Signal(str)
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, install_dir):
+        super().__init__()
+        self.install_dir = os.path.abspath(install_dir)
+
+    def run(self):
+        try:
+            self.status.emit("正在获取 authlib-injector 下载信息...")
+            url, filename, _ = authlib_injector_download_url()
+            os.makedirs(self.install_dir, exist_ok=True)
+            target_path = os.path.join(self.install_dir, sanitize_filename(filename, "authlib-injector.jar"))
+
+            def on_progress(snapshot):
+                self.progress.emit(max(0, min(100, int(snapshot.get("progress", 0.0) * 100))))
+                self.status.emit(f"{snapshot.get('phase', '下载 authlib-injector')}：{snapshot.get('current_file', filename)}")
+
+            stream_download(url, target_path, on_progress, "下载 authlib-injector")
+            self.progress.emit(100)
+            self.finished.emit({"path": target_path})
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class JavaDownloadWorker(QObject):
+    progress = Signal(int)
+    status = Signal(str)
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, major_version, install_root):
+        super().__init__()
+        self.major_version = int(major_version)
+        self.install_root = os.path.abspath(install_root)
+
+    def run(self):
+        temp_dir = tempfile.mkdtemp(prefix="mcgo-java-")
+        try:
+            self.status.emit(f"正在获取 Java {self.major_version} 下载信息...")
+            url, filename = java_runtime_download_url(self.major_version)
+            archive_path = os.path.join(temp_dir, filename)
+
+            def progress_callback(snapshot):
+                value = snapshot.get("progress", 0.0)
+                self.progress.emit(max(0, min(90, int(value * 90))))
+                current = snapshot.get("current_file") or filename
+                self.status.emit(f"{snapshot.get('phase', '下载 Java')}：{current}")
+
+            self.status.emit(f"正在下载 Java {self.major_version}...")
+            stream_download(url, archive_path, progress_callback, f"下载 Java {self.major_version}")
+            target_dir = os.path.join(self.install_root, f"temurin-{self.major_version}")
+            if os.path.isdir(target_dir):
+                shutil.rmtree(target_dir)
+            os.makedirs(target_dir, exist_ok=True)
+            self.status.emit("正在解压 Java 运行时...")
+            self.progress.emit(94)
+            extract_java_archive(archive_path, target_dir)
+            java_path = find_java_in_directory(target_dir)
+            if not java_path:
+                raise RuntimeError("解压完成但未找到 Java 可执行文件。")
+            self.progress.emit(100)
+            self.finished.emit({
+                "major": self.major_version,
+                "java_path": os.path.abspath(java_path),
+                "install_dir": target_dir,
+            })
+        except Exception as exc:
+            self.failed.emit(str(exc))
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 class AuthWorker(QObject):
@@ -1174,6 +2909,7 @@ class AuthWorker(QObject):
 
     def run(self):
         try:
+            logger.info("AuthWorker started: auto_open_browser=%s", self.auto_open_browser)
             login_url = authenticator.get_login_url()
             self.login_url_ready.emit(login_url)
             authenticator.authorization_code = None
@@ -1184,8 +2920,10 @@ class AuthWorker(QObject):
                 self.status.emit("请手动打开登录链接完成 Microsoft 登录...")
             while authenticator.authorization_code is None:
                 QThread.msleep(500)
+            logger.info("Microsoft authorization code detected, exchanging tokens")
             asyncio.run(authenticator.authenticate())
             uuid, username, _ = asyncio.run(authenticator.get_minecraft_profile())
+            logger.info("AuthWorker finished: username=%s uuid=%s", username, uuid)
             self.finished.emit({
                 "id": str(uuidlib.uuid4()),
                 "type": "microsoft",
@@ -1196,6 +2934,7 @@ class AuthWorker(QObject):
                 "refresh_token": authenticator.refresh_token,
             })
         except Exception as e:
+            logger.exception("AuthWorker failed")
             self.failed.emit(str(e))
 
 
@@ -1213,6 +2952,13 @@ class ScanWorker(QObject):
 
     def run(self):
         try:
+            logger.info(
+                "ScanWorker started: task=%s game_dir=%s version_type=%s mirror=%s",
+                self.task_type,
+                self.game_dir,
+                self.version_type,
+                self.mirror_source,
+            )
             if self.task_type == "java":
                 self.status.emit("正在扫描 Java...")
                 paths = find_java_paths()
@@ -1235,8 +2981,10 @@ class ScanWorker(QObject):
                 }
             else:
                 raise RuntimeError(f"未知扫描任务：{self.task_type}")
+            logger.info("ScanWorker finished: task=%s payload_keys=%s", self.task_type, sorted(payload.keys()))
             self.finished.emit(payload)
         except Exception as exc:
+            logger.exception("ScanWorker failed: task=%s", self.task_type)
             self.failed.emit(str(exc))
 
 
@@ -1259,6 +3007,22 @@ class LaunchWorker(QObject):
     def run(self):
         try:
             account = dict(self.account)
+            logger.info(
+                "LaunchWorker started: version=%s java=%s game_dir=%s runtime=%s account=%s extra_jvm_args=%d",
+                self.version,
+                self.java_path,
+                self.game_dir,
+                self.runtime_directory,
+                redact_mapping({
+                    "id": account.get("id"),
+                    "type": account.get("type"),
+                    "username": account.get("username"),
+                    "uuid": account.get("uuid"),
+                    "access_token": account.get("access_token"),
+                    "refresh_token": account.get("refresh_token"),
+                }),
+                len(self.extra_jvm_args),
+            )
             username = account.get("username") or None
             uuid = account.get("uuid") or None
             token = account.get("access_token") or None
@@ -1268,7 +3032,7 @@ class LaunchWorker(QObject):
                     raise Exception("离线账号需要填写用户名。")
                 self.stage.emit("离线账号校验")
                 self.progress.emit(25)
-            else:
+            elif account.get("type") == "microsoft":
                 refresh_token = account.get("refresh_token", "")
                 if not refresh_token:
                     raise Exception("该 Microsoft 账号没有可用的刷新令牌，请重新登录。")
@@ -1284,10 +3048,27 @@ class LaunchWorker(QObject):
                 account["username"] = username
                 account["uuid"] = uuid
                 account["display_name"] = username
+            elif account.get("type") == "external":
+                if not username or not uuid or not token:
+                    raise Exception("外置登录账号缺少用户名、UUID 或 Access Token，请重新登录。")
+                self.stage.emit("外置登录校验")
+                self.progress.emit(18)
+                self.status.emit("正在刷新或验证外置登录状态...")
+                account = refresh_external_account(account)
+                username = account.get("username") or username
+                uuid = account.get("uuid") or uuid
+                token = account.get("access_token") or token
+                self.progress.emit(25)
+                self.status.emit("正在使用外置登录账号启动...")
+            else:
+                raise Exception(f"不支持的账号类型：{account.get('type')}")
 
             self.stage.emit("构建启动命令")
             self.progress.emit(70)
             self.status.emit(f"正在启动 Minecraft {self.version}...")
+            jvm_args = list(self.extra_jvm_args)
+            if account.get("type") == "external":
+                jvm_args = [*authlib_injector_args(account), *jvm_args]
             launched = launch_minecraft(
                 self.java_path,
                 self.version,
@@ -1296,19 +3077,21 @@ class LaunchWorker(QObject):
                 username,
                 uuid,
                 runtime_directory=self.runtime_directory,
-                extra_jvm_args=self.extra_jvm_args,
+                extra_jvm_args=jvm_args,
             )
             if not launched:
                 raise Exception(f"本地未找到版本 {self.version}，请先下载。")
 
             self.stage.emit("启动进程")
             self.progress.emit(100)
+            logger.info("LaunchWorker finished: version=%s username=%s", self.version, username)
             self.finished.emit({
                 "version": self.version,
                 "account": account,
                 "username": username,
             })
         except Exception as exc:
+            logger.exception("LaunchWorker failed: version=%s", self.version)
             self.failed.emit(str(exc))
 
 
@@ -1492,10 +3275,28 @@ class LauncherWindow(FluentWindow):
         self.repair_worker = None
         self.modpack_thread = None
         self.modpack_worker = None
+        self.resource_search_thread = None
+        self.resource_search_worker = None
+        self.resource_compat_thread = None
+        self.resource_compat_worker = None
+        self.resource_search_generation = 0
+        self.resource_detail_thread = None
+        self.resource_detail_worker = None
+        self.resource_install_thread = None
+        self.resource_install_worker = None
+        self.resource_search_hits = []
+        self.authlib_download_thread = None
+        self.authlib_download_worker = None
+        self.java_download_thread = None
+        self.java_download_worker = None
         self.auth_thread = None
         self.auth_worker = None
         self.launch_thread = None
         self.launch_worker = None
+        self.download_task_queue = deque()
+        self.active_download_task = None
+        self.last_failed_download_task = None
+        self.canceling_download_task = False
         self.scan_threads = {}
         self.scan_workers = {}
         self.scan_feedback_tasks = set()
@@ -1506,6 +3307,7 @@ class LauncherWindow(FluentWindow):
         self.manage_account_index_ids = []
         self.delete_account_index_ids = []
         self.version_display_ids = []
+        self.resource_version_ids = []
         self.selected_account_id = config.get("ACCOUNTS", "selected_account_id", fallback="")
         self.setWindowTitle("McGo")
         self.resize(1120, 760)
@@ -1523,6 +3325,7 @@ class LauncherWindow(FluentWindow):
 
         self.build_controls()
         self.build_pages()
+        self.apply_theme_image()
         self.init_navigation()
         self.refresh_account_selector()
         self.remote_version_combo.addItem("点击刷新远程版本")
@@ -1558,8 +3361,12 @@ class LauncherWindow(FluentWindow):
         self.java_combo = NativeComboBox()
         self.java_combo.currentTextChanged.connect(self.on_java_selected)
         self.java_version_label = BodyLabel("未选择 Java")
+        self.java_download_status_label = CaptionLabel("可自动下载当前版本推荐的 Java 运行时")
+        self.java_download_progress_bar = ProgressBar()
+        self.java_download_progress_bar.setRange(0, 100)
+        self.java_download_progress_bar.setValue(0)
         self.version_category_combo = NativeComboBox()
-        self.version_category_combo.addItems(["全部版本", "原版", "仅 OptiFine", "可安装 Mod"])
+        self.version_category_combo.addItems(["全部版本", "收藏", "原版", "仅 OptiFine", "可安装 Mod", "隐藏"])
         self.version_category_combo.currentTextChanged.connect(lambda _: self.refresh_local_versions(show_feedback=False))
         self.version_display_combo = NativeComboBox()
         self.version_display_combo.currentTextChanged.connect(self.on_version_display_selected)
@@ -1577,7 +3384,7 @@ class LauncherWindow(FluentWindow):
         self.mirror_combo.addItems(list(MIRROR_SOURCES.keys()))
         self.mirror_combo.setCurrentText(config.get("DOWNLOAD", "mirror_source", fallback="official"))
         self.login_mode_combo = NativeComboBox()
-        self.login_mode_combo.addItems(["offline", "microsoft"])
+        self.login_mode_combo.addItems(["offline", "microsoft", "external"])
         self.login_mode_combo.setCurrentText("microsoft" if config.getboolean("AUTH", "use_microsoft_login", fallback=False) else "offline")
         self.login_mode_combo.currentTextChanged.connect(self.update_account_field_visibility)
         self.account_combo = NativeComboBox()
@@ -1590,9 +3397,24 @@ class LauncherWindow(FluentWindow):
         self.uuid_input.setText(config.get("USER", "uuid", fallback=""))
         self.access_token_input = PasswordLineEdit()
         self.access_token_input.setText(config.get("USER", "accessToken", fallback=""))
+        self.external_server_input = LineEdit()
+        self.external_server_input.setPlaceholderText("https://example.com/api/yggdrasil")
+        self.external_username_input = LineEdit()
+        self.external_username_input.setPlaceholderText("外置登录用户名或邮箱")
+        self.external_password_input = PasswordLineEdit()
+        self.external_password_input.setPlaceholderText("密码不会保存")
+        self.authlib_injector_input = LineEdit()
+        self.authlib_injector_input.setPlaceholderText("authlib-injector.jar 路径")
         self.advanced_mode_check = CheckBox("高级模式：显示更多启动器选项")
         self.advanced_mode_check.setChecked(config.getboolean("UI", "advanced_mode", fallback=False))
         self.advanced_mode_check.stateChanged.connect(self.on_advanced_mode_changed)
+        self.theme_combo = NativeComboBox()
+        self.theme_combo.addItems(["dark", "light", "auto"])
+        self.theme_combo.setCurrentText(config.get("UI", "theme", fallback="dark"))
+        self.theme_combo.currentTextChanged.connect(self.on_theme_changed)
+        self.theme_image_input = LineEdit()
+        self.theme_image_input.setText(config.get("UI", "theme_image", fallback=""))
+        self.theme_image_input.setPlaceholderText("可选：背景图片路径")
         self.auto_open_browser_check = CheckBox("Microsoft 登录时自动打开浏览器")
         self.auto_open_browser_check.setChecked(config.getboolean("AUTH", "auto_open_browser", fallback=True))
         self.resource_isolation_check = CheckBox("启用资源隔离（每个版本使用独立 versions/<版本名> 运行目录）")
@@ -1609,6 +3431,7 @@ class LauncherWindow(FluentWindow):
         self.progress_bar = ProgressBar()
         self.progress_bar.setRange(0, 100)
         self.download_metrics_label = BodyLabel("等待下载")
+        self.download_queue_label = BodyLabel("任务队列：空")
         self.install_status_label = BodyLabel("等待安装任务")
         self.install_metrics_label = BodyLabel("尚未开始安装")
         self.launch_status_label = BodyLabel("将根据游戏版本自动选择合适的 Java")
@@ -1620,6 +3443,10 @@ class LauncherWindow(FluentWindow):
         self.version_custom_dir_input = LineEdit()
         self.version_custom_dir_input.setPlaceholderText("留空则使用默认游戏目录或 versions/<版本名> 资源隔离目录")
         self.version_isolation_check = CheckBox("当前版本单独使用 versions/<版本名> 资源隔离目录")
+        self.version_favorite_check = CheckBox("收藏当前版本")
+        self.version_hidden_check = CheckBox("隐藏当前版本")
+        self.version_icon_combo = NativeComboBox()
+        self.version_icon_combo.addItems(VERSION_ICON_LABELS)
         self.version_mods_list = ListWidget()
         self.version_mods_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.version_mods_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -1663,6 +3490,34 @@ class LauncherWindow(FluentWindow):
             checkbox.stateChanged.connect(lambda _, current=install_type: self.on_download_addon_changed(current))
         self.download_addon_hint_label = CaptionLabel("可在下载原版后自动继续安装；Fabric API 仅在 Fabric 一起安装时可用。")
         self.download_warning_label = CaptionLabel("")
+        self.resource_query_input = LineEdit()
+        self.resource_query_input.setPlaceholderText("搜索 Mod、资源包、光影或数据包")
+        self.resource_source_combo = NativeComboBox()
+        self.resource_source_combo.addItems(["modrinth", "curseforge", "local"])
+        self.resource_source_combo.currentTextChanged.connect(self.update_resource_source_controls)
+        self.resource_sort_combo = NativeComboBox()
+        self.resource_sort_combo.addItems(list(RESOURCE_SEARCH_SORTS.keys()))
+        self.resource_dependency_check = CheckBox("安装 Modrinth 必需依赖")
+        self.resource_dependency_check.setChecked(True)
+        self.resource_type_combo = NativeComboBox()
+        self.resource_type_combo.addItems(["mod", "resourcepack", "shader", "datapack"])
+        self.resource_type_combo.currentTextChanged.connect(lambda _: self.refresh_resource_target_versions())
+        self.resource_version_combo = NativeComboBox()
+        self.resource_version_combo.currentTextChanged.connect(lambda _: self.resource_detail_view.clear())
+        self.resource_result_list = ListWidget()
+        self.resource_result_list.setMinimumHeight(320)
+        self.resource_result_list.setWordWrap(True)
+        self.resource_result_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.resource_result_list.itemDoubleClicked.connect(lambda _: self.install_selected_resource())
+        self.resource_result_list.currentItemChanged.connect(lambda *_: self.show_selected_resource_detail())
+        self.resource_status_label = BodyLabel("等待搜索")
+        self.resource_detail_loading = IndeterminateProgressRing()
+        self.resource_detail_loading.setFixedSize(28, 28)
+        self.resource_detail_loading.setVisible(False)
+        self.resource_detail_view = TextEdit()
+        self.resource_detail_view.setReadOnly(True)
+        self.resource_detail_view.setAcceptRichText(True)
+        self.resource_detail_view.setMinimumHeight(220)
 
     def build_pages(self):
         self.home_page = Page("homePage", "McGo", "一个 Fluent 风格的 Minecraft 启动器")
@@ -1815,6 +3670,8 @@ class LauncherWindow(FluentWindow):
         env_card, env_layout = self.make_card("运行环境", "通常无需手动调整；仅在需要切换 Java 或确认版本时查看")
         self.add_labeled_control(env_layout, "Java 路径", self.java_combo)
         env_layout.addWidget(self.java_version_label)
+        env_layout.addWidget(self.java_download_progress_bar)
+        env_layout.addWidget(self.java_download_status_label)
 
         nav_card = CardWidget()
         nav_layout = QVBoxLayout(nav_card)
@@ -1836,6 +3693,9 @@ class LauncherWindow(FluentWindow):
 
         personalization_card, personalization_layout = self.make_card("个性化", "显示名称会出现在版本列表中，便于区分 Forge、Fabric 等实例")
         self.add_labeled_control(personalization_layout, "显示名称", self.version_alias_input)
+        self.add_labeled_control(personalization_layout, "版本图标", self.version_icon_combo)
+        personalization_layout.addWidget(self.version_favorite_check)
+        personalization_layout.addWidget(self.version_hidden_check)
         personalization_row = QHBoxLayout()
         self.save_version_settings_button = PrimaryPushButton("保存当前版本设置")
         self.save_version_settings_button.clicked.connect(self.save_current_version_settings)
@@ -1854,14 +3714,20 @@ class LauncherWindow(FluentWindow):
         self.open_saves_button = PushButton("存档文件夹")
         self.open_mods_button = PushButton("Mod 文件夹")
         self.export_launch_script_button = PushButton("导出启动脚本")
+        self.export_modpack_button = PushButton("导出整合包")
+        self.analyze_crash_button = PushButton("分析崩溃")
         self.open_version_folder_button.clicked.connect(self.open_current_version_folder)
         self.open_saves_button.clicked.connect(self.open_current_saves_directory)
         self.open_mods_button.clicked.connect(self.open_current_mods_directory)
         self.export_launch_script_button.clicked.connect(self.export_current_launch_script)
+        self.export_modpack_button.clicked.connect(self.export_current_modpack)
+        self.analyze_crash_button.clicked.connect(self.analyze_current_crash)
         shortcut_row.addWidget(self.open_version_folder_button)
         shortcut_row.addWidget(self.open_saves_button)
         shortcut_row.addWidget(self.open_mods_button)
         shortcut_row.addWidget(self.export_launch_script_button)
+        shortcut_row.addWidget(self.export_modpack_button)
+        shortcut_row.addWidget(self.analyze_crash_button)
         shortcut_row.addStretch()
         shortcut_layout.addLayout(shortcut_row)
 
@@ -1875,6 +3741,14 @@ class LauncherWindow(FluentWindow):
         manage_row.addWidget(self.delete_version_button)
         manage_row.addStretch()
         manage_layout.addLayout(manage_row)
+        self.repair_progress_bar = ProgressBar()
+        self.repair_progress_bar.setRange(0, 100)
+        self.repair_progress_bar.setValue(0)
+        self.repair_status_label = BodyLabel("等待补全任务")
+        self.repair_metrics_label = CaptionLabel("会校验客户端、依赖库、资源文件和 natives")
+        manage_layout.addWidget(self.repair_progress_bar)
+        manage_layout.addWidget(self.repair_status_label)
+        manage_layout.addWidget(self.repair_metrics_label)
 
         mod_card, mod_card_layout = self.make_card("Mod 管理", "可安装 Mod 的版本会显示 mods 文件夹内的 jar")
         self.mod_section = QWidget()
@@ -1929,6 +3803,19 @@ class LauncherWindow(FluentWindow):
         progress_card, progress_layout = self.make_card("任务进度", "下载和扩展安装共用这一组进度与状态信息")
         progress_layout.addWidget(self.progress_bar)
         progress_layout.addWidget(self.download_metrics_label)
+        progress_layout.addWidget(self.download_queue_label)
+        task_row = QHBoxLayout()
+        self.cancel_task_button = PushButton("取消当前任务")
+        self.retry_task_button = PushButton("重试失败任务")
+        self.clear_queue_button = PushButton("清空队列")
+        self.cancel_task_button.clicked.connect(self.cancel_current_download_task)
+        self.retry_task_button.clicked.connect(self.retry_last_failed_download_task)
+        self.clear_queue_button.clicked.connect(self.clear_download_queue)
+        task_row.addWidget(self.cancel_task_button)
+        task_row.addWidget(self.retry_task_button)
+        task_row.addWidget(self.clear_queue_button)
+        task_row.addStretch()
+        progress_layout.addLayout(task_row)
 
         nav_card = CardWidget()
         nav_layout = QVBoxLayout(nav_card)
@@ -1943,6 +3830,7 @@ class LauncherWindow(FluentWindow):
         self.download_vanilla_view = QWidget()
         self.download_install_view = QWidget()
         self.download_modpack_view = QWidget()
+        self.download_resource_view = QWidget()
 
         download_card, download_layout = self.make_card("下载原版", "原版下载支持一并勾选后续安装项，减少重复操作")
         self.add_labeled_control(download_layout, "版本类型", self.version_type_combo)
@@ -1992,6 +3880,34 @@ class LauncherWindow(FluentWindow):
         modpack_row.addStretch()
         modpack_layout.addLayout(modpack_row)
 
+        resource_card, resource_layout = self.make_card("资源市场", "从 Modrinth、CurseForge 或本地目录搜索资源")
+        self.add_labeled_control(resource_layout, "来源", self.resource_source_combo)
+        self.add_labeled_control(resource_layout, "资源类型", self.resource_type_combo)
+        self.add_labeled_control(resource_layout, "安装到版本", self.resource_version_combo)
+        self.add_labeled_control(resource_layout, "排序", self.resource_sort_combo)
+        self.add_labeled_control(resource_layout, "关键词", self.resource_query_input)
+        resource_layout.addWidget(self.resource_dependency_check)
+        resource_row = QHBoxLayout()
+        self.search_resource_button = PrimaryPushButton("搜索资源")
+        self.install_resource_button = PushButton("安装选中资源")
+        self.resource_detail_button = PushButton("查看详情")
+        self.search_resource_button.clicked.connect(self.search_resources)
+        self.install_resource_button.clicked.connect(self.install_selected_resource)
+        self.resource_detail_button.clicked.connect(self.show_selected_resource_detail)
+        resource_row.addWidget(self.search_resource_button)
+        resource_row.addWidget(self.resource_detail_button)
+        resource_row.addWidget(self.install_resource_button)
+        resource_row.addStretch()
+        resource_layout.addLayout(resource_row)
+        resource_layout.addWidget(self.resource_status_label)
+        resource_layout.addWidget(self.resource_result_list)
+        detail_header = QHBoxLayout()
+        detail_header.addWidget(CaptionLabel("资源详情"))
+        detail_header.addWidget(self.resource_detail_loading)
+        detail_header.addStretch()
+        resource_layout.addLayout(detail_header)
+        resource_layout.addWidget(self.resource_detail_view)
+
         vanilla_layout = QVBoxLayout(self.download_vanilla_view)
         vanilla_layout.setContentsMargins(0, 0, 0, 0)
         vanilla_layout.addWidget(download_card)
@@ -2007,16 +3923,24 @@ class LauncherWindow(FluentWindow):
         modpack_view_layout.addWidget(modpack_card)
         modpack_view_layout.addStretch()
 
+        resource_view_layout = QVBoxLayout(self.download_resource_view)
+        resource_view_layout.setContentsMargins(0, 0, 0, 0)
+        resource_view_layout.addWidget(resource_card)
+        resource_view_layout.addStretch()
+
         self.download_stack.addWidget(self.download_vanilla_view)
         self.download_stack.addWidget(self.download_install_view)
         self.download_stack.addWidget(self.download_modpack_view)
+        self.download_stack.addWidget(self.download_resource_view)
         self.download_segment.addItem("vanilla", "下载原版", lambda: self.switch_download_section("vanilla"))
         self.download_segment.addItem("addons", "安装扩展", lambda: self.switch_download_section("addons"))
         self.download_segment.addItem("modpack", "导入整合包", lambda: self.switch_download_section("modpack"))
+        self.download_segment.addItem("resources", "资源市场", lambda: self.switch_download_section("resources"))
         self.download_segment.setCurrentItem("vanilla")
 
         self.update_install_button_text(self.install_type_combo.currentText())
         self.update_download_addon_controls()
+        self.update_resource_source_controls()
 
         self.download_page.layout.addWidget(progress_card)
         self.download_page.layout.addWidget(nav_card)
@@ -2038,6 +3962,7 @@ class LauncherWindow(FluentWindow):
         self.account_overview_view = QWidget()
         self.account_offline_view = QWidget()
         self.account_microsoft_view = QWidget()
+        self.account_external_view = QWidget()
 
         overview_card, overview_layout = self.make_card("当前账号", "集中处理当前使用账号、删除目标和全局保存")
         self.account_summary_label = BodyLabel("当前账号：未选择")
@@ -2080,6 +4005,27 @@ class LauncherWindow(FluentWindow):
         link_button_row.addStretch()
         microsoft_layout.addLayout(link_button_row)
 
+        external_card, external_layout = self.make_card("外置登录", "适用于支持 Yggdrasil / Authlib-Injector 的皮肤站或私有验证服务器")
+        self.external_server_row = self.add_labeled_control(external_layout, "认证服务器", self.external_server_input)
+        self.external_username_row = self.add_labeled_control(external_layout, "用户名/邮箱", self.external_username_input)
+        self.external_password_row = self.add_labeled_control(external_layout, "密码", self.external_password_input)
+        self.authlib_injector_row = self.add_labeled_control(external_layout, "Authlib Injector", self.authlib_injector_input)
+        external_row = QHBoxLayout()
+        choose_injector_button = PushButton("选择 Jar")
+        download_injector_button = PushButton("自动下载")
+        self.refresh_external_button = PushButton("刷新/验证当前外置账号")
+        add_external_button = PrimaryPushButton("登录并添加外置账号")
+        choose_injector_button.clicked.connect(self.choose_authlib_injector)
+        download_injector_button.clicked.connect(self.download_authlib_injector)
+        self.refresh_external_button.clicked.connect(self.refresh_current_external_account)
+        add_external_button.clicked.connect(self.add_external_account)
+        external_row.addWidget(choose_injector_button)
+        external_row.addWidget(download_injector_button)
+        external_row.addWidget(self.refresh_external_button)
+        external_row.addWidget(add_external_button)
+        external_row.addStretch()
+        external_layout.addLayout(external_row)
+
         overview_view_layout = QVBoxLayout(self.account_overview_view)
         overview_view_layout.setContentsMargins(0, 0, 0, 0)
         overview_view_layout.addWidget(overview_card)
@@ -2095,12 +4041,19 @@ class LauncherWindow(FluentWindow):
         microsoft_view_layout.addWidget(microsoft_card)
         microsoft_view_layout.addStretch()
 
+        external_view_layout = QVBoxLayout(self.account_external_view)
+        external_view_layout.setContentsMargins(0, 0, 0, 0)
+        external_view_layout.addWidget(external_card)
+        external_view_layout.addStretch()
+
         self.account_stack.addWidget(self.account_overview_view)
         self.account_stack.addWidget(self.account_offline_view)
         self.account_stack.addWidget(self.account_microsoft_view)
+        self.account_stack.addWidget(self.account_external_view)
         self.account_segment.addItem("overview", "当前账号", lambda: self.switch_account_section("overview"))
         self.account_segment.addItem("offline", "离线账号", lambda: self.switch_account_section("offline"))
         self.account_segment.addItem("microsoft", "Microsoft", lambda: self.switch_account_section("microsoft"))
+        self.account_segment.addItem("external", "外置登录", lambda: self.switch_account_section("external"))
         self.account_segment.setCurrentItem("overview")
 
         container = QWidget()
@@ -2115,21 +4068,29 @@ class LauncherWindow(FluentWindow):
         game_card, game_layout = self.make_card("环境与目录", "Java、游戏目录和隔离运行都放在这里")
         self.add_labeled_control(game_layout, "游戏目录", self.game_dir_input)
         game_layout.addWidget(self.advanced_mode_check)
+        self.add_labeled_control(game_layout, "界面主题", self.theme_combo)
+        self.add_labeled_control(game_layout, "主题背景图", self.theme_image_input)
         game_layout.addWidget(self.resource_isolation_check)
         self.add_labeled_control(game_layout, "Java 路径", self.java_combo)
         game_layout.addWidget(self.java_version_label)
         game_row = QHBoxLayout()
         choose_button = PushButton("选择目录")
         open_button = PushButton("打开目录")
+        theme_image_button = PushButton("选择背景图")
         refresh_java_button = PushButton("刷新 Java")
+        self.download_java_button = PushButton("下载推荐 Java")
         refresh_versions_button = PushButton("刷新本地版本")
         choose_button.clicked.connect(self.choose_game_directory)
         open_button.clicked.connect(self.open_game_directory)
+        theme_image_button.clicked.connect(self.choose_theme_image)
         refresh_java_button.clicked.connect(self.refresh_java_paths)
+        self.download_java_button.clicked.connect(self.download_recommended_java)
         refresh_versions_button.clicked.connect(self.refresh_local_versions)
         game_row.addWidget(choose_button)
         game_row.addWidget(open_button)
+        game_row.addWidget(theme_image_button)
         game_row.addWidget(refresh_java_button)
+        game_row.addWidget(self.download_java_button)
         game_row.addWidget(refresh_versions_button)
         game_row.addStretch()
         game_layout.addLayout(game_row)
@@ -2196,16 +4157,20 @@ class LauncherWindow(FluentWindow):
     def open_download_section(self, section_key):
         self.switch_main_page(self.download_page, self.download_cards)
         self.switch_download_section(section_key)
+        if section_key == "resources":
+            self.refresh_resource_target_versions()
 
     def open_version_section(self, section_key):
         self.switch_main_page(self.launch_page, self.launch_cards)
         self.switch_version_section(section_key)
 
     def log(self, message):
+        logger.info("UI: %s", message)
         self.status_log.append(message)
         self.motion.pulse_widget(self.status_log.viewport(), duration=220, start_opacity=0.66, throttle_key="status_log", min_interval=0.18)
 
     def log_install(self, message):
+        logger.info("INSTALL UI: %s", message)
         self.install_log.append(message)
         self.motion.pulse_widget(self.install_log.viewport(), duration=220, start_opacity=0.66, throttle_key="install_log", min_interval=0.12)
 
@@ -2245,7 +4210,7 @@ class LauncherWindow(FluentWindow):
         )
 
     def base_version_for(self, version_id):
-        return resolve_base_minecraft_version(self.current_game_dir(), version_id)
+        return normalize_minecraft_version_for_api(self.current_game_dir(), version_id)
 
     def version_matches_category(self, version_id, category):
         return version_matches_category(self.current_game_dir(), version_id, category)
@@ -2255,6 +4220,56 @@ class LauncherWindow(FluentWindow):
 
     def current_selected_version(self):
         return self.local_version_combo.currentText().strip()
+
+    def current_resource_version(self):
+        current_index = self.resource_version_combo.currentIndex() if hasattr(self, "resource_version_combo") else -1
+        if 0 <= current_index < len(self.resource_version_ids):
+            return self.resource_version_ids[current_index]
+        return self.current_selected_version()
+
+    def version_supports_resource_type(self, version_id, resource_type):
+        if resource_type == "mod":
+            return self.version_supports_mod_management(version_id)
+        return bool(version_id)
+
+    def resource_directory_for_version(self, version_id, resource_type):
+        return resource_directory_for_type(
+            self.current_game_dir(),
+            self.version_settings,
+            version_id,
+            resource_type,
+            global_isolation=self.resource_isolation_check.isChecked(),
+        )
+
+    def preferred_version_id(self, candidates=None):
+        candidates = list(candidates or [])
+        last_version = self.version_settings.get("_meta", {}).get("last_launched_version", "")
+        current_version = self.current_selected_version()
+        for version_id in (last_version, current_version):
+            if version_id and (not candidates or version_id in candidates):
+                return version_id
+        return candidates[0] if candidates else ""
+
+    def refresh_resource_target_versions(self, versions=None):
+        if not hasattr(self, "resource_version_combo"):
+            return
+        all_versions = list(versions) if versions is not None else [
+            self.local_version_combo.itemText(index)
+            for index in range(self.local_version_combo.count())
+        ]
+        resource_type = self.resource_type_combo.currentText().strip() if hasattr(self, "resource_type_combo") else "mod"
+        filtered = [
+            version_id for version_id in all_versions
+            if self.version_supports_resource_type(version_id, resource_type)
+        ]
+        preferred = self.preferred_version_id(filtered)
+        self.resource_version_combo.blockSignals(True)
+        self.resource_version_combo.clear()
+        self.resource_version_ids = list(filtered)
+        self.resource_version_combo.addItems([self.version_display_name(version_id) for version_id in filtered])
+        if preferred in filtered:
+            self.resource_version_combo.setCurrentIndex(filtered.index(preferred))
+        self.resource_version_combo.blockSignals(False)
 
     def on_version_display_selected(self, version_label):
         current_index = self.version_display_combo.currentIndex()
@@ -2269,6 +4284,10 @@ class LauncherWindow(FluentWindow):
         self.version_alias_input.setText(entry.get("alias", ""))
         self.version_jvm_args_input.setText(entry.get("jvm_args", ""))
         self.version_custom_dir_input.setText(entry.get("runtime_directory", ""))
+        self.version_favorite_check.setChecked(bool(entry.get("favorite", False)))
+        self.version_hidden_check.setChecked(bool(entry.get("hidden", False)))
+        icon = entry.get("icon", "自动")
+        self.version_icon_combo.setCurrentText(icon if icon in VERSION_ICON_LABELS else "自动")
         forced_isolation = self.resource_isolation_check.isChecked()
         self.version_isolation_check.setChecked(bool(forced_isolation or entry.get("use_isolated_directory", False)))
         self.version_isolation_check.setEnabled(not forced_isolation)
@@ -2283,6 +4302,8 @@ class LauncherWindow(FluentWindow):
         self.open_version_folder_button.setEnabled(has_version)
         self.open_saves_button.setEnabled(has_version)
         self.export_launch_script_button.setEnabled(has_version)
+        self.export_modpack_button.setEnabled(has_version)
+        self.analyze_crash_button.setEnabled(has_version)
         self.repair_version_button.setEnabled(has_version)
         self.delete_version_button.setEnabled(has_version)
 
@@ -2316,13 +4337,17 @@ class LauncherWindow(FluentWindow):
             f"运行目录：{runtime_directory}",
         ]
         summary.append(f"类型：{version_type_label(self.current_game_dir(), version_id)}")
+        if entry.get("favorite"):
+            summary.append("已收藏")
+        if entry.get("hidden"):
+            summary.append("已隐藏")
         self.version_summary_label.setText(" | ".join(summary))
         self.motion.fade_slide_in(self.version_summary_label, offset=8, duration=220)
 
     def save_current_version_settings(self):
-        version_id = self.current_selected_version()
+        version_id = self.current_resource_version()
         if not version_id:
-            self.show_warning("缺少版本", "请先选择一个本地版本。")
+            self.show_warning("缺少版本", "请先在资源市场里选择安装目标版本。")
             return
         entry = self.version_settings_entry(version_id)
         entry["alias"] = self.version_alias_input.text().strip()
@@ -2330,6 +4355,9 @@ class LauncherWindow(FluentWindow):
         entry["jvm_args"] = self.version_jvm_args_input.text().strip()
         entry["runtime_directory"] = self.version_custom_dir_input.text().strip()
         entry["use_isolated_directory"] = self.version_isolation_check.isChecked()
+        entry["favorite"] = self.version_favorite_check.isChecked()
+        entry["hidden"] = self.version_hidden_check.isChecked()
+        entry["icon"] = self.version_icon_combo.currentText().strip()
         save_version_settings(self.version_settings)
         self.refresh_local_versions(show_feedback=False)
         self.populate_version_settings_panel(version_id)
@@ -2386,6 +4414,9 @@ class LauncherWindow(FluentWindow):
     def current_saves_directory(self):
         version_id = self.current_selected_version()
         return os.path.join(self.runtime_directory_for_version(version_id), "saves") if version_id else ""
+
+    def current_resource_directory(self, resource_type):
+        return self.resource_directory_for_version(self.current_resource_version(), resource_type)
 
     def current_mod_item_path(self, item=None):
         current_item = item or self.version_mods_list.currentItem()
@@ -2471,6 +4502,9 @@ class LauncherWindow(FluentWindow):
             global_isolation=self.resource_isolation_check.isChecked(),
         )
         try:
+            extra_jvm_args = list(launch_options["extra_jvm_args"])
+            if account.get("type") == "external":
+                extra_jvm_args = [*authlib_injector_args(account), *extra_jvm_args]
             command = build_launch_command(
                 java_path,
                 version_id,
@@ -2479,7 +4513,7 @@ class LauncherWindow(FluentWindow):
                 username=account.get("username", ""),
                 uuid=account.get("uuid", ""),
                 runtime_directory=launch_options["runtime_directory"],
-                extra_jvm_args=launch_options["extra_jvm_args"],
+                extra_jvm_args=extra_jvm_args,
             )
         except Exception as exc:
             self.show_warning("导出失败", str(exc))
@@ -2497,33 +4531,93 @@ class LauncherWindow(FluentWindow):
         self.show_success("启动脚本已导出", script_path)
         self.log(f"已导出启动脚本：{script_path}")
 
+    def export_current_modpack(self):
+        version_id = self.current_resource_version()
+        if not version_id:
+            self.show_warning("缺少版本", "请先在资源市场里选择安装目标版本。")
+            return
+
+        default_name = sanitize_filename(self.version_display_name(version_id), version_id)
+        target_path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "导出整合包",
+            os.path.join(self.current_game_dir(), f"{default_name}.mrpack"),
+            "Modrinth 整合包 (*.mrpack);;CurseForge manifest 包 (*.zip);;普通 zip (*.zip)",
+        )
+        if not target_path:
+            return
+        selected_filter = selected_filter or ""
+        if not os.path.splitext(target_path)[1]:
+            target_path += ".mrpack" if "Modrinth" in selected_filter else ".zip"
+        pack_format = "modrinth"
+        if "CurseForge" in selected_filter:
+            pack_format = "curseforge"
+        elif "普通" in selected_filter:
+            pack_format = "zip"
+
+        try:
+            added = export_modpack(
+                self.current_game_dir(),
+                self.version_settings,
+                version_id,
+                target_path,
+                pack_format=pack_format,
+                global_isolation=self.resource_isolation_check.isChecked(),
+            )
+        except Exception as exc:
+            self.show_warning("导出失败", str(exc))
+            self.log(f"整合包导出失败：{exc}")
+            return
+
+        self.show_success("导出完成", f"已写入 {added} 个文件：{target_path}")
+        self.log(f"整合包已导出：{target_path}")
+
+    def analyze_current_crash(self):
+        version_id = self.current_resource_version()
+        if not version_id:
+            self.show_warning("缺少版本", "请先在资源市场里选择安装目标版本。")
+            return
+        runtime_dir = self.runtime_directory_for_version(version_id)
+        result = analyze_crash_logs(self.current_game_dir(), version_id, runtime_dir)
+        self.repair_status_label.setText("崩溃分析完成")
+        self.repair_metrics_label.setText(result.splitlines()[0] if result else "无结果")
+        self.log("崩溃分析结果：\n" + result)
+        QMessageBox.information(self, "崩溃分析", result)
+
     def repair_current_version(self):
         if self.repair_thread and self.repair_thread.isRunning():
             self.show_warning("补全进行中", "当前已有补全任务在运行。")
             return
-        if self.download_thread and self.download_thread.isRunning():
-            self.show_warning("下载进行中", "请等待当前下载任务完成后再补全文件。")
-            return
-        if self.install_thread and self.install_thread.isRunning():
-            self.show_warning("安装进行中", "请等待当前安装任务完成后再补全文件。")
-            return
 
-        version_id = self.current_selected_version()
+        version_id = self.current_resource_version()
         if not version_id:
-            self.show_warning("缺少版本", "请先选择一个本地版本。")
+            self.show_warning("缺少版本", "请先在资源市场里选择安装目标版本。")
             return
-        self.progress_bar.setValue(0)
-        self.download_metrics_label.setText(f"准备补全 {version_id}...")
-        self.install_status_label.setText("正在校验版本完整性")
-        self.install_metrics_label.setText("等待校验任务返回进度")
+        mirror_key = self.mirror_combo.currentText()
+        game_dir = self.current_game_dir()
+        task = DownloadTask(
+            "repair",
+            f"补全版本文件 {version_id}",
+            lambda version_id=version_id,
+            mirror_key=mirror_key,
+            game_dir=game_dir: self._start_repair_task(version_id, mirror_key, game_dir),
+        )
+        self.queue_download_task(task)
+
+    def _start_repair_task(self, version_id, mirror_key, game_dir):
+        logger.info("Repair task starting from UI queue: version=%s mirror=%s game_dir=%s", version_id, mirror_key, game_dir)
+        self.repair_progress_bar.setValue(0)
+        self.repair_status_label.setText(f"准备补全 {version_id}...")
+        self.repair_metrics_label.setText("正在校验版本完整性")
         self.set_download_running(True)
+        self.show_info("开始补全", f"正在校验 {version_id} 的缺失文件。")
         self.repair_thread = QThread()
-        self.repair_worker = RepairWorker(version_id, self.mirror_combo.currentText(), self.current_game_dir())
+        self.repair_worker = RepairWorker(version_id, mirror_key, game_dir)
         self.repair_worker.moveToThread(self.repair_thread)
         self.repair_thread.started.connect(self.repair_worker.run)
-        self.repair_worker.progress.connect(self.progress_bar.setValue)
-        self.repair_worker.metrics.connect(self.update_download_metrics)
-        self.repair_worker.status.connect(self.on_install_status)
+        self.repair_worker.progress.connect(self.repair_progress_bar.setValue)
+        self.repair_worker.metrics.connect(self.update_repair_metrics)
+        self.repair_worker.status.connect(lambda message: self.repair_status_label.setText(message))
         self.repair_worker.finished.connect(self.on_repair_finished)
         self.repair_worker.failed.connect(self.on_repair_failed)
         self.repair_worker.finished.connect(self.repair_thread.quit)
@@ -2625,6 +4719,30 @@ class LauncherWindow(FluentWindow):
         self.download_metrics_label.setText(details)
         self.motion.pulse_widget(self.download_metrics_label, duration=210, start_opacity=0.5, throttle_key="download_metrics", min_interval=0.18)
 
+    def update_repair_metrics(self, snapshot):
+        progress = snapshot.get("progress", 0.0) * 100
+        phase = snapshot.get("phase", "补全中")
+        current_file = snapshot.get("current_file", "")
+        completed_files = snapshot.get("completed_files", 0)
+        total_files = snapshot.get("total_files", 0)
+        reused_files = snapshot.get("reused_files", 0)
+        downloaded_bytes = snapshot.get("downloaded_bytes", 0)
+        total_bytes = snapshot.get("total_bytes", 0)
+        speed_bytes = snapshot.get("speed_bytes", 0)
+
+        self.repair_status_label.setText(f"{phase} | {progress:.1f}%")
+        details = (
+            f"{self.format_bytes(downloaded_bytes)} / {self.format_bytes(total_bytes)} | "
+            f"{self.format_bytes(speed_bytes)}/s | "
+            f"{completed_files}/{total_files} 个文件"
+        )
+        if reused_files:
+            details += f" | 复用 {reused_files} 个"
+        if current_file:
+            details += f" | 当前: {current_file}"
+        self.repair_metrics_label.setText(details)
+        self.motion.pulse_widget(self.repair_status_label, duration=210, start_opacity=0.5, throttle_key="repair_status", min_interval=0.18)
+
     def update_install_metrics(self, snapshot):
         progress = snapshot.get("progress", 0.0) * 100
         phase = snapshot.get("phase", "安装中")
@@ -2649,6 +4767,145 @@ class LauncherWindow(FluentWindow):
         self.install_metrics_label.setText(details)
         self.motion.pulse_widget(self.install_metrics_label, duration=210, start_opacity=0.5, throttle_key="install_metrics", min_interval=0.14)
 
+    def update_resource_install_metrics(self, snapshot):
+        progress = snapshot.get("progress", 0.0) * 100
+        phase = snapshot.get("phase", "下载资源")
+        current_file = snapshot.get("current_file", "")
+        downloaded_bytes = snapshot.get("downloaded_bytes", 0)
+        total_bytes = snapshot.get("total_bytes", 0)
+        speed_bytes = snapshot.get("speed_bytes", 0)
+        details = (
+            f"{phase} | {progress:.1f}% | "
+            f"{self.format_bytes(downloaded_bytes)} / {self.format_bytes(total_bytes)} | "
+            f"{self.format_bytes(speed_bytes)}/s"
+        )
+        if current_file:
+            details += f" | 当前: {current_file}"
+        self.resource_status_label.setText(details)
+        self.download_metrics_label.setText(details)
+        self.motion.pulse_widget(self.resource_status_label, duration=210, start_opacity=0.5, throttle_key="resource_install_metrics", min_interval=0.16)
+
+    def is_download_task_running(self):
+        threads = (
+            self.download_thread,
+            self.install_thread,
+            self.modpack_thread,
+            self.resource_install_thread,
+            self.repair_thread,
+        )
+        return any(thread and thread.isRunning() for thread in threads)
+
+    def queue_download_task(self, task):
+        if self.is_download_task_running() or self.active_download_task:
+            self.download_task_queue.append(task)
+            logger.info(
+                "Download task queued: type=%s title=%s queue_size=%d active=%s",
+                task.task_type,
+                task.title,
+                len(self.download_task_queue),
+                self.active_download_task.title if self.active_download_task else "<thread-running>",
+            )
+            self.update_download_queue_label()
+            self.show_info("已加入队列", task.title)
+            return
+        logger.info("Download task starting immediately: type=%s title=%s", task.task_type, task.title)
+        self.start_download_task(task)
+
+    def start_download_task(self, task):
+        self.active_download_task = task
+        self.canceling_download_task = False
+        logger.info("Download task started: type=%s title=%s", task.task_type, task.title)
+        self.update_download_queue_label()
+        task.start()
+
+    def finish_download_task(self, failed=False):
+        task = self.active_download_task
+        if failed and self.active_download_task and not self.canceling_download_task:
+            self.last_failed_download_task = self.active_download_task
+        logger.info(
+            "Download task finished: type=%s title=%s failed=%s canceled=%s remaining_queue=%d",
+            task.task_type if task else "<none>",
+            task.title if task else "<none>",
+            failed,
+            self.canceling_download_task,
+            len(self.download_task_queue),
+        )
+        self.active_download_task = None
+        self.canceling_download_task = False
+        self.update_download_queue_label()
+        QTimer.singleShot(0, self.start_next_download_task)
+
+    def start_next_download_task(self):
+        if self.is_download_task_running():
+            if self.download_task_queue and not self.active_download_task:
+                logger.debug("Download task thread still running; retrying queue dispatch soon")
+                QTimer.singleShot(200, self.start_next_download_task)
+            self.update_download_queue_label()
+            return
+        if self.active_download_task or not self.download_task_queue:
+            self.update_download_queue_label()
+            return
+        logger.info("Dispatching next queued download task: queue_size=%d", len(self.download_task_queue))
+        self.start_download_task(self.download_task_queue.popleft())
+
+    def update_download_queue_label(self):
+        if not hasattr(self, "download_queue_label"):
+            return
+        active = self.active_download_task.title if self.active_download_task else "无"
+        queued = len(self.download_task_queue)
+        next_title = self.download_task_queue[0].title if self.download_task_queue else "无"
+        self.download_queue_label.setText(f"当前任务：{active} | 队列：{queued} | 下一个：{next_title}")
+        if hasattr(self, "cancel_task_button"):
+            self.cancel_task_button.setEnabled(self.is_download_task_running())
+        if hasattr(self, "retry_task_button"):
+            self.retry_task_button.setEnabled(self.last_failed_download_task is not None and not self.is_download_task_running())
+        if hasattr(self, "clear_queue_button"):
+            self.clear_queue_button.setEnabled(bool(self.download_task_queue))
+
+    def clear_download_queue(self):
+        count = len(self.download_task_queue)
+        self.download_task_queue.clear()
+        logger.info("Download task queue cleared: removed=%d", count)
+        self.update_download_queue_label()
+        self.show_info("队列已清空", f"已移除 {count} 个等待任务。")
+
+    def retry_last_failed_download_task(self):
+        if not self.last_failed_download_task:
+            self.show_warning("没有失败任务", "当前没有可以重试的下载任务。")
+            return
+        task = self.last_failed_download_task
+        self.last_failed_download_task = None
+        logger.info("Retrying failed download task: type=%s title=%s", task.task_type, task.title)
+        self.queue_download_task(task)
+        self.update_download_queue_label()
+
+    def cancel_current_download_task(self):
+        if not self.is_download_task_running():
+            self.show_warning("没有运行任务", "当前没有可取消的下载任务。")
+            return
+        self.canceling_download_task = True
+        logger.warning(
+            "Canceling current download task: active=%s queue_size=%d",
+            self.active_download_task.title if self.active_download_task else "<none>",
+            len(self.download_task_queue),
+        )
+        stopped = []
+        for name in ("download", "install", "modpack", "resource_install", "repair"):
+            thread = getattr(self, f"{name}_thread", None)
+            if thread and thread.isRunning():
+                thread.requestInterruption()
+                thread.quit()
+                if not thread.wait(1500):
+                    thread.terminate()
+                    thread.wait(1500)
+                stopped.append(name)
+        self.set_download_running(False)
+        self.progress_bar.setValue(0)
+        self.download_metrics_label.setText("任务已取消")
+        self.install_status_label.setText("当前任务已取消")
+        self.log(f"已取消任务：{', '.join(stopped) if stopped else '未知'}")
+        self.finish_download_task(failed=False)
+
     def set_download_running(self, running):
         if hasattr(self, "download_button"):
             self.download_button.setEnabled(not running)
@@ -2660,17 +4917,34 @@ class LauncherWindow(FluentWindow):
             self.refresh_install_versions_button.setEnabled(not running)
         if hasattr(self, "import_modpack_button"):
             self.import_modpack_button.setEnabled(not running)
+        if hasattr(self, "search_resource_button"):
+            self.search_resource_button.setEnabled(not running)
+        if hasattr(self, "resource_detail_button"):
+            self.resource_detail_button.setEnabled(not running)
+        if hasattr(self, "install_resource_button"):
+            self.install_resource_button.setEnabled(not running)
+            if not running:
+                self.update_resource_source_controls()
+        if hasattr(self, "resource_version_combo"):
+            self.resource_version_combo.setEnabled(not running)
         if hasattr(self, "repair_version_button"):
             self.repair_version_button.setEnabled(not running)
+        if hasattr(self, "export_modpack_button"):
+            self.export_modpack_button.setEnabled(not running)
+        if hasattr(self, "analyze_crash_button"):
+            self.analyze_crash_button.setEnabled(not running)
         if hasattr(self, "install_type_combo"):
             self.install_type_combo.setEnabled(not running)
         if hasattr(self, "install_version_combo"):
             self.install_version_combo.setEnabled(not running)
+        if hasattr(self, "download_java_button"):
+            self.download_java_button.setEnabled(not running)
         if hasattr(self, "download_loader_checks"):
             for checkbox in self.download_loader_checks.values():
                 checkbox.setEnabled(not running)
             if not running:
                 self.update_download_addon_controls()
+        self.update_download_queue_label()
 
     def set_launch_running(self, running):
         if hasattr(self, "launch_button"):
@@ -2800,14 +5074,19 @@ class LauncherWindow(FluentWindow):
         self.username_input.setText(account.get("username", ""))
         self.uuid_input.setText(account.get("uuid", ""))
         self.access_token_input.setText(account.get("access_token", ""))
+        if account.get("type") == "external":
+            self.external_server_input.setText(account.get("auth_server", ""))
+            self.external_username_input.setText(account.get("username", ""))
+            self.authlib_injector_input.setText(account.get("authlib_injector_path", ""))
         self.update_account_field_visibility()
 
     def update_account_field_visibility(self, *_):
         account = self.current_account()
         selected_mode = self.login_mode_combo.currentText()
-        account_type = selected_mode if selected_mode == "offline" else (account.get("type") if account else selected_mode)
+        account_type = selected_mode if selected_mode in {"offline", "external"} else (account.get("type") if account else selected_mode)
         is_offline = account_type == "offline"
         is_microsoft = account_type == "microsoft"
+        is_external = account_type == "external"
         advanced = self.advanced_mode_check.isChecked() if hasattr(self, "advanced_mode_check") else False
 
         if hasattr(self, "username_row"):
@@ -2822,11 +5101,16 @@ class LauncherWindow(FluentWindow):
         if hasattr(self, "login_link_button"):
             has_link = bool(self.login_link_input.text().strip()) if hasattr(self, "login_link_input") else False
             self.login_link_button.setVisible(is_microsoft and has_link)
+        for row_name in ("external_server_row", "external_username_row", "external_password_row", "authlib_injector_row"):
+            if hasattr(self, row_name):
+                getattr(self, row_name).setVisible(is_external)
         if hasattr(self, "account_segment"):
-            target = "offline" if is_offline else "microsoft"
+            target = "external" if is_external else ("offline" if is_offline else "microsoft")
             current_item = self.account_segment.currentItem()
             current_route = getattr(current_item, "routeKey", "") if current_item else ""
-            if current_route in {"offline", "microsoft"}:
+            if callable(current_route):
+                current_route = current_route()
+            if current_route in {"offline", "microsoft", "external"}:
                 self.switch_account_section(target)
 
     def switch_download_section(self, section_key):
@@ -2834,6 +5118,7 @@ class LauncherWindow(FluentWindow):
             "vanilla": 0,
             "addons": 1,
             "modpack": 2,
+            "resources": 3,
         }
         index = mapping.get(section_key, 0)
         if hasattr(self, "download_stack"):
@@ -2846,9 +5131,10 @@ class LauncherWindow(FluentWindow):
             "overview": 0,
             "offline": 1,
             "microsoft": 2,
+            "external": 3,
         }
         index = mapping.get(section_key, 0)
-        if section_key in {"offline", "microsoft"} and hasattr(self, "login_mode_combo"):
+        if section_key in {"offline", "microsoft", "external"} and hasattr(self, "login_mode_combo"):
             self.login_mode_combo.blockSignals(True)
             self.login_mode_combo.setCurrentText(section_key)
             self.login_mode_combo.blockSignals(False)
@@ -2862,6 +5148,58 @@ class LauncherWindow(FluentWindow):
         config["UI"]["advanced_mode"] = str(self.advanced_mode_check.isChecked())
         save_config()
         self.update_account_field_visibility()
+
+    def apply_theme(self, theme_name):
+        normalized = (theme_name or "dark").strip().lower()
+        if normalized == "light":
+            setTheme(Theme.LIGHT)
+        elif normalized == "auto":
+            setTheme(Theme.AUTO)
+        else:
+            setTheme(Theme.DARK)
+
+    def on_theme_changed(self, theme_name):
+        config["UI"]["theme"] = theme_name or "dark"
+        save_config()
+        self.apply_theme(theme_name)
+
+    def apply_theme_image(self):
+        path = self.theme_image_input.text().strip() if hasattr(self, "theme_image_input") else ""
+        if not path or not os.path.isfile(path):
+            self.setStyleSheet("""
+                Page, QWidget#homePage, QWidget#launchPage, QWidget#downloadPage, QWidget#settingsPage, QWidget#logPage {
+                    background: transparent;
+                }
+                CardWidget {
+                    border-radius: 12px;
+                }
+            """)
+            return
+        normalized = os.path.abspath(path).replace("\\", "/")
+        self.setStyleSheet(f"""
+            FluentWindow {{
+                border-image: url("{normalized}") 0 0 0 0 stretch stretch;
+            }}
+            Page, QWidget#homePage, QWidget#launchPage, QWidget#downloadPage, QWidget#settingsPage, QWidget#logPage {{
+                background: transparent;
+            }}
+            CardWidget {{
+                border-radius: 12px;
+            }}
+        """)
+
+    def choose_theme_image(self):
+        image_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择主题背景图",
+            "",
+            "图片文件 (*.png *.jpg *.jpeg *.webp *.bmp);;所有文件 (*.*)",
+        )
+        if image_path:
+            self.theme_image_input.setText(image_path)
+            config["UI"]["theme_image"] = image_path
+            save_config()
+            self.apply_theme_image()
 
     def upsert_account(self, account):
         for index, existing in enumerate(self.accounts):
@@ -2899,6 +5237,97 @@ class LauncherWindow(FluentWindow):
             "refresh_token": "",
         })
         self.show_success("账号已保存", f"离线账号 {username} 已保存。")
+
+    def choose_authlib_injector(self):
+        jar_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择 authlib-injector.jar",
+            "",
+            "Jar 文件 (*.jar);;所有文件 (*.*)",
+        )
+        if jar_path:
+            self.authlib_injector_input.setText(jar_path)
+
+    def download_authlib_injector(self):
+        if self.authlib_download_thread and self.authlib_download_thread.isRunning():
+            self.show_warning("下载进行中", "authlib-injector 正在下载。")
+            return
+        install_dir = os.path.join(self.current_game_dir(), "authlib-injector")
+        self.authlib_download_thread = QThread()
+        self.authlib_download_worker = AuthlibInjectorDownloadWorker(install_dir)
+        self.authlib_download_worker.moveToThread(self.authlib_download_thread)
+        self.authlib_download_thread.started.connect(self.authlib_download_worker.run)
+        self.authlib_download_worker.progress.connect(self.progress_bar.setValue)
+        self.authlib_download_worker.status.connect(self.log)
+        self.authlib_download_worker.finished.connect(self.on_authlib_injector_download_finished)
+        self.authlib_download_worker.failed.connect(self.on_authlib_injector_download_failed)
+        self.authlib_download_worker.finished.connect(self.authlib_download_thread.quit)
+        self.authlib_download_worker.failed.connect(self.authlib_download_thread.quit)
+        self.authlib_download_thread.start()
+
+    def on_authlib_injector_download_finished(self, payload):
+        path = payload.get("path", "")
+        self.authlib_injector_input.setText(path)
+        self.show_success("下载完成", f"authlib-injector 已保存：{path}")
+        self.log(f"authlib-injector 已下载：{path}")
+
+    def on_authlib_injector_download_failed(self, message):
+        self.show_warning("下载失败", message)
+        self.log(f"authlib-injector 下载失败：{message}")
+
+    def refresh_current_external_account(self):
+        account = self.current_account()
+        if not account or account.get("type") != "external":
+            self.show_warning("缺少外置账号", "请先选择一个外置登录账号。")
+            return
+        try:
+            account["auth_server"] = normalize_auth_server(self.external_server_input.text().strip() or account.get("auth_server", ""))
+            account["authlib_injector_path"] = self.authlib_injector_input.text().strip() or account.get("authlib_injector_path", "")
+            refreshed = refresh_external_account(account)
+        except Exception as exc:
+            self.show_warning("刷新失败", str(exc))
+            self.log(f"外置登录刷新失败：{exc}")
+            return
+        self.upsert_account(refreshed)
+        self.show_success("外置登录有效", account_label(refreshed))
+        self.log(f"外置登录已刷新/验证：{account_label(refreshed)}")
+
+    def add_external_account(self):
+        server = self.external_server_input.text().strip()
+        username = self.external_username_input.text().strip()
+        password = self.external_password_input.text()
+        injector_path = self.authlib_injector_input.text().strip()
+        if not injector_path or not os.path.isfile(injector_path):
+            self.show_warning("缺少 Authlib Injector", "请选择 authlib-injector.jar。")
+            return
+
+        try:
+            auth_payload = authenticate_external_account(server, username, password)
+        except Exception as exc:
+            self.show_warning("外置登录失败", str(exc))
+            self.log(f"外置登录失败：{exc}")
+            return
+
+        account_id = str(uuidlib.uuid4())
+        duplicate = self.find_duplicate_account("external", auth_payload.get("username", ""), auth_payload.get("uuid", ""))
+        if duplicate:
+            account_id = duplicate.get("id", account_id)
+        account = {
+            "id": account_id,
+            "type": "external",
+            "display_name": auth_payload.get("display_name", auth_payload.get("username", "")),
+            "username": auth_payload.get("username", ""),
+            "uuid": auth_payload.get("uuid", ""),
+            "access_token": auth_payload.get("access_token", ""),
+            "refresh_token": "",
+            "client_token": auth_payload.get("client_token", ""),
+            "auth_server": auth_payload.get("server", normalize_auth_server(server)),
+            "authlib_injector_path": injector_path,
+        }
+        self.external_password_input.clear()
+        self.upsert_account(account)
+        self.log(f"外置登录成功：{account_label(account)}")
+        self.show_success("外置登录成功", account_label(account))
 
     def delete_selected_account(self):
         account = self.current_delete_account()
@@ -3015,12 +5444,28 @@ class LauncherWindow(FluentWindow):
         if task == "local_versions":
             versions = payload.get("versions", [])
             show_feedback = self.should_show_scan_feedback(task)
+            previous_version = self.current_selected_version()
+            current_category = self.version_category_combo.currentText().strip() if hasattr(self, "version_category_combo") else "全部版本"
+            filtered = []
+            for version in versions:
+                entry = self.version_settings_entry(version)
+                hidden = bool(entry.get("hidden", False))
+                favorite = bool(entry.get("favorite", False))
+                if current_category == "隐藏":
+                    include = hidden
+                elif current_category == "收藏":
+                    include = favorite and not hidden
+                else:
+                    include = not hidden and self.version_matches_category(version, current_category)
+                if include:
+                    filtered.append(version)
+            filtered.sort(key=lambda item: (not self.version_settings_entry(item).get("favorite", False), item.lower()))
+            last_version = self.version_settings.get("_meta", {}).get("last_launched_version", "")
+            current_version = previous_version
+            self.local_version_combo.blockSignals(True)
             self.local_version_combo.clear()
             self.local_version_combo.addItems(versions)
-            current_category = self.version_category_combo.currentText().strip() if hasattr(self, "version_category_combo") else "全部版本"
-            filtered = [version for version in versions if self.version_matches_category(version, current_category)]
-            last_version = self.version_settings.get("_meta", {}).get("last_launched_version", "")
-            current_version = self.current_selected_version()
+            self.local_version_combo.blockSignals(False)
             self.version_display_combo.blockSignals(True)
             self.version_display_combo.clear()
             self.version_display_ids = list(filtered)
@@ -3041,6 +5486,7 @@ class LauncherWindow(FluentWindow):
                 if local_index >= 0:
                     self.local_version_combo.setCurrentIndex(local_index)
             self.refresh_install_versions(versions)
+            self.refresh_resource_target_versions(versions)
             self.motion.pulse_list(self.version_mods_list)
             self.log(f"本地版本数量：{len(versions)}")
             if versions:
@@ -3191,8 +5637,60 @@ class LauncherWindow(FluentWindow):
                     f"当前选择的是 Java {selected_java_major}，低于 Minecraft {version_id} 需要的 Java {required}"
                 )
 
+    def on_java_download_status(self, message):
+        self.java_download_status_label.setText(message)
+        self.motion.pulse_widget(self.java_download_status_label, duration=210, start_opacity=0.5, throttle_key="java_download_status", min_interval=0.2)
+
+    def on_java_download_finished(self, payload):
+        java_path = payload.get("java_path", "")
+        major = payload.get("major", "")
+        if java_path:
+            self.java_versions[java_path] = major
+            if self.java_combo.findText(java_path) < 0:
+                self.java_combo.addItem(java_path)
+            self.java_combo.setCurrentText(java_path)
+        self.java_download_progress_bar.setValue(100)
+        self.java_download_status_label.setText(f"Java {major} 已安装：{java_path}")
+        self.show_success("Java 已安装", f"Java {major} 已可用于启动。")
+        self.log(f"Java {major} 已安装：{java_path}")
+        self.update_home_summary()
+
+    def on_java_download_failed(self, message):
+        self.java_download_status_label.setText(f"Java 下载失败：{message}")
+        self.show_warning("Java 下载失败", message)
+        self.log(f"Java 下载失败：{message}")
+
     def refresh_java_paths(self, _checked=False, *, show_feedback=True):
         self.start_scan_task("java", show_feedback=show_feedback)
+
+    def download_recommended_java(self):
+        if self.java_download_thread and self.java_download_thread.isRunning():
+            self.show_warning("下载进行中", "当前已有 Java 下载任务在运行。")
+            return
+
+        version_id = self.current_selected_version()
+        required = self.get_required_java_version(version_id)
+        if not version_id:
+            self.show_warning("缺少版本", "请先选择一个本地版本。")
+            return
+        if not required:
+            self.show_warning("无法判断 Java", "当前版本没有可识别的 Java 需求。")
+            return
+
+        install_root = os.path.join(self.current_game_dir(), "java_runtimes")
+        self.java_download_progress_bar.setValue(0)
+        self.java_download_status_label.setText(f"准备下载 Java {required}...")
+        self.java_download_thread = QThread()
+        self.java_download_worker = JavaDownloadWorker(required, install_root)
+        self.java_download_worker.moveToThread(self.java_download_thread)
+        self.java_download_thread.started.connect(self.java_download_worker.run)
+        self.java_download_worker.progress.connect(self.java_download_progress_bar.setValue)
+        self.java_download_worker.status.connect(self.on_java_download_status)
+        self.java_download_worker.finished.connect(self.on_java_download_finished)
+        self.java_download_worker.failed.connect(self.on_java_download_failed)
+        self.java_download_worker.finished.connect(self.java_download_thread.quit)
+        self.java_download_worker.failed.connect(self.java_download_thread.quit)
+        self.java_download_thread.start()
 
     def update_java_version(self, path):
         if not path:
@@ -3306,13 +5804,20 @@ class LauncherWindow(FluentWindow):
                 account["uuid"] = self.uuid_input.text().strip()
                 account["access_token"] = self.access_token_input.text().strip()
                 self.upsert_account(account)
+            elif account.get("type") == "external":
+                account["auth_server"] = normalize_auth_server(self.external_server_input.text().strip() or account.get("auth_server", ""))
+                account["authlib_injector_path"] = self.authlib_injector_input.text().strip() or account.get("authlib_injector_path", "")
+                self.upsert_account(account)
             config["ACCOUNTS"]["selected_account_id"] = account.get("id", "")
         config["DOWNLOAD"]["mirror_source"] = self.mirror_combo.currentText()
         config["AUTH"]["auto_open_browser"] = str(self.auto_open_browser_check.isChecked())
         config["GAME"]["directory"] = self.current_game_dir()
         config["GAME"]["enable_resource_isolation"] = str(self.resource_isolation_check.isChecked())
         config["UI"]["advanced_mode"] = str(self.advanced_mode_check.isChecked())
+        config["UI"]["theme"] = self.theme_combo.currentText()
+        config["UI"]["theme_image"] = self.theme_image_input.text().strip()
         save_config()
+        self.apply_theme_image()
         self.log("设置已保存。")
         self.update_home_summary()
         if show_feedback:
@@ -3350,6 +5855,7 @@ class LauncherWindow(FluentWindow):
         self.auth_thread.start()
 
     def on_auth_finished(self, account):
+        logger.info("Auth finished in UI: account=%s", redact_mapping(account))
         duplicate = self.find_duplicate_account("microsoft", account.get("username", ""), account.get("uuid", ""))
         if duplicate:
             duplicate.update({
@@ -3368,6 +5874,7 @@ class LauncherWindow(FluentWindow):
         self.show_success("登录成功", account_label(account))
 
     def on_auth_failed(self, message):
+        logger.warning("Auth failed in UI: %s", message)
         self.log(f"Microsoft 登录失败：{message}")
         self.show_warning("登录失败", message)
 
@@ -3375,6 +5882,17 @@ class LauncherWindow(FluentWindow):
         java_path = self.java_combo.currentText().strip()
         version = self.current_selected_version()
         account = self.current_account()
+        logger.info(
+            "Launch requested: version=%s java=%s account=%s",
+            version,
+            java_path,
+            redact_mapping({
+                "id": account.get("id") if account else "",
+                "type": account.get("type") if account else "",
+                "username": account.get("username") if account else "",
+                "uuid": account.get("uuid") if account else "",
+            }),
+        )
         if not account:
             self.show_warning("缺少账号", "请先在管理中心的账号分页中添加或选择一个账号。")
             return
@@ -3411,7 +5929,8 @@ class LauncherWindow(FluentWindow):
         self.launch_status_label.setText("正在准备启动...")
         self.launch_progress_bar.setValue(5)
         self.launch_stage_label.setText("当前步骤：准备启动")
-        self.launch_method_label.setText(f"登录方式：{'Microsoft' if account.get('type') == 'microsoft' else '离线'}")
+        account_type_labels = {"microsoft": "Microsoft", "external": "外置登录", "offline": "离线"}
+        self.launch_method_label.setText(f"登录方式：{account_type_labels.get(account.get('type'), account.get('type', '未知'))}")
         self.launch_progress_label.setText("启动进度：5%")
         self.launch_thread = QThread()
         self.launch_worker = LaunchWorker(
@@ -3457,6 +5976,7 @@ class LauncherWindow(FluentWindow):
         self.log_install(message)
 
     def on_launch_finished(self, payload):
+        logger.info("Launch finished in UI: payload=%s", redact_mapping(payload))
         self.set_launch_running(False)
         account = payload.get("account", {})
         if account.get("id"):
@@ -3469,6 +5989,7 @@ class LauncherWindow(FluentWindow):
         self.show_success("正在启动", f"Minecraft {version} 已开始启动。")
 
     def on_launch_failed(self, message):
+        logger.warning("Launch failed in UI: %s", message)
         self.set_launch_running(False)
         self.launch_status_label.setText(f"启动失败：{message}")
         self.launch_stage_label.setText("当前步骤：启动失败")
@@ -3476,13 +5997,7 @@ class LauncherWindow(FluentWindow):
         self.show_warning("启动失败", message)
 
     def start_download(self):
-        if self.download_thread and self.download_thread.isRunning():
-            self.show_warning("下载进行中", "当前已有下载任务在运行。")
-            return
-        if self.install_thread and self.install_thread.isRunning():
-            self.show_warning("安装进行中", "当前已有扩展安装任务在运行。")
-            return
-
+        logger.info("Download requested from UI")
         version = self.remote_version_combo.currentText().strip()
         if not version or version == "点击刷新远程版本":
             self.show_warning("缺少版本", "请先刷新并选择要下载的版本。")
@@ -3492,9 +6007,50 @@ class LauncherWindow(FluentWindow):
             return
         auto_install_types = self.get_selected_download_addons()
         java_path = self.java_combo.currentText().strip()
+        logger.info(
+            "Download selection: version=%s mirror=%s game_dir=%s auto_install=%s java=%s",
+            version,
+            self.mirror_combo.currentText(),
+            self.current_game_dir(),
+            auto_install_types,
+            java_path,
+        )
         if any(item in {"forge", "neoforge"} for item in auto_install_types) and not java_path:
             self.show_warning("缺少 Java", "自动安装 Forge 或 NeoForge 需要可用的 Java。")
             return
+        mirror_key = self.mirror_combo.currentText()
+        game_dir = self.current_game_dir()
+        if auto_install_types:
+            install_text = " + ".join(INSTALL_TYPE_LABELS[item] for item in auto_install_types)
+            title = f"下载 {version} 并安装 {install_text}"
+        else:
+            title = f"下载 {version}"
+        task = DownloadTask(
+            "download",
+            title,
+            lambda version=version,
+            mirror_key=mirror_key,
+            game_dir=game_dir,
+            auto_install_types=list(auto_install_types),
+            java_path=java_path: self._start_download_task(
+                version,
+                mirror_key,
+                game_dir,
+                auto_install_types,
+                java_path,
+            ),
+        )
+        self.queue_download_task(task)
+
+    def _start_download_task(self, version, mirror_key, game_dir, auto_install_types, java_path):
+        logger.info(
+            "Download task starting from UI queue: version=%s mirror=%s game_dir=%s auto_install=%s java=%s",
+            version,
+            mirror_key,
+            game_dir,
+            auto_install_types,
+            java_path,
+        )
         self.progress_bar.setValue(0)
         self.install_log.clear()
         self.install_status_label.setText("当前任务以下载原版为主")
@@ -3508,8 +6064,8 @@ class LauncherWindow(FluentWindow):
         self.download_thread = QThread()
         self.download_worker = DownloadWorker(
             version,
-            self.mirror_combo.currentText(),
-            self.current_game_dir(),
+            mirror_key,
+            game_dir,
             auto_install_types=auto_install_types,
             java_path=java_path,
         )
@@ -3527,13 +6083,6 @@ class LauncherWindow(FluentWindow):
         self.download_thread.start()
 
     def start_install(self):
-        if self.download_thread and self.download_thread.isRunning():
-            self.show_warning("下载进行中", "请等待当前下载任务完成后再安装扩展。")
-            return
-        if self.install_thread and self.install_thread.isRunning():
-            self.show_warning("安装进行中", "当前已有扩展安装任务在运行。")
-            return
-
         minecraft_version = self.install_version_combo.currentText().strip()
         install_type = self.install_type_combo.currentText().strip()
         if not minecraft_version:
@@ -3546,6 +6095,35 @@ class LauncherWindow(FluentWindow):
             return
 
         self.save_settings(show_feedback=False)
+        mirror_key = self.mirror_combo.currentText()
+        game_dir = self.current_game_dir()
+        title = f"安装 {INSTALL_TYPE_LABELS.get(install_type, install_type)} 到 {minecraft_version}"
+        task = DownloadTask(
+            "install",
+            title,
+            lambda install_type=install_type,
+            minecraft_version=minecraft_version,
+            mirror_key=mirror_key,
+            game_dir=game_dir,
+            java_path=java_path: self._start_install_task(
+                install_type,
+                minecraft_version,
+                mirror_key,
+                game_dir,
+                java_path,
+            ),
+        )
+        self.queue_download_task(task)
+
+    def _start_install_task(self, install_type, minecraft_version, mirror_key, game_dir, java_path):
+        logger.info(
+            "Install task starting from UI queue: install_type=%s minecraft_version=%s mirror=%s game_dir=%s java=%s",
+            install_type,
+            minecraft_version,
+            mirror_key,
+            game_dir,
+            java_path,
+        )
         self.progress_bar.setValue(0)
         self.install_log.clear()
         self.install_status_label.setText(f"正在准备安装 {INSTALL_TYPE_LABELS.get(install_type, install_type)}...")
@@ -3556,8 +6134,8 @@ class LauncherWindow(FluentWindow):
         self.install_worker = InstallWorker(
             install_type,
             minecraft_version,
-            self.mirror_combo.currentText(),
-            self.current_game_dir(),
+            mirror_key,
+            game_dir,
             java_path,
         )
         self.install_worker.moveToThread(self.install_thread)
@@ -3572,16 +6150,6 @@ class LauncherWindow(FluentWindow):
         self.install_thread.start()
 
     def import_modpack(self):
-        if self.modpack_thread and self.modpack_thread.isRunning():
-            self.show_warning("导入进行中", "当前已有整合包导入任务在运行。")
-            return
-        if self.download_thread and self.download_thread.isRunning():
-            self.show_warning("下载进行中", "请等待当前下载任务完成后再导入整合包。")
-            return
-        if self.install_thread and self.install_thread.isRunning():
-            self.show_warning("安装进行中", "请等待当前安装任务完成后再导入整合包。")
-            return
-
         pack_path, _ = QFileDialog.getOpenFileName(
             self,
             "选择整合包文件",
@@ -3590,13 +6158,40 @@ class LauncherWindow(FluentWindow):
         )
         if not pack_path:
             return
+        game_dir = self.current_game_dir()
+        mirror_key = self.mirror_combo.currentText()
+        java_path = self.java_combo.currentText().strip()
+        title = f"导入整合包 {os.path.basename(pack_path)}"
+        task = DownloadTask(
+            "modpack",
+            title,
+            lambda pack_path=pack_path,
+            game_dir=game_dir,
+            mirror_key=mirror_key,
+            java_path=java_path: self._start_modpack_import_task(pack_path, game_dir, mirror_key, java_path),
+        )
+        self.queue_download_task(task)
+
+    def _start_modpack_import_task(self, pack_path, game_dir, mirror_key, java_path):
+        logger.info(
+            "Modpack import task starting from UI queue: pack=%s game_dir=%s mirror=%s java=%s",
+            pack_path,
+            game_dir,
+            mirror_key,
+            java_path,
+        )
         self.progress_bar.setValue(0)
         self.download_metrics_label.setText("准备导入整合包...")
         self.install_status_label.setText("正在识别整合包")
         self.install_metrics_label.setText(os.path.basename(pack_path))
         self.set_download_running(True)
         self.modpack_thread = QThread()
-        self.modpack_worker = ModpackImportWorker(pack_path, self.current_game_dir())
+        self.modpack_worker = ModpackImportWorker(
+            pack_path,
+            game_dir,
+            mirror_source=mirror_key,
+            java_path=java_path,
+        )
         self.modpack_worker.moveToThread(self.modpack_thread)
         self.modpack_thread.started.connect(self.modpack_worker.run)
         self.modpack_worker.progress.connect(self.progress_bar.setValue)
@@ -3607,8 +6202,252 @@ class LauncherWindow(FluentWindow):
         self.modpack_worker.failed.connect(self.modpack_thread.quit)
         self.modpack_thread.start()
 
+    def search_resources(self):
+        if self.resource_search_thread and self.resource_search_thread.isRunning():
+            self.show_warning("搜索进行中", "请等待当前资源搜索完成。")
+            return
+
+        query = self.resource_query_input.text().strip()
+        resource_type = self.resource_type_combo.currentText().strip() or "mod"
+        source = self.resource_source_combo.currentText().strip() or "modrinth"
+        version_id = self.current_resource_version()
+        if not version_id:
+            self.show_warning("缺少版本", "请先在资源市场里选择安装目标版本。")
+            return
+        if not query and source != "local":
+            self.show_warning("缺少关键词", "请输入要搜索的资源名称。")
+            return
+        if resource_type == "mod" and not self.version_supports_mod_management(version_id):
+            self.show_warning("版本不支持 Mod", "资源市场的安装目标需要选择 Fabric / Forge / NeoForge / OptiFine 版本。")
+            return
+
+        game_version = self.base_version_for(version_id)
+        loader = modrinth_loader_for_version(self.current_game_dir(), version_id)
+        target_dir = self.resource_directory_for_version(version_id, resource_type)
+        sort_index = RESOURCE_SEARCH_SORTS.get(self.resource_sort_combo.currentText().strip(), "relevance")
+        logger.info(
+            "Resource search requested from UI: source=%s query=%s type=%s version_id=%s game=%s loader=%s target=%s sort=%s",
+            source,
+            query,
+            resource_type,
+            version_id,
+            game_version,
+            loader or "<none>",
+            target_dir,
+            sort_index,
+        )
+        self.resource_result_list.clear()
+        self.resource_search_hits = []
+        self.resource_detail_view.clear()
+        self.resource_search_generation += 1
+        if self.resource_compat_thread and self.resource_compat_thread.isRunning():
+            self.resource_compat_thread.requestInterruption()
+            self.resource_compat_thread.quit()
+            self.resource_compat_thread.wait(500)
+        self.resource_status_label.setText(f"正在搜索 {RESOURCE_TYPE_LABELS.get(resource_type, resource_type)}...")
+        self.resource_search_thread = QThread()
+        self.resource_search_worker = ResourceSearchWorker(
+            query,
+            resource_type,
+            game_version,
+            loader,
+            source=source,
+            sort_index=sort_index,
+            target_dir=target_dir,
+        )
+        self.resource_search_worker.moveToThread(self.resource_search_thread)
+        self.resource_search_thread.started.connect(self.resource_search_worker.run)
+        self.resource_search_worker.status.connect(lambda message: self.resource_status_label.setText(message))
+        self.resource_search_worker.finished.connect(self.on_resource_search_finished)
+        self.resource_search_worker.failed.connect(self.on_resource_search_failed)
+        self.resource_search_worker.finished.connect(self.resource_search_thread.quit)
+        self.resource_search_worker.failed.connect(self.resource_search_thread.quit)
+        self.resource_search_thread.start()
+
+    def install_selected_resource(self):
+        current_item = self.resource_result_list.currentItem()
+        if current_item is None:
+            self.show_warning("缺少资源", "请先选择一个搜索结果。")
+            return
+        hit = current_item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(hit, dict):
+            self.show_warning("缺少资源", "请先选择一个有效搜索结果。")
+            return
+        if hit.get("source", "modrinth") != "modrinth":
+            self.show_warning("不支持一键安装", "当前只支持从 Modrinth 一键安装；CurseForge 或本地来源请查看详情。")
+            return
+        if not hit.get("compatible", True):
+            self.show_warning("不兼容当前目标版本", "这个资源没有适配当前安装目标的可下载文件，请换一个版本或资源。")
+            return
+
+        version_id = self.current_resource_version()
+        resource_type = self.resource_type_combo.currentText().strip() or "mod"
+        if not version_id:
+            self.show_warning("缺少版本", "请先在资源市场里选择安装目标版本。")
+            return
+        if resource_type == "mod" and not self.version_supports_mod_management(version_id):
+            self.show_warning("版本不支持 Mod", "资源市场的安装目标需要选择可安装 Mod 的版本。")
+            return
+
+        game_version = self.base_version_for(version_id)
+        loader = modrinth_loader_for_version(self.current_game_dir(), version_id)
+        target_dir = self.resource_directory_for_version(version_id, resource_type)
+        install_dependencies = self.resource_dependency_check.isChecked()
+        title = f"安装资源 {hit.get('title') or hit.get('slug', '资源')}"
+        task = DownloadTask(
+            "resource_install",
+            title,
+            lambda hit=dict(hit),
+            resource_type=resource_type,
+            game_version=game_version,
+            loader=loader,
+            target_dir=target_dir,
+            install_dependencies=install_dependencies: self._start_resource_install_task(
+                hit,
+                resource_type,
+                game_version,
+                loader,
+                target_dir,
+                install_dependencies,
+            ),
+        )
+        self.queue_download_task(task)
+
+    def _start_resource_install_task(self, hit, resource_type, game_version, loader, target_dir, install_dependencies):
+        logger.info(
+            "Resource install task starting from UI queue: source=%s project=%s title=%s type=%s game=%s loader=%s target=%s dependencies=%s",
+            hit.get("source", "modrinth"),
+            hit.get("project_id") or hit.get("slug"),
+            hit.get("title") or hit.get("slug", "资源"),
+            resource_type,
+            game_version,
+            loader or "<none>",
+            target_dir,
+            install_dependencies,
+        )
+        self.progress_bar.setValue(0)
+        self.set_download_running(True)
+        self.resource_status_label.setText(f"正在安装：{hit.get('title', hit.get('slug', 'resource'))}")
+        self.resource_install_thread = QThread()
+        self.resource_install_worker = ResourceInstallWorker(
+            hit.get("project_id") or hit.get("slug"),
+            hit.get("title") or hit.get("slug", "资源"),
+            resource_type,
+            game_version,
+            loader,
+            target_dir,
+            source=hit.get("source", "modrinth"),
+            install_dependencies=install_dependencies,
+        )
+        self.resource_install_worker.moveToThread(self.resource_install_thread)
+        self.resource_install_thread.started.connect(self.resource_install_worker.run)
+        self.resource_install_worker.progress.connect(self.progress_bar.setValue)
+        self.resource_install_worker.status.connect(lambda message: self.resource_status_label.setText(message))
+        self.resource_install_worker.metrics.connect(self.update_resource_install_metrics)
+        self.resource_install_worker.finished.connect(self.on_resource_install_finished)
+        self.resource_install_worker.failed.connect(self.on_resource_install_failed)
+        self.resource_install_worker.finished.connect(self.resource_install_thread.quit)
+        self.resource_install_worker.failed.connect(self.resource_install_thread.quit)
+        self.resource_install_thread.start()
+
+    def update_resource_source_controls(self, *_):
+        source = self.resource_source_combo.currentText().strip() if hasattr(self, "resource_source_combo") else "modrinth"
+        is_modrinth = source == "modrinth"
+        if hasattr(self, "resource_sort_combo"):
+            self.resource_sort_combo.setEnabled(is_modrinth)
+        if hasattr(self, "resource_dependency_check"):
+            self.resource_dependency_check.setEnabled(is_modrinth)
+        if hasattr(self, "install_resource_button"):
+            self.install_resource_button.setEnabled(is_modrinth and not self.is_download_task_running())
+        if hasattr(self, "resource_status_label"):
+            if source == "curseforge":
+                self.resource_status_label.setText("CurseForge 搜索需要设置 CURSEFORGE_API_KEY；当前支持查看详情，安装请手动下载或导入整合包。")
+            elif source == "local":
+                self.resource_status_label.setText("本地来源会扫描当前版本对应资源目录。")
+            else:
+                self.resource_status_label.setText("等待搜索")
+
+    def show_selected_resource_detail(self):
+        current_item = self.resource_result_list.currentItem()
+        if current_item is None:
+            return
+        hit = current_item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(hit, dict):
+            return
+        if self.resource_detail_thread and self.resource_detail_thread.isRunning():
+            self.resource_detail_thread.quit()
+            self.resource_detail_thread.wait(500)
+
+        self.resource_detail_loading.setVisible(True)
+        self.resource_detail_view.setPlainText("正在加载详情...")
+        resource_type = self.resource_type_combo.currentText().strip() or "mod"
+        version_id = self.current_resource_version()
+        game_version = self.base_version_for(version_id) if version_id else ""
+        loader = modrinth_loader_for_version(self.current_game_dir(), version_id) if version_id else ""
+        self.resource_detail_thread = QThread()
+        self.resource_detail_worker = ResourceDetailWorker(hit, resource_type, game_version, loader)
+        self.resource_detail_worker.moveToThread(self.resource_detail_thread)
+        self.resource_detail_thread.started.connect(self.resource_detail_worker.run)
+        self.resource_detail_worker.finished.connect(self.on_resource_detail_finished)
+        self.resource_detail_worker.failed.connect(self.on_resource_detail_failed)
+        self.resource_detail_worker.finished.connect(self.resource_detail_thread.quit)
+        self.resource_detail_worker.failed.connect(self.resource_detail_thread.quit)
+        self.resource_detail_thread.start()
+
+    def on_resource_detail_finished(self, detail):
+        self.resource_detail_loading.setVisible(False)
+        source = RESOURCE_SOURCE_LABELS.get(detail.get("source", ""), detail.get("source", ""))
+        parts = [
+            "<div style='font-family: Microsoft YaHei, Segoe UI, sans-serif;'>",
+            f"<h3>{html.escape(str(detail.get('title', '资源详情')))} ({html.escape(source)})</h3>",
+            f"<p>下载：{html.escape(str(detail.get('downloads', 0)))} | 收藏/关注：{html.escape(str(detail.get('followers', 0)))}</p>",
+        ]
+        if detail.get("project_url"):
+            url = html.escape(str(detail.get("project_url")))
+            parts.append(f"<p>链接：<a href='{url}'>{url}</a></p>")
+        if detail.get("description"):
+            parts.append(f"<p>{html.escape(str(detail.get('description', '')))}</p>")
+        screenshots = detail.get("screenshots", [])
+        if screenshots:
+            parts.append("<p>截图：</p>")
+            parts.append("<div>")
+            for screenshot in screenshots[:5]:
+                path = screenshot.get("path") if isinstance(screenshot, dict) else ""
+                url = screenshot.get("url") if isinstance(screenshot, dict) else screenshot
+                src = html.escape(os.path.abspath(path).replace("\\", "/") if path else str(url))
+                parts.append(f"<img src='{src}' width='360' style='margin: 0 10px 10px 0;' />")
+                if not path and url:
+                    escaped_url = html.escape(str(url))
+                    parts.append(f"<p>{escaped_url}</p>")
+            parts.append("</div>")
+        dependencies = detail.get("dependencies", [])
+        if dependencies:
+            parts.append("<p>依赖：</p><ul>")
+            for dependency in dependencies[:12]:
+                dep_type = dependency.get("dependency_type", "unknown")
+                dep_id = dependency.get("project_id") or dependency.get("version_id") or dependency.get("file_name", "")
+                parts.append(f"<li>{html.escape(str(dep_type))}: {html.escape(str(dep_id))}</li>")
+            parts.append("</ul>")
+        versions = detail.get("versions", [])
+        if versions:
+            parts.append("<p>可用版本/文件：</p><ul>")
+            for version in versions[:8]:
+                number = version.get("version_number") or version.get("displayName") or version.get("fileName") or version.get("name", "")
+                release_type = version.get("version_type") or version.get("releaseType", "")
+                parts.append(f"<li>{html.escape(str(f'{number} {release_type}'.strip()))}</li>")
+            parts.append("</ul>")
+        parts.append("</div>")
+        self.resource_detail_view.setHtml("".join(parts))
+        self.motion.pulse_widget(self.resource_detail_view.viewport(), duration=180, start_opacity=0.6, throttle_key="resource_detail", min_interval=0.2)
+
+    def on_resource_detail_failed(self, message):
+        self.resource_detail_loading.setVisible(False)
+        self.resource_detail_view.setPlainText(f"详情加载失败：{message}")
+        self.log(f"资源详情加载失败：{message}")
+
     def on_download_finished(self, payload):
         self.set_download_running(False)
+        self.finish_download_task(failed=False)
         version = payload.get("version", "")
         post_install = payload.get("post_install")
         self.log(f"Minecraft {version} 下载完成。")
@@ -3635,6 +6474,7 @@ class LauncherWindow(FluentWindow):
 
     def on_download_failed(self, message):
         self.set_download_running(False)
+        self.finish_download_task(failed=True)
         self.log(f"下载失败：{message}")
         self.download_metrics_label.setText(f"下载失败：{message}")
         self.install_status_label.setText("附加安装未开始")
@@ -3642,6 +6482,7 @@ class LauncherWindow(FluentWindow):
 
     def on_install_finished(self, payload):
         self.set_download_running(False)
+        self.finish_download_task(failed=False)
         installed_version = payload.get("installed_version", "")
         message = payload.get("message", "安装完成")
         self.log(f"安装完成：{message}")
@@ -3664,6 +6505,7 @@ class LauncherWindow(FluentWindow):
 
     def on_install_failed(self, message):
         self.set_download_running(False)
+        self.finish_download_task(failed=True)
         self.log(f"安装失败：{message}")
         self.download_metrics_label.setText(f"安装失败：{message}")
         self.install_status_label.setText("安装失败")
@@ -3672,23 +6514,37 @@ class LauncherWindow(FluentWindow):
 
     def on_repair_finished(self, payload):
         self.set_download_running(False)
+        self.finish_download_task(failed=False)
         version = payload.get("version", "")
-        self.download_metrics_label.setText("补全完成")
-        self.install_status_label.setText("版本文件已校验并补全")
-        self.install_metrics_label.setText(version)
-        self.show_success("补全完成", f"{version} 的缺失文件已补齐。")
-        self.log(f"版本补全完成：{version}")
+        missing_before = payload.get("missing_before", 0)
+        missing_after = payload.get("missing_after", 0)
+        report_path = payload.get("report_path", "")
+        self.repair_progress_bar.setValue(100)
+        if missing_after:
+            self.repair_status_label.setText("补全完成，但仍有缺失文件")
+            detail = f"修复前 {missing_before} 项，剩余 {missing_after} 项"
+            if report_path:
+                detail += f" | 清单：{report_path}"
+            self.repair_metrics_label.setText(detail)
+            self.show_warning("补全未完全完成", detail)
+            self.log(f"版本补全仍有缺失：{detail}")
+        else:
+            self.repair_status_label.setText("版本文件已校验并补全")
+            self.repair_metrics_label.setText(f"{version} | 修复前缺失/损坏 {missing_before} 项")
+            self.show_success("补全完成", f"{version} 的缺失文件已补齐。")
+            self.log(f"版本补全完成：{version}，修复前缺失/损坏 {missing_before} 项")
 
     def on_repair_failed(self, message):
         self.set_download_running(False)
-        self.download_metrics_label.setText(f"补全失败：{message}")
-        self.install_status_label.setText("补全失败")
-        self.install_metrics_label.setText(message)
+        self.finish_download_task(failed=True)
+        self.repair_status_label.setText("补全失败")
+        self.repair_metrics_label.setText(message)
         self.show_warning("补全失败", message)
         self.log(f"版本补全失败：{message}")
 
     def on_modpack_import_finished(self, payload):
         self.set_download_running(False)
+        self.finish_download_task(failed=False)
         version = payload.get("version", "")
         alias = payload.get("alias", "")
         if version:
@@ -3702,26 +6558,170 @@ class LauncherWindow(FluentWindow):
         if version:
             self.local_version_combo.setCurrentText(version)
         message = payload.get("message", "整合包导入完成")
+        missing_report = payload.get("missing_report", "")
         self.download_metrics_label.setText("整合包导入完成")
         self.install_status_label.setText(message)
-        self.install_metrics_label.setText(f"目标版本：{version or '未识别'}")
+        metrics = f"目标版本：{version or '未识别'}"
+        if missing_report:
+            metrics += f" | 缺失清单：{missing_report}"
+        self.install_metrics_label.setText(metrics)
         self.show_success("导入完成", message)
         self.log(message)
+        if missing_report:
+            self.log(f"整合包缺失文件清单：{missing_report}")
 
     def on_modpack_import_failed(self, message):
         self.set_download_running(False)
+        self.finish_download_task(failed=True)
         self.download_metrics_label.setText(f"导入失败：{message}")
         self.install_status_label.setText("整合包导入失败")
         self.install_metrics_label.setText(message)
         self.show_warning("导入失败", message)
         self.log(f"整合包导入失败：{message}")
 
+    def resource_hit_label(self, hit):
+        title = hit.get("title") or hit.get("slug") or hit.get("project_id", "未命名")
+        downloads = hit.get("downloads", 0)
+        follows = hit.get("follows", 0)
+        source = RESOURCE_SOURCE_LABELS.get(hit.get("source", "modrinth"), hit.get("source", ""))
+        description = (hit.get("description") or "").replace("\n", " ").strip()
+        downloads_text = self.format_bytes(downloads) if hit.get("source") == "local" else downloads
+        compatibility = ""
+        if hit.get("source") == "modrinth":
+            if hit.get("compatibility_checking"):
+                compatibility = f" | 正在验证 {hit.get('target_game_version', '')}"
+                if hit.get("target_loader"):
+                    compatibility += f" / {hit.get('target_loader')}"
+            elif hit.get("compatible", True):
+                version_label = hit.get("compatible_version", "")
+                compatibility = f" | 兼容 {hit.get('target_game_version', '')}"
+                if hit.get("target_loader"):
+                    compatibility += f" / {hit.get('target_loader')}"
+                if version_label:
+                    compatibility += f" | 文件 {version_label}"
+                elif hit.get("compatibility_unverified"):
+                    compatibility += " | 等待验证"
+            else:
+                compatibility = f" | 不兼容 {hit.get('target_game_version', '')}"
+                if hit.get("target_loader"):
+                    compatibility += f" / {hit.get('target_loader')}"
+        label = f"[{source}] {title} | 下载 {downloads_text} | 收藏 {follows}{compatibility}"
+        if description:
+            label += f"\n{description[:160]}"
+        return label
+
+    def on_resource_search_finished(self, payload):
+        original_hits = payload.get("hits", [])
+        hits = original_hits
+        self.resource_search_hits = hits
+        self.resource_result_list.clear()
+        for index, hit in enumerate(hits):
+            hit["compatibility_index"] = index
+            item = QListWidgetItem(self.resource_hit_label(hit))
+            item.setData(Qt.ItemDataRole.UserRole, hit)
+            self.resource_result_list.addItem(item)
+        if not hits:
+            if original_hits:
+                empty_text = "找到了资源，但没有适配当前安装目标的可安装文件"
+            else:
+                empty_text = "没有找到匹配资源"
+            empty = QListWidgetItem(empty_text)
+            empty.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.resource_result_list.addItem(empty)
+        relaxed = any(hit.get("relaxed_search") for hit in hits)
+        suffix = "（已放宽搜索）" if relaxed and hits else ""
+        self.resource_status_label.setText(f"搜索完成：{len(hits)} 个结果{suffix}")
+        self.show_success("搜索完成", f"找到 {len(hits)} 个资源。")
+        if payload.get("source") == "modrinth" and hits:
+            self.start_resource_compatibility_check(hits, payload.get("resource_type", "mod"))
+
+    def start_resource_compatibility_check(self, hits, resource_type):
+        if self.resource_compat_thread and self.resource_compat_thread.isRunning():
+            self.resource_compat_thread.requestInterruption()
+            self.resource_compat_thread.quit()
+            self.resource_compat_thread.wait(500)
+        game_version = hits[0].get("target_game_version", "") if hits else ""
+        loader = hits[0].get("target_loader", "") if hits else ""
+        self.resource_status_label.setText(f"已显示 {len(hits)} 个结果，正在后台验证兼容文件...")
+        self.resource_compat_thread = QThread()
+        generation = self.resource_search_generation
+        self.resource_compat_worker = ResourceCompatibilityWorker(hits, resource_type, game_version, loader, generation=generation)
+        self.resource_compat_worker.moveToThread(self.resource_compat_thread)
+        self.resource_compat_thread.started.connect(self.resource_compat_worker.run)
+        self.resource_compat_worker.checked.connect(self.on_resource_compatibility_checked)
+        self.resource_compat_worker.finished.connect(self.on_resource_compatibility_finished)
+        self.resource_compat_worker.failed.connect(self.on_resource_compatibility_failed)
+        self.resource_compat_worker.finished.connect(self.resource_compat_thread.quit)
+        self.resource_compat_worker.failed.connect(self.resource_compat_thread.quit)
+        self.resource_compat_thread.start()
+
+    def on_resource_compatibility_checked(self, hit):
+        if hit.get("compatibility_generation") != self.resource_search_generation:
+            return
+        index = hit.get("compatibility_index", -1)
+        if not (0 <= index < len(self.resource_search_hits)):
+            return
+        self.resource_search_hits[index] = hit
+        item = self.resource_result_list.item(index)
+        if item is None:
+            return
+        item.setText(self.resource_hit_label(hit))
+        item.setData(Qt.ItemDataRole.UserRole, hit)
+
+    def on_resource_compatibility_finished(self, payload):
+        if payload.get("generation") != self.resource_search_generation:
+            return
+        checked = payload.get("checked", 0)
+        compatible = payload.get("compatible", 0)
+        self.resource_status_label.setText(f"兼容性验证完成：{compatible}/{checked} 个可安装")
+        logger.info("Resource compatibility UI update finished: checked=%d compatible=%d", checked, compatible)
+
+    def on_resource_compatibility_failed(self, message):
+        self.resource_status_label.setText(f"兼容性验证失败：{message}")
+        self.log(f"资源兼容性验证失败：{message}")
+
+    def on_resource_search_failed(self, message):
+        self.resource_status_label.setText(f"搜索失败：{message}")
+        self.show_warning("搜索失败", message)
+        self.log(f"资源搜索失败：{message}")
+
+    def on_resource_install_finished(self, payload):
+        self.set_download_running(False)
+        self.finish_download_task(failed=False)
+        filename = payload.get("filename", "")
+        path = payload.get("path", "")
+        self.resource_status_label.setText(f"安装完成：{filename}")
+        dependencies = payload.get("dependencies_installed", [])
+        suffix = f"，依赖 {len(dependencies)} 个" if dependencies else ""
+        self.download_metrics_label.setText(f"资源已安装：{filename}{suffix}")
+        self.show_success("安装完成", filename)
+        self.log(f"资源已安装：{path}")
+        for dependency in dependencies:
+            self.log(f"资源依赖已安装：{dependency}")
+        target_version = self.current_resource_version()
+        if target_version == self.current_selected_version():
+            self.populate_version_settings_panel(target_version)
+
+    def on_resource_install_failed(self, message):
+        self.set_download_running(False)
+        self.finish_download_task(failed=True)
+        self.resource_status_label.setText(f"安装失败：{message}")
+        self.download_metrics_label.setText(f"资源安装失败：{message}")
+        self.show_warning("安装失败", message)
+        self.log(f"资源安装失败：{message}")
+
 
 def main():
     load_config()
     threading.Thread(target=run_flask_app, daemon=True).start()
     qt_app = QApplication(sys.argv)
-    setTheme(Theme.DARK)
+    configured_theme = config.get("UI", "theme", fallback="dark").strip().lower()
+    if configured_theme == "light":
+        setTheme(Theme.LIGHT)
+    elif configured_theme == "auto":
+        setTheme(Theme.AUTO)
+    else:
+        setTheme(Theme.DARK)
     window = LauncherWindow()
     window.show()
     sys.exit(qt_app.exec())

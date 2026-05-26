@@ -1,6 +1,10 @@
 import asyncio
 import requests
 
+from log_utils import get_logger
+
+logger = get_logger(__name__)
+
 
 class MicrosoftAuthenticator:
     def __init__(self, client_id, redirect_uri):
@@ -25,6 +29,7 @@ class MicrosoftAuthenticator:
 
     async def _exchange_tokens(self):
         """完整的 Xbox Live -> XSTS -> Minecraft token 交换流程"""
+        logger.info("Starting Microsoft token exchange")
         url = "https://user.auth.xboxlive.com/user/authenticate"
         data = {
             "Properties": {
@@ -40,6 +45,7 @@ class MicrosoftAuthenticator:
         response.raise_for_status()
         xbl_token = response.json()["Token"]
         self.user_hash = response.json()["DisplayClaims"]["xui"][0]["uhs"]
+        logger.debug("Xbox Live token exchange succeeded: has_user_hash=%s", bool(self.user_hash))
 
         url = "https://xsts.auth.xboxlive.com/xsts/authorize"
         data = {
@@ -51,6 +57,7 @@ class MicrosoftAuthenticator:
         response = requests.post(url, json=data, headers=headers)
         response.raise_for_status()
         self.xsts_token = response.json()["Token"]
+        logger.debug("XSTS token exchange succeeded")
 
         url = "https://api.minecraftservices.com/authentication/login_with_xbox"
         headers = {"Content-Type": "application/json"}
@@ -58,11 +65,13 @@ class MicrosoftAuthenticator:
         response = requests.post(url, json=data, headers=headers)
         response.raise_for_status()
         self.minecraft_access_token = response.json()["access_token"]
+        logger.info("Minecraft access token exchange succeeded")
 
     async def authenticate(self):
         if not self.authorization_code:
             raise Exception("请先使用 get_login_url() 获取授权码")
 
+        logger.info("Authenticating with Microsoft authorization code: has_code=%s", bool(self.authorization_code))
         url = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
         data = {
             "client_id": self.client_id,
@@ -77,6 +86,7 @@ class MicrosoftAuthenticator:
         tokens = response.json()
         self.access_token = tokens["access_token"]
         self.refresh_token = tokens["refresh_token"]
+        logger.debug("Microsoft OAuth token response succeeded: has_access=%s has_refresh=%s", bool(self.access_token), bool(self.refresh_token))
 
         await self._exchange_tokens()
 
@@ -84,20 +94,24 @@ class MicrosoftAuthenticator:
         if not self.minecraft_access_token:
             raise Exception("未登录或 Minecraft access token 不可用")
 
+        logger.info("Fetching Minecraft profile")
         url = "https://api.minecraftservices.com/minecraft/profile"
         headers = {"Authorization": f"Bearer {self.minecraft_access_token}"}
         response = requests.get(url, headers=headers)
 
         if response.status_code == 200:
             profile = response.json()
+            logger.info("Minecraft profile fetched: name=%s uuid=%s", profile.get("name"), profile.get("id"))
             return profile["id"], profile["name"], profile.get("skins", [])
         else:
+            logger.warning("Failed to fetch Minecraft profile: status=%s body=%s", response.status_code, response.text[:500])
             raise Exception(f"获取 Minecraft 档案失败: {response.status_code} {response.text}")
 
     async def refresh_access_token(self, refresh_token):
         if not refresh_token:
             raise Exception("没有可用的刷新令牌")
 
+        logger.info("Refreshing Microsoft access token")
         url = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
         data = {
             "client_id": self.client_id,
@@ -111,5 +125,6 @@ class MicrosoftAuthenticator:
         tokens = response.json()
         self.access_token = tokens["access_token"]
         self.refresh_token = tokens["refresh_token"]
+        logger.debug("Microsoft refresh token response succeeded: has_access=%s has_refresh=%s", bool(self.access_token), bool(self.refresh_token))
 
         await self._exchange_tokens()

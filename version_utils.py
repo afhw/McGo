@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shlex
 
 from launcher import find_version_json_path, get_local_versions, get_version_json
@@ -32,7 +33,14 @@ def version_settings_entry(settings, version_id):
 def version_display_name(settings, version_id):
     entry = version_settings_entry(settings, version_id)
     alias = (entry.get("alias") or "").strip()
-    return f"{alias} [{version_id}]" if alias else version_id
+    icon = (entry.get("icon") or "").strip()
+    prefix = ""
+    if entry.get("favorite"):
+        prefix += "* "
+    if icon and icon != "自动":
+        prefix += f"{icon} "
+    display = f"{alias} [{version_id}]" if alias else version_id
+    return f"{prefix}{display}"
 
 
 def isolated_runtime_directory(game_dir, version_id):
@@ -78,9 +86,100 @@ def launch_options_for_version(game_dir, settings, version_id, global_isolation=
 
 def resolve_base_minecraft_version(game_dir, version_id):
     version_json = get_version_json(game_dir, version_id)
-    if version_json and version_json.get("inheritsFrom"):
-        return version_json.get("inheritsFrom")
+    if version_json:
+        inherited = version_json.get("inheritsFrom")
+        if _looks_like_minecraft_version(inherited):
+            return inherited
+
+        for key in ("minecraftVersion", "mcVersion", "releaseTarget", "clientVersion"):
+            value = str(version_json.get(key, "")).strip()
+            if _looks_like_minecraft_version(value):
+                return value
+
+        asset_id = str(version_json.get("assetIndex", {}).get("id", "")).strip()
+        if _looks_like_minecraft_version(asset_id):
+            return asset_id
+
+        argument_version = _extract_version_from_arguments(version_json.get("arguments", {}))
+        if argument_version:
+            return argument_version
+
+        logging_file = version_json.get("logging", {}).get("client", {}).get("file", {})
+        logging_text = " ".join(
+            str(logging_file.get(key, ""))
+            for key in ("id", "url")
+            if logging_file.get(key)
+        )
+        detected = _extract_minecraft_version_from_text(logging_text, strict=True)
+        if detected:
+            return detected
+
+        text_parts = [
+            version_json.get("id", ""),
+            version_json.get("jar", ""),
+            version_json.get("mainClass", ""),
+        ]
+        for library in version_json.get("libraries", []):
+            if isinstance(library, dict):
+                text_parts.append(library.get("name", ""))
+                text_parts.append(library.get("downloads", {}).get("artifact", {}).get("path", ""))
+        detected = _extract_minecraft_version_from_text(" ".join(str(part) for part in text_parts if part), strict=True)
+        if detected:
+            return detected
+
+    detected = _extract_minecraft_version_from_text(version_id, strict=True)
+    if detected:
+        return detected
     return version_id
+
+
+def _extract_version_from_arguments(arguments):
+    values = []
+    for item in arguments.get("game", []) if isinstance(arguments, dict) else []:
+        if isinstance(item, str):
+            values.append(item)
+        elif isinstance(item, dict):
+            value = item.get("value")
+            if isinstance(value, list):
+                values.extend(str(entry) for entry in value)
+            elif isinstance(value, str):
+                values.append(value)
+
+    for flag in ("--fml.mcVersion", "--minecraftVersion", "--mcVersion"):
+        if flag in values:
+            index = values.index(flag)
+            if index + 1 < len(values) and _looks_like_minecraft_version(values[index + 1]):
+                return values[index + 1]
+    return ""
+
+
+def _looks_like_minecraft_version(value):
+    return bool(re.fullmatch(r"(?:1|2|3|4|20|21|22|23|24|25|26|27|28|29|30)(?:\.\d{1,2}){1,2}(?:[-_](?:pre|rc)\d+)?|(?:\d{2}w\d{2}[a-z])", str(value or "")))
+
+
+def _extract_minecraft_version_from_text(text, strict=False):
+    text = str(text or "")
+    patterns = [
+        r"fabric-loader-[^/\s:]+-((?:1|2|3|4|20|21|22|23|24|25|26|27|28|29|30)(?:\.\d{1,2}){1,2}(?:[-_](?:pre|rc)\d+)?)",
+        r"quilt-loader-[^/\s:]+-((?:1|2|3|4|20|21|22|23|24|25|26|27|28|29|30)(?:\.\d{1,2}){1,2}(?:[-_](?:pre|rc)\d+)?)",
+        r"forge-((?:1|2|3|4|20|21|22|23|24|25|26|27|28|29|30)(?:\.\d{1,2}){1,2}(?:[-_](?:pre|rc)\d+)?)-[0-9][^/\s:]*",
+        r"net\.minecraftforge:forge:((?:1|2|3|4|20|21|22|23|24|25|26|27|28|29|30)(?:\.\d{1,2}){1,2}(?:[-_](?:pre|rc)\d+)?)-[0-9][^/\s:]*",
+        r"neoforge-((?:1|2|3|4|20|21|22|23|24|25|26|27|28|29|30)(?:\.\d{1,2}){1,2}(?:[-_](?:pre|rc)\d+)?)-[0-9][^/\s:]*",
+        r"net\.neoforged:forge:((?:1|2|3|4|20|21|22|23|24|25|26|27|28|29|30)(?:\.\d{1,2}){1,2}(?:[-_](?:pre|rc)\d+)?)-[0-9][^/\s:]*",
+        r"client-((?:1|2|3|4|20|21|22|23|24|25|26|27|28|29|30)(?:\.\d{1,2}){1,2}(?:[-_](?:pre|rc)\d+)?)\.xml",
+        r"server-((?:1|2|3|4|20|21|22|23|24|25|26|27|28|29|30)(?:\.\d{1,2}){1,2}(?:[-_](?:pre|rc)\d+)?)\.xml",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match and _looks_like_minecraft_version(match.group(1)):
+            return match.group(1)
+    if not strict:
+        candidates = re.findall(r"(?<![\d.])(?:1|2|3|4|20|21|22|23|24|25|26|27|28|29|30)(?:\.\d{1,2}){1,2}(?:[-_](?:pre|rc)\d+)?(?![\d.])", text, flags=re.IGNORECASE)
+        for candidate in sorted(candidates, key=lambda item: (len(item), item), reverse=True):
+            if _looks_like_minecraft_version(candidate):
+                return candidate
+    snapshot = re.search(r"(?<![0-9a-z])(\d{2}w\d{2}[a-z])(?![0-9a-z])", text, flags=re.IGNORECASE)
+    return snapshot.group(1) if snapshot else ""
 
 
 def find_matching_fabric_versions(game_dir, base_minecraft_version):
@@ -154,6 +253,10 @@ def detect_version_type(game_dir, version_id):
 def version_matches_category(game_dir, version_id, category):
     version_type = detect_version_type(game_dir, version_id)
     if category == "全部版本":
+        return True
+    if category == "收藏":
+        return True
+    if category == "隐藏":
         return True
     if category == "原版":
         return version_type == "原版"

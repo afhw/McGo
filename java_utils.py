@@ -134,7 +134,13 @@ def _iter_search_roots():
         roots.extend([
             os.path.join(appdata, ".minecraft"),
             os.path.join(appdata, ".minecraft", "runtime"),
+            os.path.join(appdata, ".minecraft", "java_runtimes"),
         ])
+
+    roots.extend([
+        os.path.join(os.getcwd(), ".minecraft", "java_runtimes"),
+        os.path.join(os.getcwd(), "java_runtimes"),
+    ])
 
     if "windows" in system().lower():
         roots.extend([
