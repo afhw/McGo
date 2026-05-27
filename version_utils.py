@@ -84,6 +84,7 @@ def launch_options_for_version(game_dir, settings, version_id, global_isolation=
         "runtime_directory": runtime_directory,
         "extra_jvm_args": extra_jvm_args,
         "extra_game_args": extra_game_args,
+        "manual_memory": bool(entry.get("manual_memory", False)),
         "min_memory_mb": _positive_int(entry.get("min_memory_mb"), 0),
         "max_memory_mb": _positive_int(entry.get("max_memory_mb"), 0),
         "window_width": _positive_int(entry.get("window_width"), 0),

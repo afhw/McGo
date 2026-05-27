@@ -76,6 +76,7 @@ from qfluentwidgets import (
     SegmentedWidget,
     SmoothMode,
     SpinBox,
+    Slider,
     SubtitleLabel,
     TextEdit,
     Theme,
@@ -137,6 +138,44 @@ def hidden_subprocess_kwargs():
         "startupinfo": startupinfo,
         "creationflags": creationflags,
     }
+
+
+def system_memory_mb():
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            class MemoryStatusEx(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            status = MemoryStatusEx()
+            status.dwLength = ctypes.sizeof(MemoryStatusEx)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))
+            return int(status.ullTotalPhys / 1024 / 1024), int(status.ullAvailPhys / 1024 / 1024)
+        except Exception:
+            logger.debug("Failed to query Windows memory", exc_info=True)
+    return 0, 0
+
+
+def recommended_memory_mb():
+    total_mb, available_mb = system_memory_mb()
+    if available_mb <= 0:
+        return 4096
+    reserve_mb = 2048 if total_mb >= 8192 else 1536
+    recommended = max(2048, min(8192, available_mb - reserve_mb))
+    if total_mb and total_mb <= 4096:
+        recommended = max(1536, min(2048, available_mb - 1024))
+    return max(1024, int(recommended // 256 * 256))
 
 
 @app.route("/login/callback")
@@ -3911,14 +3950,20 @@ class LauncherWindow(FluentWindow):
         self.version_game_args_input.setPlaceholderText("--fullscreen --quickPlaySingleplayer WorldName")
         self.version_pre_launch_input = LineEdit()
         self.version_pre_launch_input.setPlaceholderText("启动前命令，例如备份存档或同步配置")
+        self.version_manual_memory_check = CheckBox("手动分配最大内存")
+        self.version_manual_memory_check.stateChanged.connect(self.on_manual_memory_changed)
+        self.version_memory_label = BodyLabel("最大内存：自动")
+        self.version_memory_slider = Slider(Qt.Orientation.Horizontal)
+        total_memory_mb, _ = system_memory_mb()
+        slider_max_memory = max(8192, min(65536, int((total_memory_mb or 32768) // 1024 * 1024)))
+        self.version_memory_slider.setRange(1024, slider_max_memory)
+        self.version_memory_slider.setSingleStep(256)
+        self.version_memory_slider.setTickInterval(2048)
+        self.version_memory_slider.valueChanged.connect(self.on_memory_slider_changed)
         self.version_min_memory_input = SpinBox()
         self.version_min_memory_input.setRange(0, 65536)
         self.version_min_memory_input.setSingleStep(256)
         self.version_min_memory_input.setSuffix(" MB")
-        self.version_max_memory_input = SpinBox()
-        self.version_max_memory_input.setRange(0, 65536)
-        self.version_max_memory_input.setSingleStep(512)
-        self.version_max_memory_input.setSuffix(" MB")
         self.version_window_width_input = SpinBox()
         self.version_window_width_input.setRange(0, 16384)
         self.version_window_width_input.setSingleStep(64)
@@ -4211,20 +4256,10 @@ class LauncherWindow(FluentWindow):
         personalization_layout.addLayout(personalization_row)
 
         launch_settings_card, launch_settings_layout = self.make_card("启动设置", "为当前版本单独设置 JVM 参数和运行目录")
-        memory_row = QHBoxLayout()
-        min_memory_container = QWidget()
-        min_memory_layout = QVBoxLayout(min_memory_container)
-        min_memory_layout.setContentsMargins(0, 0, 0, 0)
-        min_memory_layout.addWidget(CaptionLabel("最小内存"))
-        min_memory_layout.addWidget(self.version_min_memory_input)
-        max_memory_container = QWidget()
-        max_memory_layout = QVBoxLayout(max_memory_container)
-        max_memory_layout.setContentsMargins(0, 0, 0, 0)
-        max_memory_layout.addWidget(CaptionLabel("最大内存"))
-        max_memory_layout.addWidget(self.version_max_memory_input)
-        memory_row.addWidget(min_memory_container)
-        memory_row.addWidget(max_memory_container)
-        launch_settings_layout.addLayout(memory_row)
+        launch_settings_layout.addWidget(self.version_manual_memory_check)
+        launch_settings_layout.addWidget(self.version_memory_label)
+        self.version_memory_slider_row = self.add_labeled_control(launch_settings_layout, "最大内存", self.version_memory_slider)
+        self.version_min_memory_row = self.add_labeled_control(launch_settings_layout, "最小内存", self.version_min_memory_input)
         window_row = QHBoxLayout()
         width_container = QWidget()
         width_layout = QVBoxLayout(width_container)
@@ -4238,13 +4273,15 @@ class LauncherWindow(FluentWindow):
         height_layout.addWidget(self.version_window_height_input)
         window_row.addWidget(width_container)
         window_row.addWidget(height_container)
-        launch_settings_layout.addLayout(window_row)
-        self.add_labeled_control(launch_settings_layout, "GC 策略", self.version_gc_combo)
-        self.add_labeled_control(launch_settings_layout, "额外 JVM 参数", self.version_jvm_args_input)
-        self.add_labeled_control(launch_settings_layout, "额外游戏参数", self.version_game_args_input)
-        self.add_labeled_control(launch_settings_layout, "启动前命令", self.version_pre_launch_input)
+        self.version_window_row = QWidget()
+        self.version_window_row.setLayout(window_row)
+        launch_settings_layout.addWidget(self.version_window_row)
+        self.version_gc_row = self.add_labeled_control(launch_settings_layout, "GC 策略", self.version_gc_combo)
+        self.version_jvm_args_row = self.add_labeled_control(launch_settings_layout, "额外 JVM 参数", self.version_jvm_args_input)
+        self.version_game_args_row = self.add_labeled_control(launch_settings_layout, "额外游戏参数", self.version_game_args_input)
+        self.version_pre_launch_row = self.add_labeled_control(launch_settings_layout, "启动前命令", self.version_pre_launch_input)
         launch_settings_layout.addWidget(self.version_isolation_check)
-        self.add_labeled_control(launch_settings_layout, "自定义运行目录", self.version_custom_dir_input)
+        self.version_custom_dir_row = self.add_labeled_control(launch_settings_layout, "自定义运行目录", self.version_custom_dir_input)
 
         shortcut_card, shortcut_layout = self.make_card("快捷方式", "常用文件夹和启动脚本集中在这里")
         shortcut_row = QHBoxLayout()
@@ -4945,6 +4982,48 @@ class LauncherWindow(FluentWindow):
         if hasattr(self, "version_segment"):
             self.version_segment.setCurrentItem(section_key if section_key in mapping else "selector")
 
+    def update_version_advanced_visibility(self):
+        advanced = self.advanced_mode_check.isChecked() if hasattr(self, "advanced_mode_check") else False
+        for name in (
+            "version_min_memory_row",
+            "version_window_row",
+            "version_gc_row",
+            "version_game_args_row",
+            "version_pre_launch_row",
+            "version_custom_dir_row",
+        ):
+            if hasattr(self, name):
+                getattr(self, name).setVisible(advanced)
+        if hasattr(self, "version_jvm_args_row"):
+            self.version_jvm_args_row.setVisible(advanced)
+        self.update_memory_controls()
+
+    def update_memory_controls(self):
+        if not hasattr(self, "version_memory_slider"):
+            return
+        manual = self.version_manual_memory_check.isChecked()
+        self.version_memory_slider.setEnabled(manual)
+        if hasattr(self, "version_memory_slider_row"):
+            self.version_memory_slider_row.setEnabled(manual)
+        value = self.version_memory_slider.value()
+        if manual:
+            self.version_memory_label.setText(f"最大内存：{value} MB")
+        else:
+            self.version_memory_label.setText(f"最大内存：自动（建议 {recommended_memory_mb()} MB）")
+
+    def on_manual_memory_changed(self, *_):
+        if self.version_manual_memory_check.isChecked() and self.version_memory_slider.value() < 1024:
+            self.version_memory_slider.setValue(recommended_memory_mb())
+        self.update_memory_controls()
+
+    def on_memory_slider_changed(self, value):
+        if value % 256:
+            value = int(value // 256 * 256)
+            self.version_memory_slider.blockSignals(True)
+            self.version_memory_slider.setValue(value)
+            self.version_memory_slider.blockSignals(False)
+        self.update_memory_controls()
+
     def version_settings_entry(self, version_id):
         return version_settings_entry(self.version_settings, version_id)
 
@@ -5065,7 +5144,9 @@ class LauncherWindow(FluentWindow):
         self.version_game_args_input.setText(entry.get("game_args", ""))
         self.version_pre_launch_input.setText(entry.get("pre_launch_command", ""))
         self.version_min_memory_input.setValue(max(0, int(entry.get("min_memory_mb", 0) or 0)))
-        self.version_max_memory_input.setValue(max(0, int(entry.get("max_memory_mb", 0) or 0)))
+        max_memory = max(0, int(entry.get("max_memory_mb", 0) or 0))
+        self.version_manual_memory_check.setChecked(bool(entry.get("manual_memory", False) or max_memory))
+        self.version_memory_slider.setValue(max(1024, min(self.version_memory_slider.maximum(), max_memory or recommended_memory_mb())))
         self.version_window_width_input.setValue(max(0, int(entry.get("window_width", 0) or 0)))
         self.version_window_height_input.setValue(max(0, int(entry.get("window_height", 0) or 0)))
         gc_strategy = entry.get("gc_strategy", "G1GC")
@@ -5078,6 +5159,7 @@ class LauncherWindow(FluentWindow):
         forced_isolation = self.resource_isolation_check.isChecked()
         self.version_isolation_check.setChecked(bool(forced_isolation or entry.get("use_isolated_directory", False)))
         self.version_isolation_check.setEnabled(not forced_isolation)
+        self.update_version_advanced_visibility()
 
         runtime_directory = self.runtime_directory_for_version(version_id)
         self.version_mods_list.clear()
@@ -5148,7 +5230,8 @@ class LauncherWindow(FluentWindow):
         entry["game_args"] = self.version_game_args_input.text().strip()
         entry["pre_launch_command"] = self.version_pre_launch_input.text().strip()
         entry["min_memory_mb"] = self.version_min_memory_input.value()
-        entry["max_memory_mb"] = self.version_max_memory_input.value()
+        entry["manual_memory"] = self.version_manual_memory_check.isChecked()
+        entry["max_memory_mb"] = self.version_memory_slider.value() if self.version_manual_memory_check.isChecked() else 0
         entry["window_width"] = self.version_window_width_input.value()
         entry["window_height"] = self.version_window_height_input.value()
         entry["gc_strategy"] = self.version_gc_combo.currentText().strip()
@@ -5336,6 +5419,9 @@ class LauncherWindow(FluentWindow):
             version_id,
             global_isolation=self.resource_isolation_check.isChecked(),
         )
+        if not launch_options.get("manual_memory"):
+            launch_options["max_memory_mb"] = recommended_memory_mb()
+            launch_options["min_memory_mb"] = 0
         try:
             extra_jvm_args = list(launch_options["extra_jvm_args"])
             if account.get("type") == "external":
@@ -6003,6 +6089,7 @@ class LauncherWindow(FluentWindow):
         config["UI"]["advanced_mode"] = str(self.advanced_mode_check.isChecked())
         save_config()
         self.update_account_field_visibility()
+        self.update_version_advanced_visibility()
 
     def apply_theme(self, theme_name):
         normalized = (theme_name or "dark").strip().lower()
@@ -6903,6 +6990,9 @@ class LauncherWindow(FluentWindow):
             version,
             global_isolation=self.resource_isolation_check.isChecked(),
         )
+        if not launch_options.get("manual_memory"):
+            launch_options["max_memory_mb"] = recommended_memory_mb()
+            launch_options["min_memory_mb"] = 0
         if self.launch_thread and self.launch_thread.isRunning():
             self.show_warning("启动进行中", "当前已有启动任务在运行。")
             return
