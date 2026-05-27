@@ -3778,6 +3778,7 @@ class LauncherWindow(FluentWindow):
         self.build_pages()
         self.apply_theme_image()
         self.init_navigation()
+        self.update_download_advanced_visibility()
         self.apply_feature_visibility()
         self.apply_music_settings(show_feedback=False)
         self.refresh_account_selector()
@@ -3847,6 +3848,9 @@ class LauncherWindow(FluentWindow):
         self.download_preset_combo = NativeComboBox()
         self.download_preset_combo.addItems(list(DOWNLOAD_PRESETS.keys()))
         self.download_preset_combo.currentTextChanged.connect(self.apply_download_preset)
+        self.download_install_combo = NativeComboBox()
+        self.download_install_combo.addItems(["不安装", "fabric", "forge", "neoforge", "optifine"])
+        self.download_install_combo.currentTextChanged.connect(lambda _: self.update_download_addon_controls())
         self.download_core_threads_input = SpinBox()
         self.download_core_threads_input.setRange(1, 64)
         self.download_core_threads_input.setValue(config.getint("DOWNLOAD", "max_core_threads", fallback=12))
@@ -4013,15 +4017,8 @@ class LauncherWindow(FluentWindow):
             self.status_log.setSmoothMode(SmoothMode.NO_SMOOTH)
         self.status_log.document().setMaximumBlockCount(1000)
         self.version_type_combo.currentTextChanged.connect(lambda _: self.log("版本类型已更改，点击“刷新远程版本”重新加载列表。"))
-        self.download_loader_checks = {
-            "fabric": CheckBox("下载完成后安装 Fabric"),
-            "forge": CheckBox("下载完成后安装 Forge"),
-            "neoforge": CheckBox("下载完成后安装 NeoForge"),
-            "optifine": CheckBox("下载完成后安装 OptiFine"),
-            "fabric_api": CheckBox("若已安装 Fabric，同时安装 Fabric API"),
-        }
-        for install_type, checkbox in self.download_loader_checks.items():
-            checkbox.stateChanged.connect(lambda _, current=install_type: self.on_download_addon_changed(current))
+        self.download_fabric_api_check = CheckBox("同时安装 Fabric API")
+        self.download_fabric_api_check.stateChanged.connect(lambda _: self.update_download_addon_controls())
         self.download_addon_hint_label = CaptionLabel("可在下载原版后自动继续安装；Fabric API 仅在 Fabric 一起安装时可用。")
         self.download_warning_label = CaptionLabel("")
         self.resource_query_input = LineEdit()
@@ -4420,12 +4417,15 @@ class LauncherWindow(FluentWindow):
         self.add_labeled_control(download_layout, "版本类型", self.version_type_combo)
         self.add_labeled_control(download_layout, "远程版本", self.remote_version_combo)
         self.add_labeled_control(download_layout, "镜像源", self.mirror_combo)
-        self.add_labeled_control(download_layout, "下载预设", self.download_preset_combo)
+        self.download_preset_row = self.add_labeled_control(download_layout, "下载预设", self.download_preset_combo)
+        self.add_labeled_control(download_layout, "下载时安装", self.download_install_combo)
+        download_layout.addWidget(self.download_fabric_api_check)
         download_tuning_row = QHBoxLayout()
-        for label, control in (
-            ("核心线程", self.download_core_threads_input),
-            ("资源线程", self.download_asset_threads_input),
-            ("速度限制", self.download_speed_limit_input),
+        self.download_tuning_rows = {}
+        for key, label, control in (
+            ("core", "核心线程", self.download_core_threads_input),
+            ("asset", "资源线程", self.download_asset_threads_input),
+            ("speed", "速度限制", self.download_speed_limit_input),
         ):
             container = QWidget()
             container_layout = QVBoxLayout(container)
@@ -4433,15 +4433,9 @@ class LauncherWindow(FluentWindow):
             container_layout.addWidget(CaptionLabel(label))
             container_layout.addWidget(control)
             download_tuning_row.addWidget(container)
+            self.download_tuning_rows[key] = container
         download_layout.addLayout(download_tuning_row)
-        self.add_labeled_control(download_layout, "缓存策略", self.download_cache_combo)
-        addon_row = QHBoxLayout()
-        for checkbox in self.download_loader_checks.values():
-            addon_row.addWidget(checkbox)
-        addon_row.addStretch()
-        addon_container = QWidget()
-        addon_container.setLayout(addon_row)
-        self.add_labeled_control(download_layout, "下载后继续", addon_container)
+        self.download_cache_row = self.add_labeled_control(download_layout, "缓存策略", self.download_cache_combo)
         download_layout.addWidget(self.download_addon_hint_label)
         download_layout.addWidget(self.download_warning_label)
         row = QHBoxLayout()
@@ -4873,8 +4867,12 @@ class LauncherWindow(FluentWindow):
             return
         source = self.home_content_input.text().strip() if hasattr(self, "home_content_input") else ""
         if not source:
-            self.home_custom_text.setPlainText("未配置自定义主页内容。")
+            self.home_custom_text.clear()
+            if hasattr(self, "home_custom_card"):
+                self.home_custom_card.setVisible(False)
             return
+        if hasattr(self, "home_custom_card"):
+            self.home_custom_card.setVisible(True)
         try:
             if source.startswith(("http://", "https://")):
                 if not self.home_network_check.isChecked():
@@ -4997,6 +4995,14 @@ class LauncherWindow(FluentWindow):
         if hasattr(self, "version_jvm_args_row"):
             self.version_jvm_args_row.setVisible(advanced)
         self.update_memory_controls()
+
+    def update_download_advanced_visibility(self):
+        advanced = self.advanced_mode_check.isChecked() if hasattr(self, "advanced_mode_check") else False
+        for key in ("core", "asset"):
+            if hasattr(self, "download_tuning_rows") and key in self.download_tuning_rows:
+                self.download_tuning_rows[key].setVisible(advanced)
+        if hasattr(self, "download_cache_row"):
+            self.download_cache_row.setVisible(advanced)
 
     def update_memory_controls(self):
         if not hasattr(self, "version_memory_slider"):
@@ -5870,11 +5876,11 @@ class LauncherWindow(FluentWindow):
             self.install_version_combo.setEnabled(not running)
         if hasattr(self, "download_java_button"):
             self.download_java_button.setEnabled(not running)
-        if hasattr(self, "download_loader_checks"):
-            for checkbox in self.download_loader_checks.values():
-                checkbox.setEnabled(not running)
-            if not running:
-                self.update_download_addon_controls()
+        if hasattr(self, "download_install_combo"):
+            self.download_install_combo.setEnabled(not running)
+        if hasattr(self, "download_fabric_api_check"):
+            self.download_fabric_api_check.setEnabled(not running)
+        self.update_download_addon_controls()
         for name in (
             "download_preset_combo",
             "download_core_threads_input",
@@ -6090,6 +6096,7 @@ class LauncherWindow(FluentWindow):
         save_config()
         self.update_account_field_visibility()
         self.update_version_advanced_visibility()
+        self.update_download_advanced_visibility()
 
     def apply_theme(self, theme_name):
         normalized = (theme_name or "dark").strip().lower()
@@ -6775,31 +6782,16 @@ class LauncherWindow(FluentWindow):
                 self.install_version_combo.setCurrentIndex(index)
         self.install_version_combo.blockSignals(False)
 
-    def on_download_addon_changed(self, changed_type):
-        if changed_type in {"fabric", "forge", "neoforge", "optifine"} and self.download_loader_checks[changed_type].isChecked():
-            for install_type in ("fabric", "forge", "neoforge", "optifine"):
-                if install_type != changed_type:
-                    checkbox = self.download_loader_checks[install_type]
-                    checkbox.blockSignals(True)
-                    checkbox.setChecked(False)
-                    checkbox.blockSignals(False)
-
-        if changed_type != "fabric" and self.download_loader_checks[changed_type].isChecked():
-            fabric_api_check = self.download_loader_checks["fabric_api"]
-            fabric_api_check.blockSignals(True)
-            fabric_api_check.setChecked(False)
-            fabric_api_check.blockSignals(False)
-
-        self.update_download_addon_controls()
-
     def update_download_addon_controls(self):
-        fabric_checked = self.download_loader_checks["fabric"].isChecked()
-        fabric_api_check = self.download_loader_checks["fabric_api"]
-        fabric_api_check.setEnabled(fabric_checked)
-        if not fabric_checked and fabric_api_check.isChecked():
-            fabric_api_check.blockSignals(True)
-            fabric_api_check.setChecked(False)
-            fabric_api_check.blockSignals(False)
+        selected_loader = self.download_install_combo.currentText().strip() if hasattr(self, "download_install_combo") else "不安装"
+        fabric_checked = selected_loader == "fabric"
+        if hasattr(self, "download_fabric_api_check"):
+            self.download_fabric_api_check.setVisible(fabric_checked)
+            self.download_fabric_api_check.setEnabled(fabric_checked and not self.is_download_task_running())
+            if not fabric_checked and self.download_fabric_api_check.isChecked():
+                self.download_fabric_api_check.blockSignals(True)
+                self.download_fabric_api_check.setChecked(False)
+                self.download_fabric_api_check.blockSignals(False)
 
         selected = self.get_selected_download_addons()
         if selected:
@@ -6809,22 +6801,21 @@ class LauncherWindow(FluentWindow):
             self.download_addon_hint_label.setText("可在下载原版后自动继续安装；Fabric API 仅在 Fabric 一起安装时可用。")
 
         warnings = []
-        if fabric_checked and not fabric_api_check.isChecked():
+        if fabric_checked and not self.download_fabric_api_check.isChecked():
             warnings.append("提示：大多数 Fabric Mod 需要 Fabric API。")
-        if self.download_loader_checks["optifine"].isChecked():
+        if selected_loader == "optifine":
             warnings.append("提示：OptiFine 与部分 Mod 兼容性不佳，整合包建议优先考虑 Fabric/Forge。")
-        if self.download_loader_checks["forge"].isChecked() or self.download_loader_checks["neoforge"].isChecked():
+        if selected_loader in {"forge", "neoforge"}:
             warnings.append("提示：Forge / NeoForge 安装依赖 Java，安装过程可能需要更久。")
         if hasattr(self, "download_warning_label"):
             self.download_warning_label.setText(" ".join(warnings))
 
     def get_selected_download_addons(self):
         install_types = []
-        for install_type in ("fabric", "forge", "neoforge", "optifine"):
-            if self.download_loader_checks[install_type].isChecked():
-                install_types.append(install_type)
-                break
-        if self.download_loader_checks["fabric_api"].isChecked():
+        selected_loader = self.download_install_combo.currentText().strip() if hasattr(self, "download_install_combo") else ""
+        if selected_loader in {"fabric", "forge", "neoforge", "optifine"}:
+            install_types.append(selected_loader)
+        if selected_loader == "fabric" and self.download_fabric_api_check.isChecked():
             install_types.append("fabric_api")
         return install_types
 
