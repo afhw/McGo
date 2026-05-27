@@ -55,6 +55,7 @@ from PyQt6.QtWidgets import (
 from qfluentwidgets import (
     Action,
     BodyLabel,
+    BreadcrumbBar,
     CaptionLabel,
     CardWidget,
     CheckBox,
@@ -3552,15 +3553,34 @@ class Page(ScrollArea):
         self.layout.setSpacing(18)
         self.layout.addWidget(TitleLabel(title))
         self.layout.addWidget(CaptionLabel(subtitle))
+        self.breadcrumb_bar = BreadcrumbBar()
+        self.breadcrumb_bar.setObjectName(f"{object_name}Breadcrumb")
+        self.layout.addWidget(self.breadcrumb_bar)
         self.setWidget(self.view)
         self.setWidgetResizable(True)
         self.setFrameShape(QFrame.Shape.NoFrame)
+        self.set_breadcrumbs([])
 
     def _configure_scroll_behavior(self):
         self.setSmoothMode(SmoothMode.NO_SMOOTH, Qt.Orientation.Vertical)
         self.setSmoothMode(SmoothMode.NO_SMOOTH, Qt.Orientation.Horizontal)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+    def set_breadcrumbs(self, crumbs):
+        self.breadcrumb_bar.blockSignals(True)
+        self.breadcrumb_bar.clear()
+        if not crumbs:
+            self.breadcrumb_bar.setVisible(False)
+            self.breadcrumb_bar.blockSignals(False)
+            return
+
+        self.breadcrumb_bar.setVisible(True)
+        for index, crumb in enumerate(crumbs):
+            route_key = crumb.get("route_key") or f"breadcrumb_{index}"
+            self.breadcrumb_bar.addItem(route_key, crumb.get("label", ""))
+        self.breadcrumb_bar.setCurrentIndex(len(crumbs) - 1)
+        self.breadcrumb_bar.blockSignals(False)
 
 
 class NativeComboBoxMenu(ComboBoxMenu):
@@ -4055,11 +4075,50 @@ class LauncherWindow(FluentWindow):
         self.launch_page = Page("launchPage", "启动游戏", "选择 Java 和本地版本，然后启动 Minecraft")
         self.download_page = Page("downloadPage", "下载游戏", "选择版本类型、镜像源和目标版本")
         self.manage_page = Page("managePage", "管理中心", "将账号、环境和日志按任务分组，减少来回切页")
+        for page in (self.home_page, self.launch_page, self.download_page, self.manage_page):
+            page.breadcrumb_bar.currentItemChanged.connect(self.on_breadcrumb_changed)
+        self.page_breadcrumb_labels = {
+            self.home_page: "首页",
+            self.launch_page: "启动",
+            self.download_page: "下载",
+            self.manage_page: "管理",
+        }
+        self.version_section_labels = {
+            "selector": "选择版本",
+            "settings": "版本设置",
+        }
+        self.download_section_labels = {
+            "vanilla": "下载原版",
+            "addons": "安装扩展",
+            "modpack": "导入整合包",
+            "resources": "资源市场",
+        }
+        self.manage_section_labels = {
+            "accounts": "账号",
+            "environment": "环境",
+            "logs": "日志",
+            "help": "帮助",
+        }
+        self.account_section_labels = {
+            "overview": "当前账号",
+            "offline": "离线账号",
+            "microsoft": "Microsoft",
+            "external": "外置登录",
+        }
+        self.current_version_section = "selector"
+        self.current_download_section = "vanilla"
+        self.current_manage_section = "accounts"
+        self.current_account_section = "overview"
+        self.current_version_category = ""
+        self.current_download_category = ""
+        self.current_manage_category = ""
+        self.current_account_category = ""
 
         self.build_home_page()
         self.build_launch_page()
         self.build_download_page()
         self.build_manage_page()
+        self.update_breadcrumbs()
 
     def init_navigation(self):
         self.addSubInterface(self.home_page, FluentIcon.HOME, "首页")
@@ -4107,6 +4166,7 @@ class LauncherWindow(FluentWindow):
         page = self.stackedWidget.widget(index)
         if page is None:
             return
+        self.update_breadcrumbs(page)
         if page is self.home_page:
             self.animate_card_group(getattr(self, "home_cards", []))
         elif page is self.launch_page:
@@ -4115,6 +4175,91 @@ class LauncherWindow(FluentWindow):
             self.animate_card_group(getattr(self, "download_cards", []))
         elif page is self.manage_page:
             self.animate_card_group(getattr(self, "manage_cards", []))
+
+    def breadcrumb_crumb(self, label, route_key):
+        return {"label": label, "route_key": route_key}
+
+    def update_breadcrumbs(self, page=None):
+        if not all(hasattr(self, name) for name in ("home_page", "launch_page", "download_page", "manage_page")):
+            return
+        if page is None:
+            page = self.stackedWidget.currentWidget() if hasattr(self, "stackedWidget") else self.home_page
+
+        home_crumb = self.breadcrumb_crumb("首页", "home")
+        page_label = self.page_breadcrumb_labels.get(page, "")
+        if page is self.home_page:
+            crumbs = [self.breadcrumb_crumb("首页", "home")]
+        elif page is self.launch_page:
+            section = getattr(self, "current_version_section", "selector")
+            crumbs = [home_crumb, self.breadcrumb_crumb("启动", "launch")]
+            category = getattr(self, "current_version_category", "")
+            if category:
+                crumbs.append(self.breadcrumb_crumb(category, f"launch_category_{category}"))
+            if hasattr(self, "version_stack") and self.version_stack.isVisible():
+                crumbs.append(self.breadcrumb_crumb(self.version_section_labels.get(section, "选择版本"), f"launch_{section}"))
+        elif page is self.download_page:
+            section = getattr(self, "current_download_section", "vanilla")
+            crumbs = [home_crumb, self.breadcrumb_crumb("下载", "download")]
+            category = getattr(self, "current_download_category", "")
+            if category:
+                crumbs.append(self.breadcrumb_crumb(category, f"download_category_{category}"))
+            if hasattr(self, "download_stack") and self.download_stack.isVisible():
+                crumbs.append(self.breadcrumb_crumb(self.download_section_labels.get(section, "下载原版"), f"download_{section}"))
+        elif page is self.manage_page:
+            section = getattr(self, "current_manage_section", "accounts")
+            crumbs = [home_crumb, self.breadcrumb_crumb("管理", "manage")]
+            category = getattr(self, "current_manage_category", "")
+            if category:
+                crumbs.append(self.breadcrumb_crumb(category, f"manage_category_{category}"))
+            if section == "accounts":
+                account_section = getattr(self, "current_account_section", "overview")
+                account_category = getattr(self, "current_account_category", "")
+                if account_category:
+                    crumbs.append(self.breadcrumb_crumb(account_category, f"account_category_{account_category}"))
+                if hasattr(self, "account_stack") and self.account_stack.isVisible():
+                    crumbs.append(self.breadcrumb_crumb(self.account_section_labels.get(account_section, "当前账号"), f"account_{account_section}"))
+            else:
+                if hasattr(self, "manage_stack") and self.manage_stack.isVisible():
+                    crumbs.append(self.breadcrumb_crumb(self.manage_section_labels.get(section, "账号"), f"manage_{section}"))
+        elif page_label:
+            crumbs = [home_crumb, self.breadcrumb_crumb(page_label, page_label)]
+        else:
+            crumbs = []
+
+        if hasattr(page, "set_breadcrumbs"):
+            page.set_breadcrumbs(crumbs)
+
+    def on_breadcrumb_changed(self, route_key):
+        if route_key == "home":
+            self.switch_main_page(self.home_page, self.home_cards)
+        elif route_key == "launch":
+            self.open_version_overview()
+        elif route_key.startswith("launch_category_"):
+            self.open_version_overview()
+        elif route_key.startswith("launch_") and not route_key.startswith("launch_category_"):
+            self.open_version_section(route_key.removeprefix("launch_"))
+        elif route_key == "download":
+            self.open_download_overview()
+        elif route_key.startswith("download_category_"):
+            self.open_download_category(route_key.removeprefix("download_category_"))
+        elif route_key.startswith("download_") and not route_key.startswith("download_category_"):
+            self.open_download_section(route_key.removeprefix("download_"))
+        elif route_key == "manage":
+            self.open_manage_overview()
+        elif route_key.startswith("manage_category_"):
+            category = route_key.removeprefix("manage_category_")
+            if category == "诊断与帮助":
+                self.open_manage_category(category)
+            elif category == "账号与登录":
+                self.switch_manage_section("accounts", category)
+            elif category == "环境与界面":
+                self.switch_manage_section("environment", category)
+        elif route_key.startswith("manage_") and not route_key.startswith("manage_category_"):
+            self.open_manage_section(route_key.removeprefix("manage_"))
+        elif route_key.startswith("account_category_"):
+            self.open_account_category(route_key.removeprefix("account_category_"))
+        elif route_key.startswith("account_") and not route_key.startswith("account_category_"):
+            self.open_account_section(route_key.removeprefix("account_"))
 
     def make_card(self, title, subtitle=None):
         card = CardWidget()
@@ -4125,6 +4270,34 @@ class LauncherWindow(FluentWindow):
         if subtitle:
             layout.addWidget(CaptionLabel(subtitle))
         return card, layout
+
+    def make_choice_card(self, title, subtitle, choices):
+        card, layout = self.make_card(title, subtitle)
+        card.choice_layout = layout
+        for label, description, callback in choices:
+            self.add_choice_option(layout, label, description, callback)
+        return card
+
+    def add_choice_option(self, layout, label, description, callback):
+        button = PushButton(label)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.clicked.connect(callback)
+        layout.addWidget(button)
+        if description:
+            layout.addWidget(CaptionLabel(description))
+
+    def reset_choice_card(self, card, title, subtitle, choices):
+        layout = card.choice_layout
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        layout.addWidget(SubtitleLabel(title))
+        if subtitle:
+            layout.addWidget(CaptionLabel(subtitle))
+        for label, description, callback in choices:
+            self.add_choice_option(layout, label, description, callback)
 
     def add_labeled_control(self, layout, label, control):
         container = QWidget()
@@ -4146,7 +4319,7 @@ class LauncherWindow(FluentWindow):
         manage_button.clicked.connect(lambda: self.open_manage_section("accounts"))
         refresh_button.clicked.connect(self.refresh_all)
         download_button.clicked.connect(lambda: self.open_download_section("vanilla"))
-        launch_button.clicked.connect(lambda: self.open_version_section("selector"))
+        launch_button.clicked.connect(self.open_version_overview)
         row.addWidget(manage_button)
         row.addWidget(download_button)
         row.addWidget(launch_button)
@@ -4226,9 +4399,19 @@ class LauncherWindow(FluentWindow):
         nav_layout.setContentsMargins(22, 18, 22, 18)
         nav_layout.setSpacing(12)
         nav_layout.addWidget(SubtitleLabel("版本中心"))
-        nav_layout.addWidget(CaptionLabel("把版本选择、版本设置与 Mod 管理分开，避免启动前在一页里找来找去"))
+        nav_layout.addWidget(CaptionLabel("先选择要处理的版本任务，再进入对应页面"))
         self.version_segment = SegmentedWidget()
+        self.version_segment.setVisible(False)
         nav_layout.addWidget(self.version_segment)
+        self.version_overview_card = self.make_choice_card(
+            "选择版本任务",
+            "像做选择题一样进入版本列表或当前版本设置",
+            [
+                ("查找本地版本", "按分类查看并选择要启动的版本", lambda: self.open_version_section("selector", "本地版本")),
+                ("配置当前版本", "设置显示名称、内存、运行目录、快捷方式和 Mod", lambda: self.open_version_section("settings", "版本维护")),
+            ],
+        )
+        nav_layout.addWidget(self.version_overview_card)
 
         self.version_stack = QStackedWidget()
         self.version_selector_view = QWidget()
@@ -4369,16 +4552,39 @@ class LauncherWindow(FluentWindow):
 
         self.version_stack.addWidget(self.version_selector_view)
         self.version_stack.addWidget(self.version_settings_view)
-        self.version_segment.addItem("selector", "选择版本", lambda: self.switch_version_section("selector"))
-        self.version_segment.addItem("settings", "版本设置", lambda: self.switch_version_section("settings"))
+        self.version_segment.addItem("selector", "选择版本", lambda: self.switch_version_section("selector", "本地版本"))
+        self.version_segment.addItem("settings", "版本设置", lambda: self.switch_version_section("settings", "版本维护"))
         self.version_segment.setCurrentItem("selector")
 
-        self.launch_page.layout.addWidget(start_card)
-        self.launch_page.layout.addWidget(nav_card)
-        self.launch_page.layout.addWidget(self.version_stack)
-        self.launch_page.layout.addWidget(env_card)
+        launch_content = QWidget()
+        launch_content_layout = QHBoxLayout(launch_content)
+        launch_content_layout.setContentsMargins(0, 0, 0, 0)
+        launch_content_layout.setSpacing(18)
+
+        version_column = QWidget()
+        version_column_layout = QVBoxLayout(version_column)
+        version_column_layout.setContentsMargins(0, 0, 0, 0)
+        version_column_layout.setSpacing(18)
+        version_column_layout.addWidget(nav_card)
+        self.version_stack.setVisible(False)
+        version_column_layout.addWidget(self.version_stack)
+        version_column_layout.addStretch()
+
+        action_column = QWidget()
+        action_column_layout = QVBoxLayout(action_column)
+        action_column_layout.setContentsMargins(0, 0, 0, 0)
+        action_column_layout.setSpacing(18)
+        action_column_layout.addWidget(start_card)
+        action_column_layout.addWidget(env_card)
+        action_column_layout.addStretch()
+
+        launch_content_layout.addWidget(action_column, 2)
+        launch_content_layout.addWidget(version_column, 3)
+
+        self.launch_page.layout.addWidget(launch_content)
         self.launch_page.layout.addStretch()
-        self.launch_cards = [start_card, nav_card, self.version_stack, env_card]
+        self.launch_cards = [nav_card, self.version_stack, start_card, env_card]
+        self.open_version_overview()
 
     def build_download_page(self):
         progress_card, progress_layout = self.make_card("任务进度", "下载和扩展安装共用这一组进度与状态信息")
@@ -4403,9 +4609,25 @@ class LauncherWindow(FluentWindow):
         nav_layout.setContentsMargins(22, 18, 22, 18)
         nav_layout.setSpacing(12)
         nav_layout.addWidget(SubtitleLabel("下载任务"))
-        nav_layout.addWidget(CaptionLabel("先下载原版，再按需要安装 Fabric / Forge / NeoForge / OptiFine 等扩展"))
+        nav_layout.addWidget(CaptionLabel("先选择下载目的，再进入具体任务"))
         self.download_segment = SegmentedWidget()
+        self.download_segment.setVisible(False)
         nav_layout.addWidget(self.download_segment)
+        self.download_overview_card = self.make_choice_card(
+            "选择下载目的",
+            "每一步只需要在少量选项中选择一个",
+            [
+                ("获取游戏", "下载原版 Minecraft，或在已有原版上安装加载器", lambda: self.open_download_category("获取游戏")),
+                ("导入内容", "导入整合包，或从资源市场安装 Mod、资源包和光影", lambda: self.open_download_category("导入内容")),
+            ],
+        )
+        self.download_category_card = self.make_choice_card(
+            "选择具体任务",
+            "根据上一步分类继续选择",
+            [],
+        )
+        nav_layout.addWidget(self.download_overview_card)
+        nav_layout.addWidget(self.download_category_card)
 
         self.download_stack = QStackedWidget()
         self.download_vanilla_view = QWidget()
@@ -4525,10 +4747,10 @@ class LauncherWindow(FluentWindow):
         self.download_stack.addWidget(self.download_install_view)
         self.download_stack.addWidget(self.download_modpack_view)
         self.download_stack.addWidget(self.download_resource_view)
-        self.download_segment.addItem("vanilla", "下载原版", lambda: self.switch_download_section("vanilla"))
-        self.download_segment.addItem("addons", "安装扩展", lambda: self.switch_download_section("addons"))
-        self.download_segment.addItem("modpack", "导入整合包", lambda: self.switch_download_section("modpack"))
-        self.download_segment.addItem("resources", "资源市场", lambda: self.switch_download_section("resources"))
+        self.download_segment.addItem("vanilla", "下载原版", lambda: self.switch_download_section("vanilla", "获取游戏"))
+        self.download_segment.addItem("addons", "安装扩展", lambda: self.switch_download_section("addons", "获取游戏"))
+        self.download_segment.addItem("modpack", "导入整合包", lambda: self.switch_download_section("modpack", "导入内容"))
+        self.download_segment.addItem("resources", "资源市场", lambda: self.switch_download_section("resources", "导入内容"))
         self.download_segment.setCurrentItem("vanilla")
 
         self.update_install_button_text(self.install_type_combo.currentText())
@@ -4537,9 +4759,11 @@ class LauncherWindow(FluentWindow):
 
         self.download_page.layout.addWidget(progress_card)
         self.download_page.layout.addWidget(nav_card)
+        self.download_stack.setVisible(False)
         self.download_page.layout.addWidget(self.download_stack)
         self.download_page.layout.addStretch()
         self.download_cards = [progress_card, nav_card, self.download_stack]
+        self.open_download_overview()
 
     def build_account_section(self):
         nav_card = CardWidget()
@@ -4547,9 +4771,25 @@ class LauncherWindow(FluentWindow):
         nav_layout.setContentsMargins(22, 18, 22, 18)
         nav_layout.setSpacing(12)
         nav_layout.addWidget(SubtitleLabel("账号操作"))
-        nav_layout.addWidget(CaptionLabel("先选当前账号，再进入离线或 Microsoft 分页处理新增、更新与登录"))
+        nav_layout.addWidget(CaptionLabel("先选择账号目的，再进入对应账号方式"))
         self.account_segment = SegmentedWidget()
+        self.account_segment.setVisible(False)
         nav_layout.addWidget(self.account_segment)
+        self.account_overview_card = self.make_choice_card(
+            "选择账号任务",
+            "从账号管理目的开始，逐级缩小范围",
+            [
+                ("管理当前账号", "切换当前账号、删除账号或保存设置", lambda: self.open_account_section("overview", "账号管理")),
+                ("新增或登录账号", "选择离线、Microsoft 或外置登录方式", lambda: self.open_account_category("新增或登录账号")),
+            ],
+        )
+        self.account_category_card = self.make_choice_card(
+            "选择登录方式",
+            "选择一种账号类型继续",
+            [],
+        )
+        nav_layout.addWidget(self.account_overview_card)
+        nav_layout.addWidget(self.account_category_card)
 
         self.account_stack = QStackedWidget()
         self.account_overview_view = QWidget()
@@ -4647,10 +4887,10 @@ class LauncherWindow(FluentWindow):
         self.account_stack.addWidget(self.account_offline_view)
         self.account_stack.addWidget(self.account_microsoft_view)
         self.account_stack.addWidget(self.account_external_view)
-        self.account_segment.addItem("overview", "当前账号", lambda: self.switch_account_section("overview"))
-        self.account_segment.addItem("offline", "离线账号", lambda: self.switch_account_section("offline"))
-        self.account_segment.addItem("microsoft", "Microsoft", lambda: self.switch_account_section("microsoft"))
-        self.account_segment.addItem("external", "外置登录", lambda: self.switch_account_section("external"))
+        self.account_segment.addItem("overview", "当前账号", lambda: self.open_account_section("overview", "账号管理"))
+        self.account_segment.addItem("offline", "离线账号", lambda: self.open_account_section("offline", "新增或登录账号"))
+        self.account_segment.addItem("microsoft", "Microsoft", lambda: self.open_account_section("microsoft", "新增或登录账号"))
+        self.account_segment.addItem("external", "外置登录", lambda: self.open_account_section("external", "新增或登录账号"))
         self.account_segment.setCurrentItem("overview")
 
         container = QWidget()
@@ -4658,7 +4898,10 @@ class LauncherWindow(FluentWindow):
         container_layout.setContentsMargins(0, 0, 0, 0)
         container_layout.setSpacing(18)
         container_layout.addWidget(nav_card)
+        self.account_stack.setVisible(False)
         container_layout.addWidget(self.account_stack)
+        self.account_category_card.setVisible(False)
+        self.account_overview_card.setVisible(True)
         return container
 
     def build_environment_section(self):
@@ -4770,10 +5013,27 @@ class LauncherWindow(FluentWindow):
         nav_layout.setContentsMargins(22, 18, 22, 18)
         nav_layout.setSpacing(12)
         nav_layout.addWidget(SubtitleLabel("管理分区"))
-        nav_layout.addWidget(CaptionLabel("按用途分区后，常用操作会更容易找到，也更不容易改错"))
+        nav_layout.addWidget(CaptionLabel("先选择管理目标，再进入具体分区"))
 
         self.manage_pivot = Pivot()
+        self.manage_pivot.setVisible(False)
         nav_layout.addWidget(self.manage_pivot)
+        self.manage_overview_card = self.make_choice_card(
+            "选择管理目标",
+            "按目标逐级进入，减少平铺入口",
+            [
+                ("账号与登录", "管理当前账号，或新增离线 / Microsoft / 外置账号", lambda: self.open_manage_section("accounts", "账号与登录")),
+                ("环境与界面", "游戏目录、Java、主题、主页、音乐和页面显示", lambda: self.open_manage_section("environment", "环境与界面")),
+                ("诊断与帮助", "查看日志、常见问题和目录说明", lambda: self.open_manage_category("诊断与帮助")),
+            ],
+        )
+        self.manage_category_card = self.make_choice_card(
+            "选择诊断入口",
+            "继续选择日志或帮助",
+            [],
+        )
+        nav_layout.addWidget(self.manage_overview_card)
+        nav_layout.addWidget(self.manage_category_card)
 
         self.manage_stack = QStackedWidget()
         self.account_manage_view = QWidget()
@@ -4808,40 +5068,43 @@ class LauncherWindow(FluentWindow):
         self.manage_stack.addWidget(self.log_manage_view)
         self.manage_stack.addWidget(self.help_manage_view)
 
-        self.manage_pivot.addItem("accounts", "账号", lambda: self.switch_manage_section("accounts"))
-        self.manage_pivot.addItem("environment", "环境", lambda: self.switch_manage_section("environment"))
-        self.manage_pivot.addItem("logs", "日志", lambda: self.switch_manage_section("logs"))
-        self.manage_pivot.addItem("help", "帮助", lambda: self.switch_manage_section("help"))
+        self.manage_pivot.addItem("accounts", "账号", lambda: self.switch_manage_section("accounts", "账号与登录"))
+        self.manage_pivot.addItem("environment", "环境", lambda: self.switch_manage_section("environment", "环境与界面"))
+        self.manage_pivot.addItem("logs", "日志", lambda: self.switch_manage_section("logs", "诊断与帮助"))
+        self.manage_pivot.addItem("help", "帮助", lambda: self.switch_manage_section("help", "诊断与帮助"))
         self.manage_pivot.setCurrentItem("accounts")
 
         self.manage_page.layout.addWidget(nav_card)
+        self.manage_stack.setVisible(False)
         self.manage_page.layout.addWidget(self.manage_stack)
         self.manage_page.layout.addStretch()
         self.manage_cards = [nav_card, self.manage_stack]
+        self.manage_category_card.setVisible(False)
+        self.open_manage_overview()
 
     def switch_main_page(self, page, card_group=None):
         self.switchTo(page)
         self.animate_card_group(card_group or [])
 
-    def open_manage_section(self, section_key):
+    def open_manage_section(self, section_key, category=None):
         if not config.getboolean("FEATURES", "show_manage", fallback=True):
             self.show_warning("页面已隐藏", "请在配置文件中重新启用管理页。")
             return
         self.switch_main_page(self.manage_page, self.manage_cards)
-        self.switch_manage_section(section_key)
+        self.switch_manage_section(section_key, category)
 
-    def open_download_section(self, section_key):
+    def open_download_section(self, section_key, category=None):
         if not config.getboolean("FEATURES", "show_download", fallback=True):
             self.show_warning("页面已隐藏", "请在管理中心重新启用下载页。")
             return
         self.switch_main_page(self.download_page, self.download_cards)
-        self.switch_download_section(section_key)
+        self.switch_download_section(section_key, category)
         if section_key == "resources":
             self.refresh_resource_target_versions()
 
-    def open_version_section(self, section_key):
+    def open_version_section(self, section_key, category=None):
         self.switch_main_page(self.launch_page, self.launch_cards)
-        self.switch_version_section(section_key)
+        self.switch_version_section(section_key, category)
 
     def log(self, message):
         logger.info("UI: %s", message)
@@ -4958,27 +5221,156 @@ class LauncherWindow(FluentWindow):
                 except Exception:
                     logger.exception("Failed to hide navigation page: %s", key)
 
-    def switch_manage_section(self, section_key):
+    def switch_main_page_if_ready(self, page, card_group=None):
+        if hasattr(self, "navigation_pages"):
+            self.switch_main_page(page, card_group or [])
+
+    def open_version_overview(self):
+        self.current_version_category = ""
+        self.switch_main_page_if_ready(self.launch_page, self.launch_cards)
+        if hasattr(self, "version_overview_card"):
+            self.version_overview_card.setVisible(True)
+        if hasattr(self, "version_stack"):
+            self.version_stack.setVisible(False)
+        self.update_breadcrumbs(self.launch_page)
+
+    def open_download_overview(self):
+        self.current_download_category = ""
+        self.switch_main_page_if_ready(self.download_page, self.download_cards)
+        if hasattr(self, "download_overview_card"):
+            self.download_overview_card.setVisible(True)
+        if hasattr(self, "download_category_card"):
+            self.download_category_card.setVisible(False)
+        if hasattr(self, "download_stack"):
+            self.download_stack.setVisible(False)
+        self.update_breadcrumbs(self.download_page)
+
+    def open_download_category(self, category):
+        self.switch_main_page_if_ready(self.download_page, self.download_cards)
+        self.current_download_category = category
+        choices = {
+            "获取游戏": [
+                ("下载原版", "刷新远程版本并下载 Minecraft", lambda: self.open_download_section("vanilla", category)),
+                ("安装扩展", "为已有版本安装 Fabric、Forge、NeoForge、OptiFine 或 Fabric API", lambda: self.open_download_section("addons", category)),
+            ],
+            "导入内容": [
+                ("导入整合包", "导入 Modrinth、CurseForge 或普通 zip 覆写包", lambda: self.open_download_section("modpack", category)),
+                ("资源市场", "搜索并安装 Mod、资源包、光影或数据包", lambda: self.open_download_section("resources", category)),
+            ],
+        }.get(category, [])
+        self.reset_choice_card(self.download_category_card, "选择具体任务", category, choices)
+        self.download_overview_card.setVisible(False)
+        self.download_category_card.setVisible(True)
+        self.download_stack.setVisible(False)
+        self.update_breadcrumbs(self.download_page)
+
+    def open_manage_overview(self):
+        self.current_manage_category = ""
+        self.current_account_category = ""
+        self.switch_main_page_if_ready(self.manage_page, self.manage_cards)
+        if hasattr(self, "manage_overview_card"):
+            self.manage_overview_card.setVisible(True)
+        if hasattr(self, "manage_category_card"):
+            self.manage_category_card.setVisible(False)
+        if hasattr(self, "manage_stack"):
+            self.manage_stack.setVisible(False)
+        self.update_breadcrumbs(self.manage_page)
+
+    def open_manage_category(self, category):
+        self.switch_main_page_if_ready(self.manage_page, self.manage_cards)
+        self.current_manage_category = category
+        choices = {
+            "诊断与帮助": [
+                ("日志", "查看下载、登录和启动状态日志", lambda: self.open_manage_section("logs", category)),
+                ("帮助", "查看常见问题、目录说明和关于信息", lambda: self.open_manage_section("help", category)),
+            ],
+        }.get(category, [])
+        self.reset_choice_card(self.manage_category_card, "选择诊断入口", category, choices)
+        self.manage_overview_card.setVisible(False)
+        self.manage_category_card.setVisible(True)
+        self.manage_stack.setVisible(False)
+        self.update_breadcrumbs(self.manage_page)
+
+    def open_account_category(self, category):
+        self.switch_main_page_if_ready(self.manage_page, self.manage_cards)
+        self.current_account_category = category
+        choices = [
+            ("离线账号", "只需要用户名即可添加", lambda: self.open_account_section("offline", category)),
+            ("Microsoft", "通过 Microsoft OAuth 添加正版账号", lambda: self.open_account_section("microsoft", category)),
+            ("外置登录", "使用 Yggdrasil / Authlib-Injector 服务器登录", lambda: self.open_account_section("external", category)),
+        ]
+        self.reset_choice_card(self.account_category_card, "选择登录方式", category, choices)
+        self.account_overview_card.setVisible(False)
+        self.account_category_card.setVisible(True)
+        self.account_stack.setVisible(False)
+        self.current_manage_section = "accounts"
+        self.update_breadcrumbs(self.manage_page)
+
+    def open_account_section(self, section_key, category=None):
+        self.switch_main_page_if_ready(self.manage_page, self.manage_cards)
+        if category is not None:
+            self.current_account_category = category
+        elif section_key == "overview":
+            self.current_account_category = "账号管理"
+        if hasattr(self, "account_overview_card"):
+            self.account_overview_card.setVisible(False)
+        if hasattr(self, "account_category_card"):
+            self.account_category_card.setVisible(False)
+        if hasattr(self, "account_stack"):
+            self.account_stack.setVisible(True)
+        self.current_manage_section = "accounts"
+        self.switch_account_section(section_key)
+
+    def switch_manage_section(self, section_key, category=None):
         mapping = {
             "accounts": 0,
             "environment": 1,
             "logs": 2,
             "help": 3,
         }
+        section_key = section_key if section_key in mapping else "accounts"
+        if category is not None:
+            self.current_manage_category = category
+        elif section_key == "accounts":
+            self.current_manage_category = "账号与登录"
+        elif section_key == "environment":
+            self.current_manage_category = "环境与界面"
+        self.current_manage_section = section_key
+        if hasattr(self, "manage_overview_card"):
+            self.manage_overview_card.setVisible(False)
+        if hasattr(self, "manage_category_card"):
+            self.manage_category_card.setVisible(False)
+        if hasattr(self, "manage_stack"):
+            self.manage_stack.setVisible(True)
         index = mapping.get(section_key, 0)
         self.motion.cross_fade_stack(self.manage_stack, index)
         self.manage_pivot.setCurrentItem(section_key)
+        if section_key == "accounts" and hasattr(self, "account_overview_card") and not self.account_stack.isVisible():
+            self.account_overview_card.setVisible(True)
+            self.account_category_card.setVisible(False)
+        self.update_breadcrumbs(self.manage_page)
 
-    def switch_version_section(self, section_key):
+    def switch_version_section(self, section_key, category=None):
         mapping = {
             "selector": 0,
             "settings": 1,
         }
+        section_key = section_key if section_key in mapping else "selector"
+        if category is not None:
+            self.current_version_category = category
+        elif not getattr(self, "current_version_category", ""):
+            self.current_version_category = "本地版本" if section_key == "selector" else "版本维护"
+        self.current_version_section = section_key
+        if hasattr(self, "version_overview_card"):
+            self.version_overview_card.setVisible(False)
+        if hasattr(self, "version_stack"):
+            self.version_stack.setVisible(True)
         index = mapping.get(section_key, 0)
         if hasattr(self, "version_stack"):
             self.motion.cross_fade_stack(self.version_stack, index)
         if hasattr(self, "version_segment"):
             self.version_segment.setCurrentItem(section_key if section_key in mapping else "selector")
+        self.update_breadcrumbs(self.launch_page)
 
     def update_version_advanced_visibility(self):
         advanced = self.advanced_mode_check.isChecked() if hasattr(self, "advanced_mode_check") else False
@@ -6058,20 +6450,33 @@ class LauncherWindow(FluentWindow):
             if callable(current_route):
                 current_route = current_route()
             if current_route in {"offline", "microsoft", "external"}:
-                self.switch_account_section(target)
+                self.open_account_section(target, "新增或登录账号")
 
-    def switch_download_section(self, section_key):
+    def switch_download_section(self, section_key, category=None):
         mapping = {
             "vanilla": 0,
             "addons": 1,
             "modpack": 2,
             "resources": 3,
         }
+        section_key = section_key if section_key in mapping else "vanilla"
+        if category is not None:
+            self.current_download_category = category
+        elif not getattr(self, "current_download_category", ""):
+            self.current_download_category = "获取游戏" if section_key in {"vanilla", "addons"} else "导入内容"
+        self.current_download_section = section_key
+        if hasattr(self, "download_overview_card"):
+            self.download_overview_card.setVisible(False)
+        if hasattr(self, "download_category_card"):
+            self.download_category_card.setVisible(False)
+        if hasattr(self, "download_stack"):
+            self.download_stack.setVisible(True)
         index = mapping.get(section_key, 0)
         if hasattr(self, "download_stack"):
             self.motion.cross_fade_stack(self.download_stack, index)
         if hasattr(self, "download_segment"):
             self.download_segment.setCurrentItem(section_key if section_key in mapping else "vanilla")
+        self.update_breadcrumbs(self.download_page)
 
     def switch_account_section(self, section_key):
         mapping = {
@@ -6080,6 +6485,8 @@ class LauncherWindow(FluentWindow):
             "microsoft": 2,
             "external": 3,
         }
+        section_key = section_key if section_key in mapping else "overview"
+        self.current_account_section = section_key
         index = mapping.get(section_key, 0)
         if section_key in {"offline", "microsoft", "external"} and hasattr(self, "login_mode_combo"):
             self.login_mode_combo.blockSignals(True)
@@ -6090,6 +6497,7 @@ class LauncherWindow(FluentWindow):
         if hasattr(self, "account_segment"):
             self.account_segment.setCurrentItem(section_key if section_key in mapping else "overview")
         self.update_account_field_visibility()
+        self.update_breadcrumbs(self.manage_page)
 
     def on_advanced_mode_changed(self, *_):
         config["UI"]["advanced_mode"] = str(self.advanced_mode_check.isChecked())
