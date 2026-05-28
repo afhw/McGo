@@ -192,6 +192,9 @@ def _rewrite_url(url, mirror_source):
             "https://piston-data.mojang.com": mirror_source,
             "https://launcher.mojang.com": mirror_source,
             "https://libraries.minecraft.net": f"{mirror_source}/maven",
+            "https://maven.fabricmc.net": f"{mirror_source}/maven",
+            "https://maven.minecraftforge.net": f"{mirror_source}/maven",
+            "https://maven.neoforged.net": f"{mirror_source}/maven",
             "https://resources.download.minecraft.net": f"{mirror_source}/assets",
         }
     else:
@@ -225,6 +228,25 @@ def _candidate_urls(url, mirror_source):
     if url not in urls:
         urls.append(url)
     return urls
+
+
+def _maven_library_path(name):
+    parts = str(name or "").split(":")
+    if len(parts) < 3:
+        return None
+
+    group, artifact, version = parts[:3]
+    classifier = parts[3] if len(parts) >= 4 else ""
+    extension = parts[4] if len(parts) >= 5 else "jar"
+    filename = f"{artifact}-{version}"
+    if classifier:
+        filename = f"{filename}-{classifier}"
+    return os.path.join(*group.split("."), artifact, version, f"{filename}.{extension}")
+
+
+def _maven_library_url(library, relative_path):
+    base_url = (library.get("url") or "https://libraries.minecraft.net/").rstrip("/")
+    return f"{base_url}/{relative_path.replace(os.sep, '/')}"
 
 
 async def _throttle_download(progress, speed_limit_bps, started_at):
@@ -351,6 +373,17 @@ def _build_core_jobs(version_json, game_directory, version_id, mirror_source):
                 sha1=artifact.get("sha1", ""),
                 label=os.path.basename(artifact["path"]),
             ))
+        else:
+            relative_library_path = _maven_library_path(library.get("name"))
+            if relative_library_path:
+                jobs.append(DownloadJob(
+                    url=_rewrite_url(_maven_library_url(library, relative_library_path), mirror_source),
+                    file_path=os.path.join(game_directory, "libraries", relative_library_path),
+                    relative_path=os.path.join("libraries", relative_library_path),
+                    size=library.get("size", 0),
+                    sha1=library.get("sha1", ""),
+                    label=os.path.basename(relative_library_path),
+                ))
 
         natives = downloads.get("classifiers", {}).get("natives-windows")
         if natives:

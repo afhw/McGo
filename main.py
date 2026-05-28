@@ -4113,6 +4113,7 @@ class LauncherWindow(FluentWindow):
         self.current_download_category = ""
         self.current_manage_category = ""
         self.current_account_category = ""
+        self.current_breadcrumbs = []
 
         self.build_home_page()
         self.build_launch_page()
@@ -4134,6 +4135,7 @@ class LauncherWindow(FluentWindow):
             "manage": True,
         }
         self.configure_navigation_animation()
+        self.configure_global_back_button()
         if hasattr(self, "stackedWidget"):
             self.stackedWidget.currentChanged.connect(self.on_main_stack_changed)
 
@@ -4149,6 +4151,22 @@ class LauncherWindow(FluentWindow):
         if not hasattr(panel, "_mcgo_original_collapse"):
             panel._mcgo_original_collapse = panel.collapse
             panel.collapse = types.MethodType(self._navigation_panel_collapse, panel)
+
+    def configure_global_back_button(self):
+        panel = getattr(getattr(self, "navigationInterface", None), "panel", None)
+        button = getattr(panel, "returnButton", None) if panel else None
+        if button is None:
+            self.global_back_button = None
+            return
+
+        self.global_back_button = button
+        self.global_back_button.setToolTip("返回上一层")
+        try:
+            self.global_back_button.clicked.disconnect()
+        except TypeError:
+            pass
+        self.global_back_button.clicked.connect(self.go_back_one_level)
+        self.update_global_back_button()
 
     def _navigation_panel_collapse(self, panel_self):
         sender = panel_self.sender()
@@ -4226,8 +4244,26 @@ class LauncherWindow(FluentWindow):
         else:
             crumbs = []
 
+        self.current_breadcrumbs = crumbs
         if hasattr(page, "set_breadcrumbs"):
             page.set_breadcrumbs(crumbs)
+        self.update_global_back_button()
+
+    def update_global_back_button(self):
+        button = getattr(self, "global_back_button", None)
+        if button is None:
+            return
+        can_go_back = len(getattr(self, "current_breadcrumbs", [])) > 1
+        button.setVisible(True)
+        button.setEnabled(can_go_back)
+
+    def go_back_one_level(self):
+        crumbs = getattr(self, "current_breadcrumbs", [])
+        if len(crumbs) <= 1:
+            return
+        route_key = crumbs[-2].get("route_key", "")
+        if route_key:
+            self.on_breadcrumb_changed(route_key)
 
     def on_breadcrumb_changed(self, route_key):
         if route_key == "home":
@@ -4309,6 +4345,22 @@ class LauncherWindow(FluentWindow):
         layout.addWidget(container)
         return container
 
+    def stabilize_launch_status_area(self):
+        for widget in (
+            self.version_summary_label,
+            self.launch_status_label,
+            self.launch_stage_label,
+            self.launch_method_label,
+            self.launch_progress_label,
+        ):
+            widget.setMinimumHeight(24)
+            widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            widget.setWordWrap(True)
+
+        self.launch_progress_bar.setFixedHeight(6)
+        self.launch_progress_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.launch_button.setMinimumWidth(132)
+
     def build_home_page(self):
         quick_card, quick_layout = self.make_card("开始使用", "按顺序完成账号、环境、下载和启动，更容易定位问题")
         row = QHBoxLayout()
@@ -4383,6 +4435,7 @@ class LauncherWindow(FluentWindow):
         self.launch_button = PrimaryPushButton("启动 Minecraft")
         refresh_button.clicked.connect(self.refresh_local_versions)
         self.launch_button.clicked.connect(self.launch_game)
+        self.stabilize_launch_status_area()
         start_row.addWidget(refresh_button)
         start_row.addWidget(self.launch_button)
         start_row.addStretch()

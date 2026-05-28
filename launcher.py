@@ -254,10 +254,15 @@ def _merge_version_chain(chain):
 
 def _maven_library_path(name):
     parts = name.split(":")
-    if len(parts) != 3:
+    if len(parts) < 3:
         return None
-    group, artifact, version = parts
-    return os.path.join(*group.split("."), artifact, version, f"{artifact}-{version}.jar")
+    group, artifact, version = parts[:3]
+    classifier = parts[3] if len(parts) >= 4 else ""
+    extension = parts[4] if len(parts) >= 5 else "jar"
+    filename = f"{artifact}-{version}"
+    if classifier:
+        filename = f"{filename}-{classifier}"
+    return os.path.join(*group.split("."), artifact, version, f"{filename}.{extension}")
 
 
 def _library_path(game_directory, library):
