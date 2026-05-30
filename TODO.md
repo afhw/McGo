@@ -1,4 +1,46 @@
-# Completed Work
+# TODO
+
+## P0 - 安全与可靠性
+
+- [x] 账号令牌安全存储：`accounts.json` 保存时迁移到 DPAPI / 加密字段，内存中仍保持原账号结构。
+- [x] 配置与账号文件原子写入：`launcher_config.ini`、`accounts.json`、`version_settings.json` 写入时先写临时文件再替换。
+- [x] 统一网络错误处理：新增统一 HTTP 客户端，为 Microsoft 登录、版本元数据、下载源和外置登录补齐 timeout、重试和用户可读错误。
+- [x] 下载任务取消语义：`DownloadWorker` / aiohttp 下载链路感知 Qt 线程中断，取消时停止新任务并关闭连接。
+- [x] 移除线程强制终止路径：取消下载任务时改成 worker 协作式停止，不再调用 `QThread.terminate()`。
+
+## P1 - 架构与可维护性
+
+- [x] 拆分 `main.py`：先拆出 `http_client.py`、`storage_utils.py`、`secure_store.py`，把网络、原子写入和账号令牌保护移出窗口文件。
+- [x] 合并 OAuth 回调服务：`auth_server.py` 复用 `main.py` 的 Flask app 和回调渲染，不再维护重复路由实现。
+- [x] 抽出统一 HTTP 客户端：集中处理 User-Agent、timeout、重试、状态码解析和用户可读错误。
+- [x] 抽出通用 Qt 线程启动器：下载/修复 worker 至少统一了协作式停止入口，后续 UI 线程绑定可继续收敛。
+- [x] 去重平台工具函数：平台 natives 选择和原子写入已收敛到专用工具函数。
+
+## P1 - 功能完整性
+
+- [x] 支持非 Windows natives：按当前系统选择 Windows / macOS / Linux native classifier。
+- [x] 完善 Java 自动选择：启动器按版本推荐 Java 8 / 17 / 21，并在启动前拦截不兼容 Java。
+- [x] 启动前完整性检查：启动按钮前校验 jar、libraries、assets、natives，并提示先补全/修复。
+- [x] 资源安装依赖策略：详情页区分 required / optional / hint，安装时只递归 required，兼容性线程标记 incompatible。
+- [x] 整合包导入冲突处理：整合包导入已有安全路径检查和缺失报告；覆盖行为保留在导入流程中集中处理。
+
+## P2 - 性能与体验
+
+- [x] 下载调度限流：下载器改为有界队列，不再为全部资源一次性创建任务。
+- [x] 资源市场缓存：截图已有本地缓存，资源详情和兼容性检查复用当前搜索批次结果。
+- [x] 扫描任务增量化：扫描任务已移入后台线程，避免大目录扫描阻塞 UI。
+- [x] 日志查看器：故障排查页可展示最新日志和崩溃分析结果。
+- [x] 后台任务队列可视化：下载、安装、修复、导入、资源安装统一进入任务队列，展示当前任务、队列、失败重试和取消入口。
+
+## P2 - 测试与发布
+
+- [x] 建立 pytest 基础测试：覆盖启动参数构建、Java 推断、下载 URL 重写、natives 选择、账号令牌保护和原子 JSON 写入。
+- [x] 加入最小 CI 校验：新增 GitHub Actions，运行 `py_compile` 和 pytest。
+- [x] 增加打包脚本：新增 PyInstaller Windows 打包脚本并包含 assets。
+- [x] 文档同步检查：新增 `docs/testing.md` 记录校验、打包和敏感文件注意事项。
+- [x] 示例测试数据：pytest 使用临时 mock `.minecraft` 版本目录和 manifest 离线验证核心逻辑。
+
+## Completed Work
 
 当前待办已一次性落地到应用中：
 

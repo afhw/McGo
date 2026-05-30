@@ -1,0 +1,17 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - run: python -m py_compile main.py launcher.py downloader.py auth.py auth_server.py java_utils.py version_utils.py log_utils.py http_client.py secure_store.py storage_utils.py
+      - run: pytest

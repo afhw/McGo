@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import json
 import os
+import platform
 import shutil
 import time
 import zipfile
@@ -11,12 +12,17 @@ from dataclasses import dataclass
 import aiohttp
 
 from log_utils import get_logger
+from storage_utils import save_json_atomic
 
 CHUNK_SIZE = 128 * 1024
 MAX_CORE_CONCURRENCY = 12
 MAX_ASSET_CONCURRENCY = 24
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=None, sock_connect=20, sock_read=60)
 logger = get_logger(__name__)
+
+
+class DownloadCancelled(RuntimeError):
+    pass
 
 
 @dataclass
@@ -249,6 +255,60 @@ def _maven_library_url(library, relative_path):
     return f"{base_url}/{relative_path.replace(os.sep, '/')}"
 
 
+def _current_native_os_name():
+    system = platform.system().lower()
+    if "windows" in system or system == "win32":
+        return "windows"
+    if "darwin" in system or "mac" in system:
+        return "osx"
+    if "linux" in system:
+        return "linux"
+    if os.name == "nt":
+        return "windows"
+    return "windows"
+
+
+def _current_native_arch_suffix():
+    machine = platform.machine().lower()
+    if machine in {"amd64", "x86_64"}:
+        return "64"
+    if machine in {"x86", "i386", "i686"}:
+        return "32"
+    if "aarch64" in machine or "arm64" in machine:
+        return "arm64"
+    if "arm" in machine:
+        return "arm32"
+    return "64" if "64" in machine else ""
+
+
+def _native_classifier_key(library):
+    classifiers = library.get("downloads", {}).get("classifiers", {})
+    natives = library.get("natives") or {}
+    os_name = _current_native_os_name()
+    template = natives.get(os_name)
+    if template:
+        key = str(template).replace("${arch}", _current_native_arch_suffix())
+        if key in classifiers:
+            return key
+        fallback = str(template).replace("${arch}", "")
+        if fallback in classifiers:
+            return fallback
+
+    preferred = [
+        f"natives-{os_name}-{_current_native_arch_suffix()}",
+        f"natives-{os_name}",
+    ]
+    for key in preferred:
+        if key in classifiers:
+            return key
+    return ""
+
+
+def _check_cancel(cancel_callback=None):
+    if cancel_callback and cancel_callback():
+        raise DownloadCancelled("下载任务已取消")
+
+
 async def _throttle_download(progress, speed_limit_bps, started_at):
     if not speed_limit_bps:
         return
@@ -259,12 +319,22 @@ async def _throttle_download(progress, speed_limit_bps, started_at):
         await asyncio.sleep(min(delay, 1.0))
 
 
-async def _download_with_retries(session, job, progress, semaphore, retries=5, mirror_source="", speed_limit_bps=0):
+async def _download_with_retries(session, job, progress, semaphore, retries=5, mirror_source="", speed_limit_bps=0, cancel_callback=None):
     for attempt in range(retries):
         try:
+            _check_cancel(cancel_callback)
             async with semaphore:
-                await _download_single(session, job, progress, mirror_source=mirror_source, speed_limit_bps=speed_limit_bps)
+                await _download_single(
+                    session,
+                    job,
+                    progress,
+                    mirror_source=mirror_source,
+                    speed_limit_bps=speed_limit_bps,
+                    cancel_callback=cancel_callback,
+                )
             return
+        except DownloadCancelled:
+            raise
         except Exception as exc:
             if attempt == retries - 1:
                 logger.exception(
@@ -286,7 +356,8 @@ async def _download_with_retries(session, job, progress, semaphore, retries=5, m
             await asyncio.sleep(min(2 ** attempt, 5))
 
 
-async def _download_single(session, job, progress, mirror_source="", speed_limit_bps=0):
+async def _download_single(session, job, progress, mirror_source="", speed_limit_bps=0, cancel_callback=None):
+    _check_cancel(cancel_callback)
     _ensure_parent(job.file_path)
     progress.set_current_file(job.label)
     logger.debug("Downloading file: label=%s size=%s url=%s target=%s", job.label, job.size, job.url, job.file_path)
@@ -295,10 +366,12 @@ async def _download_single(session, job, progress, mirror_source="", speed_limit
     started_at = time.monotonic()
     for candidate_url in _candidate_urls(job.url, mirror_source):
         try:
+            _check_cancel(cancel_callback)
             async with session.get(candidate_url) as response:
                 response.raise_for_status()
                 with open(job.file_path, "wb") as file_handle:
                     async for chunk in response.content.iter_chunked(CHUNK_SIZE):
+                        _check_cancel(cancel_callback)
                         if not chunk:
                             continue
                         file_handle.write(chunk)
@@ -317,7 +390,8 @@ async def _download_single(session, job, progress, mirror_source="", speed_limit
     raise RuntimeError("；".join(errors))
 
 
-async def _process_job(session, job, progress, semaphore, cache_dirs, target_game_dir, mirror_source="", speed_limit_bps=0, cache_strategy="reuse"):
+async def _process_job(session, job, progress, semaphore, cache_dirs, target_game_dir, mirror_source="", speed_limit_bps=0, cache_strategy="reuse", cancel_callback=None):
+    _check_cancel(cancel_callback)
     if _matches_file(job.file_path, job.size, job.sha1):
         progress.set_current_file(f"{job.label}（已存在）")
         progress.advance_reused(job.size or _file_size(job.file_path))
@@ -331,19 +405,67 @@ async def _process_job(session, job, progress, semaphore, cache_dirs, target_gam
         progress.finish_file()
         return "reused"
 
-    await _download_with_retries(session, job, progress, semaphore, mirror_source=mirror_source, speed_limit_bps=speed_limit_bps)
+    await _download_with_retries(
+        session,
+        job,
+        progress,
+        semaphore,
+        mirror_source=mirror_source,
+        speed_limit_bps=speed_limit_bps,
+        cancel_callback=cancel_callback,
+    )
     progress.finish_file()
     return "downloaded"
 
 
-async def _run_jobs(session, jobs, progress, concurrency, cache_dirs, target_game_dir, mirror_source="", speed_limit_bps=0, cache_strategy="reuse"):
+async def _run_jobs(session, jobs, progress, concurrency, cache_dirs, target_game_dir, mirror_source="", speed_limit_bps=0, cache_strategy="reuse", cancel_callback=None):
     if not jobs:
         return
     semaphore = asyncio.Semaphore(concurrency)
-    await asyncio.gather(*[
-        _process_job(session, job, progress, semaphore, cache_dirs, target_game_dir, mirror_source=mirror_source, speed_limit_bps=speed_limit_bps, cache_strategy=cache_strategy)
-        for job in jobs
-    ])
+    queue = asyncio.Queue()
+    for job in jobs:
+        queue.put_nowait(job)
+
+    async def worker():
+        while True:
+            _check_cancel(cancel_callback)
+            try:
+                job = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            try:
+                await _process_job(
+                    session,
+                    job,
+                    progress,
+                    semaphore,
+                    cache_dirs,
+                    target_game_dir,
+                    mirror_source=mirror_source,
+                    speed_limit_bps=speed_limit_bps,
+                    cache_strategy=cache_strategy,
+                    cancel_callback=cancel_callback,
+                )
+            finally:
+                queue.task_done()
+
+    workers = [asyncio.create_task(worker()) for _ in range(min(max(1, concurrency), len(jobs)))]
+    try:
+        while True:
+            _check_cancel(cancel_callback)
+            done = [task for task in workers if task.done()]
+            for task in done:
+                exc = task.exception()
+                if exc:
+                    raise exc
+            if queue.empty() and all(task.done() for task in workers):
+                break
+            await asyncio.sleep(0.05)
+        _check_cancel(cancel_callback)
+    finally:
+        for task in workers:
+            task.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
 
 
 def _build_core_jobs(version_json, game_directory, version_id, mirror_source):
@@ -385,7 +507,8 @@ def _build_core_jobs(version_json, game_directory, version_id, mirror_source):
                     label=os.path.basename(relative_library_path),
                 ))
 
-        natives = downloads.get("classifiers", {}).get("natives-windows")
+        native_key = _native_classifier_key(library)
+        natives = downloads.get("classifiers", {}).get(native_key) if native_key else None
         if natives:
             jobs.append(DownloadJob(
                 url=_rewrite_url(natives["url"], mirror_source),
@@ -488,6 +611,7 @@ async def download_assets(
     max_asset_concurrency=MAX_ASSET_CONCURRENCY,
     speed_limit_kbps=0,
     cache_strategy="reuse",
+    cancel_callback=None,
 ):
     logger.info(
         "Starting asset download: version=%s game_directory=%s mirror=%s",
@@ -521,6 +645,7 @@ async def download_assets(
             mirror_source=mirror_source,
             speed_limit_bps=int(speed_limit_kbps or 0) * 1024,
             cache_strategy=cache_strategy,
+            cancel_callback=cancel_callback,
         )
         progress.set_phase("资源文件下载完成")
         progress.emit(force=True)
@@ -536,7 +661,8 @@ def extract_natives(version_json, game_directory, version_id):
 
     for library in version_json.get("libraries", []):
         classifiers = library.get("downloads", {}).get("classifiers", {})
-        natives_info = classifiers.get("natives-windows")
+        native_key = _native_classifier_key(library)
+        natives_info = classifiers.get(native_key) if native_key else None
         if not natives_info:
             continue
 
@@ -574,6 +700,7 @@ async def download_game_files(
     max_asset_concurrency=MAX_ASSET_CONCURRENCY,
     speed_limit_kbps=0,
     cache_strategy="reuse",
+    cancel_callback=None,
 ):
     os.makedirs(game_directory, exist_ok=True)
 
@@ -588,8 +715,7 @@ async def download_game_files(
     version_json_relative = os.path.join("versions", version_id, f"{version_id}.json")
     version_json_path = os.path.join(game_directory, version_json_relative)
     _ensure_parent(version_json_path)
-    with open(version_json_path, "w", encoding="utf-8") as file_handle:
-        json.dump(version_json, file_handle, ensure_ascii=False, indent=4)
+    save_json_atomic(version_json_path, version_json, indent=4)
 
     progress = DownloadProgress(progress_callback)
     cache_dirs = _candidate_cache_dirs(game_directory)
@@ -619,6 +745,7 @@ async def download_game_files(
                 mirror_source=mirror_source,
                 speed_limit_bps=int(speed_limit_kbps or 0) * 1024,
                 cache_strategy=cache_strategy,
+                cancel_callback=cancel_callback,
             )
 
             with open(asset_index_job.file_path, "r", encoding="utf-8") as file_handle:
@@ -651,6 +778,7 @@ async def download_game_files(
             mirror_source=mirror_source,
             speed_limit_bps=int(speed_limit_kbps or 0) * 1024,
             cache_strategy=cache_strategy,
+            cancel_callback=cancel_callback,
         )
         progress.set_phase("下载资源文件")
         await _run_jobs(
@@ -663,6 +791,7 @@ async def download_game_files(
             mirror_source=mirror_source,
             speed_limit_bps=int(speed_limit_kbps or 0) * 1024,
             cache_strategy=cache_strategy,
+            cancel_callback=cancel_callback,
         )
 
     progress.set_phase("下载完成")
@@ -680,6 +809,7 @@ async def repair_game_files(
     max_asset_concurrency=MAX_ASSET_CONCURRENCY,
     speed_limit_kbps=0,
     cache_strategy="reuse",
+    cancel_callback=None,
 ):
     """校验并补齐当前版本的核心文件、资源索引、资源文件和 natives。"""
     os.makedirs(game_directory, exist_ok=True)
@@ -716,6 +846,7 @@ async def repair_game_files(
                 mirror_source=mirror_source,
                 speed_limit_bps=int(speed_limit_kbps or 0) * 1024,
                 cache_strategy=cache_strategy,
+                cancel_callback=cancel_callback,
             )
 
             with open(asset_index_job.file_path, "r", encoding="utf-8") as file_handle:
@@ -736,6 +867,7 @@ async def repair_game_files(
             mirror_source=mirror_source,
             speed_limit_bps=int(speed_limit_kbps or 0) * 1024,
             cache_strategy=cache_strategy,
+            cancel_callback=cancel_callback,
         )
         progress.set_phase("校验资源文件")
         await _run_jobs(
@@ -748,6 +880,7 @@ async def repair_game_files(
             mirror_source=mirror_source,
             speed_limit_bps=int(speed_limit_kbps or 0) * 1024,
             cache_strategy=cache_strategy,
+            cancel_callback=cancel_callback,
         )
 
     progress.set_phase("补全完成")

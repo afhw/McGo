@@ -1,6 +1,6 @@
 import asyncio
-import requests
 
+import http_client
 from log_utils import get_logger
 
 logger = get_logger(__name__)
@@ -41,8 +41,8 @@ class MicrosoftAuthenticator:
             "TokenType": "JWT",
         }
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
-        response = requests.post(url, json=data, headers=headers)
-        response.raise_for_status()
+        response = http_client.post(url, json=data, headers=headers)
+        http_client.raise_for_status(response, "Xbox Live 认证")
         xbl_token = response.json()["Token"]
         self.user_hash = response.json()["DisplayClaims"]["xui"][0]["uhs"]
         logger.debug("Xbox Live token exchange succeeded: has_user_hash=%s", bool(self.user_hash))
@@ -54,16 +54,16 @@ class MicrosoftAuthenticator:
             "TokenType": "JWT",
         }
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
-        response = requests.post(url, json=data, headers=headers)
-        response.raise_for_status()
+        response = http_client.post(url, json=data, headers=headers)
+        http_client.raise_for_status(response, "XSTS 认证")
         self.xsts_token = response.json()["Token"]
         logger.debug("XSTS token exchange succeeded")
 
         url = "https://api.minecraftservices.com/authentication/login_with_xbox"
         headers = {"Content-Type": "application/json"}
         data = {"identityToken": f"XBL3.0 x={self.user_hash};{self.xsts_token}"}
-        response = requests.post(url, json=data, headers=headers)
-        response.raise_for_status()
+        response = http_client.post(url, json=data, headers=headers)
+        http_client.raise_for_status(response, "Minecraft 令牌交换")
         self.minecraft_access_token = response.json()["access_token"]
         logger.info("Minecraft access token exchange succeeded")
 
@@ -81,8 +81,8 @@ class MicrosoftAuthenticator:
             "scope": "XboxLive.signin offline_access",
         }
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
-        response = requests.post(url, data=data, headers=headers)
-        response.raise_for_status()
+        response = http_client.post(url, data=data, headers=headers)
+        http_client.raise_for_status(response, "Microsoft OAuth 令牌交换")
         tokens = response.json()
         self.access_token = tokens["access_token"]
         self.refresh_token = tokens["refresh_token"]
@@ -97,7 +97,7 @@ class MicrosoftAuthenticator:
         logger.info("Fetching Minecraft profile")
         url = "https://api.minecraftservices.com/minecraft/profile"
         headers = {"Authorization": f"Bearer {self.minecraft_access_token}"}
-        response = requests.get(url, headers=headers)
+        response = http_client.get(url, headers=headers)
 
         if response.status_code == 200:
             profile = response.json()
@@ -120,8 +120,8 @@ class MicrosoftAuthenticator:
             "scope": "XboxLive.signin offline_access",
         }
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
-        response = requests.post(url, data=data, headers=headers)
-        response.raise_for_status()
+        response = http_client.post(url, data=data, headers=headers)
+        http_client.raise_for_status(response, "Microsoft 令牌刷新")
         tokens = response.json()
         self.access_token = tokens["access_token"]
         self.refresh_token = tokens["refresh_token"]

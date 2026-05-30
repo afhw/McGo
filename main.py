@@ -19,7 +19,7 @@ from io import BytesIO
 from collections import deque
 from urllib.parse import urlparse
 
-import requests
+import http_client
 from flask import Flask, request
 from markupsafe import escape
 from PyQt6.QtCore import (
@@ -94,6 +94,8 @@ from downloader import collect_missing_game_files, download_game_files, extract_
 from java_utils import find_java_paths, get_java_major_version, get_java_version
 from launcher import build_launch_command, get_local_versions, get_version_inheritance_chain, infer_required_java_version, launch_minecraft, get_version_json
 from log_utils import get_logger, redact_mapping, setup_logging
+from secure_store import hydrate_accounts, redact_accounts
+from storage_utils import save_config_atomic, save_json_atomic
 from version_utils import (
     find_matching_fabric_versions,
     launch_options_for_version,
@@ -126,6 +128,8 @@ authenticator = MicrosoftAuthenticator(client_id, redirect_uri)
 app = Flask(__name__)
 LOG_PATH = setup_logging()
 logger = get_logger(__name__)
+flask_thread = None
+flask_thread_lock = threading.Lock()
 
 
 def hidden_subprocess_kwargs():
@@ -345,8 +349,7 @@ def load_config():
 
 
 def save_config():
-    with open(config_file, "w") as f:
-        config.write(f)
+    save_config_atomic(config_file, config)
     logger.debug("Config saved to %s", os.path.abspath(config_file))
 
 
@@ -363,7 +366,11 @@ def account_label(account):
 def load_accounts():
     if os.path.exists(accounts_file):
         with open(accounts_file, "r", encoding="utf-8") as f:
-            accounts = json.load(f)
+            raw_accounts = json.load(f)
+            accounts = hydrate_accounts(raw_accounts)
+        if any(isinstance(item, dict) and any(item.get(field) for field in ("access_token", "refresh_token", "client_token")) for item in raw_accounts):
+            save_accounts(accounts)
+            logger.info("Migrated account tokens to protected storage")
         logger.debug("Loaded %d accounts from %s", len(accounts), os.path.abspath(accounts_file))
         return accounts
 
@@ -398,8 +405,7 @@ def load_accounts():
 
 
 def save_accounts(accounts):
-    with open(accounts_file, "w", encoding="utf-8") as f:
-        json.dump(accounts, f, ensure_ascii=False, indent=2)
+    save_json_atomic(accounts_file, redact_accounts(accounts), indent=2)
     logger.debug("Saved %d accounts to %s", len(accounts), os.path.abspath(accounts_file))
 
 
@@ -440,8 +446,8 @@ def rewrite_download_url_for_mirror(url, mirror_source):
 
 def get_remote_versions(version_type, mirror_source):
     logger.info("Fetching remote versions: type=%s mirror=%s", version_type, mirror_source)
-    response = requests.get(f"{MIRROR_SOURCES[mirror_source]}/mc/game/version_manifest.json", timeout=30)
-    response.raise_for_status()
+    response = http_client.get(f"{MIRROR_SOURCES[mirror_source]}/mc/game/version_manifest.json", timeout=30)
+    http_client.raise_for_status(response, "获取远程版本列表")
     versions = [v["id"] for v in response.json()["versions"] if v["type"] == version_type]
     logger.info("Fetched %d remote versions: type=%s mirror=%s", len(versions), version_type, mirror_source)
     return versions
@@ -449,8 +455,8 @@ def get_remote_versions(version_type, mirror_source):
 
 def get_version_url(version_id, mirror_source):
     logger.debug("Resolving version metadata URL: version=%s mirror=%s", version_id, mirror_source)
-    response = requests.get(f"{MIRROR_SOURCES[mirror_source]}/mc/game/version_manifest.json", timeout=30)
-    response.raise_for_status()
+    response = http_client.get(f"{MIRROR_SOURCES[mirror_source]}/mc/game/version_manifest.json", timeout=30)
+    http_client.raise_for_status(response, "获取版本清单")
     for version in response.json()["versions"]:
         if version["id"] == version_id:
             logger.debug("Resolved version metadata URL: version=%s url=%s", version_id, version["url"])
@@ -469,8 +475,8 @@ def get_version_metadata_with_fallback(version_id, mirror_source, status_callbac
             if not version_url:
                 raise RuntimeError(f"无法获取版本 {version_id} 的下载地址")
             version_url = rewrite_download_url_for_mirror(version_url, source)
-            response = requests.get(version_url, timeout=30)
-            response.raise_for_status()
+            response = http_client.get(version_url, timeout=30)
+            http_client.raise_for_status(response, "获取版本元数据")
             return response.json(), source
         except Exception as exc:
             logger.warning("Version metadata fetch failed: version=%s mirror=%s error=%s", version_id, source, exc)
@@ -492,8 +498,8 @@ def stream_download(url, file_path, progress_callback=None, status_label="下载
         for source in mirror_source_sequence(mirror_source or "official"):
             candidate_url = rewrite_download_url_for_mirror(url, source)
             try:
-                response = requests.get(candidate_url, stream=True, timeout=60)
-                response.raise_for_status()
+                response = http_client.get(candidate_url, stream=True, timeout=60)
+                http_client.raise_for_status(response, "下载文件")
                 url = candidate_url
                 break
             except Exception as exc:
@@ -631,8 +637,8 @@ def download_profile_libraries(profile_json, game_dir, mirror_source, progress_c
 
 def get_fabric_loader_versions(game_version, mirror_source):
     base = mirror_root(mirror_source)
-    response = requests.get(f"{base}/fabric-meta/v2/versions/loader/{game_version}", timeout=30)
-    response.raise_for_status()
+    response = http_client.get(f"{base}/fabric-meta/v2/versions/loader/{game_version}", timeout=30)
+    http_client.raise_for_status(response, "获取 Fabric Loader 列表")
     return response.json()
 
 
@@ -641,8 +647,8 @@ def get_forge_promos(mirror_source):
         url = f"{mirror_root(mirror_source)}/forge/promos"
     else:
         url = "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json"
-    response = requests.get(url, timeout=30)
-    response.raise_for_status()
+    response = http_client.get(url, timeout=30)
+    http_client.raise_for_status(response, "获取 Forge 版本列表")
     data = response.json()
     if isinstance(data, dict) and "promos" in data:
         return data["promos"]
@@ -686,8 +692,8 @@ def get_forge_version_for_mc(game_version, mirror_source):
 def get_neoforge_list(game_version, mirror_source):
     if mirror_source == "bmclapi":
         url = f"{mirror_root(mirror_source)}/neoforge/list/{game_version}"
-        response = requests.get(url, timeout=30)
-        response.raise_for_status()
+        response = http_client.get(url, timeout=30)
+        http_client.raise_for_status(response, "获取 NeoForge 版本列表")
         return response.json()
     raise RuntimeError("NeoForge 安装当前仅支持 BMCLAPI 镜像。")
 
@@ -695,14 +701,14 @@ def get_neoforge_list(game_version, mirror_source):
 def get_optifine_list(mirror_source):
     if mirror_source == "bmclapi":
         url = f"{mirror_root(mirror_source)}/optifine/versionList"
-        response = requests.get(url, timeout=30)
-        response.raise_for_status()
+        response = http_client.get(url, timeout=30)
+        http_client.raise_for_status(response, "获取 OptiFine 版本列表")
         return response.json()
     raise RuntimeError("OptiFine 安装当前仅支持 BMCLAPI 镜像。")
 
 
 def get_fabric_api_versions(game_version):
-    response = requests.get(
+    response = http_client.get(
         "https://api.modrinth.com/v2/project/fabric-api/version",
         params={
             "loaders": json.dumps(["fabric"]),
@@ -710,7 +716,7 @@ def get_fabric_api_versions(game_version):
         },
         timeout=30,
     )
-    response.raise_for_status()
+    http_client.raise_for_status(response, "获取 Fabric API 版本列表")
     data = response.json()
     if isinstance(data, dict) and "value" in data:
         data = data["value"]
@@ -1066,7 +1072,7 @@ def search_modrinth_resources(query, resource_type, game_version="", loader="", 
             facets.append([f"versions:{current_game_version}"])
         if resource_type == "mod" and current_loader:
             facets.append([f"categories:{current_loader}"])
-        response = requests.get(
+        response = http_client.get(
             "https://api.modrinth.com/v2/search",
             params={
                 "query": query,
@@ -1077,7 +1083,7 @@ def search_modrinth_resources(query, resource_type, game_version="", loader="", 
             headers={"User-Agent": "McGo/1.0"},
             timeout=30,
         )
-        response.raise_for_status()
+        http_client.raise_for_status(response, "搜索 Modrinth 资源")
         result_hits = response.json().get("hits", [])
         logger.info(
             "Modrinth search attempt: query=%s type=%s game=%s loader=%s index=%s hits=%d",
@@ -1140,7 +1146,7 @@ def strict_modrinth_search(query, resource_type, game_version="", loader="", lim
         facets.append([f"versions:{game_version}"])
     if resource_type == "mod" and loader:
         facets.append([f"categories:{loader}"])
-    response = requests.get(
+    response = http_client.get(
         "https://api.modrinth.com/v2/search",
         params={
             "query": query,
@@ -1151,7 +1157,7 @@ def strict_modrinth_search(query, resource_type, game_version="", loader="", lim
         headers={"User-Agent": "McGo/1.0"},
         timeout=30,
     )
-    response.raise_for_status()
+    http_client.raise_for_status(response, "搜索 Modrinth 资源")
     hits = response.json().get("hits", [])
     for hit in hits:
         hit["source"] = "modrinth"
@@ -1169,13 +1175,13 @@ def get_modrinth_versions(project_id, resource_type, game_version, loader):
         game_version or "<any>",
         loader or "<any>",
     )
-    response = requests.get(
+    response = http_client.get(
         f"https://api.modrinth.com/v2/project/{project_id}/version",
         params=params,
         headers={"User-Agent": "McGo/1.0"},
         timeout=30,
     )
-    response.raise_for_status()
+    http_client.raise_for_status(response, "获取 Modrinth 版本")
     versions = response.json()
     logger.info(
         "Fetched Modrinth versions: project=%s type=%s game=%s loader=%s count=%d",
@@ -1353,12 +1359,12 @@ def install_modrinth_resource(project_id, resource_type, game_version, loader, t
 
 
 def get_modrinth_resource_detail(project_id, resource_type, game_version, loader):
-    project_response = requests.get(
+    project_response = http_client.get(
         f"https://api.modrinth.com/v2/project/{project_id}",
         headers={"User-Agent": "McGo/1.0"},
         timeout=30,
     )
-    project_response.raise_for_status()
+    http_client.raise_for_status(project_response, "获取 Modrinth 项目详情")
     project = project_response.json()
     versions = get_modrinth_versions(project_id, resource_type, game_version, loader)
     selected = (versions or [{}])[0]
@@ -1401,13 +1407,13 @@ def search_curseforge_resources(query, resource_type, game_version="", loader=""
         params["classId"] = class_id
     if game_version:
         params["gameVersion"] = game_version
-    response = requests.get(
+    response = http_client.get(
         "https://api.curseforge.com/v1/mods/search",
         params=params,
         headers=curseforge_headers(),
         timeout=30,
     )
-    response.raise_for_status()
+    http_client.raise_for_status(response, "搜索 CurseForge 资源")
     hits = []
     for item in response.json().get("data", []):
         links = item.get("links", {})
@@ -1427,19 +1433,19 @@ def search_curseforge_resources(query, resource_type, game_version="", loader=""
 
 
 def get_curseforge_resource_detail(project_id):
-    response = requests.get(
+    response = http_client.get(
         f"https://api.curseforge.com/v1/mods/{project_id}",
         headers=curseforge_headers(),
         timeout=30,
     )
-    response.raise_for_status()
+    http_client.raise_for_status(response, "获取 CurseForge 项目详情")
     project = response.json().get("data", {})
-    files_response = requests.get(
+    files_response = http_client.get(
         f"https://api.curseforge.com/v1/mods/{project_id}/files",
         headers=curseforge_headers(),
         timeout=30,
     )
-    files_response.raise_for_status()
+    http_client.raise_for_status(files_response, "获取 CurseForge 文件列表")
     files = files_response.json().get("data", [])[:8]
     links = project.get("links", {})
     screenshots = [
@@ -1554,8 +1560,8 @@ def cache_resource_screenshot(url):
     target_path = os.path.join(cache_dir, safe_name)
     if os.path.isfile(target_path) and os.path.getsize(target_path) > 0:
         return target_path
-    response = requests.get(url, headers={"User-Agent": "McGo/1.0"}, timeout=30)
-    response.raise_for_status()
+    response = http_client.get(url, headers={"User-Agent": "McGo/1.0"}, timeout=30)
+    http_client.raise_for_status(response, "下载资源截图")
     with open(target_path, "wb") as file_handle:
         file_handle.write(response.content)
     return target_path
@@ -1590,7 +1596,7 @@ def current_arch_name():
 
 
 def java_runtime_download_url(major_version):
-    response = requests.get(
+    response = http_client.get(
         f"https://api.adoptium.net/v3/assets/latest/{major_version}/hotspot",
         params={
             "architecture": current_arch_name(),
@@ -1601,7 +1607,7 @@ def java_runtime_download_url(major_version):
         headers={"User-Agent": "McGo/1.0"},
         timeout=30,
     )
-    response.raise_for_status()
+    http_client.raise_for_status(response, "获取 Java 下载地址")
     data = response.json()
     if not data:
         raise RuntimeError(f"未找到 Java {major_version} 的可下载运行时。")
@@ -1700,9 +1706,9 @@ def probe_external_auth_server(server_url):
     for url in probes:
         try:
             if url.endswith("/validate"):
-                response = requests.post(url, json={"accessToken": "mcgo-probe"}, headers=external_auth_headers(), timeout=10)
+                response = http_client.post(url, json={"accessToken": "mcgo-probe"}, headers=external_auth_headers(), timeout=10)
             else:
-                response = requests.get(url, headers={"Accept": "application/json", "User-Agent": "McGo/1.0"}, timeout=10)
+                response = http_client.get(url, headers={"Accept": "application/json", "User-Agent": "McGo/1.0"}, timeout=10)
             if response.status_code < 500:
                 return {
                     "server": server,
@@ -1710,7 +1716,7 @@ def probe_external_auth_server(server_url):
                     "message": f"服务器可访问，探测端点返回 HTTP {response.status_code}",
                 }
             errors.append(f"{url}: HTTP {response.status_code}")
-        except requests.RequestException as exc:
+        except http_client.HttpRequestError as exc:
             errors.append(f"{url}: {exc}")
     raise RuntimeError("认证服务器不可访问：" + "；".join(errors[-2:]))
 
@@ -1729,13 +1735,13 @@ def authenticate_external_account(server_url, username, password, client_token="
         "requestUser": True,
     }
     try:
-        response = requests.post(
+        response = http_client.post(
             external_auth_endpoint(server, "authenticate"),
             json=payload,
             headers=external_auth_headers(),
             timeout=30,
         )
-    except requests.RequestException as exc:
+    except http_client.HttpRequestError as exc:
         raise RuntimeError(f"无法连接外置登录服务器：{exc}") from exc
     raise_for_external_auth(response, "authenticate")
     try:
@@ -1774,24 +1780,24 @@ def refresh_external_account(account):
         "requestUser": True,
     }
     try:
-        response = requests.post(
+        response = http_client.post(
             external_auth_endpoint(server, "refresh"),
             json=payload,
             headers=external_auth_headers(),
             timeout=30,
         )
-    except requests.RequestException as exc:
+    except http_client.HttpRequestError as exc:
         raise RuntimeError(f"无法连接外置登录服务器：{exc}") from exc
     if response.status_code == 403:
         validate_payload = {"accessToken": access_token, "clientToken": client_token}
         try:
-            validate_response = requests.post(
+            validate_response = http_client.post(
                 external_auth_endpoint(server, "validate"),
                 json=validate_payload,
                 headers=external_auth_headers(),
                 timeout=30,
             )
-        except requests.RequestException as exc:
+        except http_client.HttpRequestError as exc:
             raise RuntimeError(f"无法验证外置登录令牌：{exc}") from exc
         raise_for_external_auth(validate_response, "validate")
         logger.info("External account token validated without refresh: server=%s username=%s", server, account.get("username", ""))
@@ -1816,8 +1822,8 @@ def refresh_external_account(account):
 
 def authlib_injector_download_url():
     logger.info("Fetching authlib-injector metadata: url=%s", AUTHLIB_INJECTOR_METADATA_URL)
-    response = requests.get(AUTHLIB_INJECTOR_METADATA_URL, headers={"User-Agent": "McGo/1.0"}, timeout=30)
-    response.raise_for_status()
+    response = http_client.get(AUTHLIB_INJECTOR_METADATA_URL, headers={"User-Agent": "McGo/1.0"}, timeout=30)
+    http_client.raise_for_status(response, "获取 authlib-injector 元数据")
     data = response.json()
     version = data.get("version") or "latest"
     checksums = data.get("checksums") or {}
@@ -1999,16 +2005,15 @@ class InstallerEngine:
             f"{self.minecraft_version}/{loader_version}/profile/json"
         )
         self.emit_status(f"正在获取 Fabric 安装配置：{self.minecraft_version} / Loader {loader_version}")
-        response = requests.get(profile_url, timeout=30)
-        response.raise_for_status()
+        response = http_client.get(profile_url, timeout=30)
+        http_client.raise_for_status(response, "获取 Fabric 安装配置")
         profile_json = response.json()
 
         version_id = profile_json.get("id") or f"fabric-loader-{loader_version}-{self.minecraft_version}"
         version_dir = os.path.join(self.game_dir, "versions", version_id)
         os.makedirs(version_dir, exist_ok=True)
         version_json_path = os.path.join(version_dir, f"{version_id}.json")
-        with open(version_json_path, "w", encoding="utf-8") as file_handle:
-            json.dump(profile_json, file_handle, ensure_ascii=False, indent=4)
+        save_json_atomic(version_json_path, profile_json, indent=4)
 
         if not get_version_json(self.game_dir, self.minecraft_version):
             raise RuntimeError(f"请先下载原版 Minecraft {self.minecraft_version}。")
@@ -2234,6 +2239,21 @@ def run_flask_app():
     app.run(port=5000, debug=False, use_reloader=False)
 
 
+def ensure_flask_running():
+    global flask_thread
+    with flask_thread_lock:
+        if flask_thread and flask_thread.is_alive():
+            return flask_thread
+        flask_thread = threading.Thread(
+            target=run_flask_app,
+            name="McGoOAuthCallbackServer",
+            daemon=True,
+        )
+        flask_thread.start()
+        logger.info("Microsoft OAuth callback server started lazily: %s", redirect_uri)
+        return flask_thread
+
+
 def read_download_options():
     return {
         "max_core_concurrency": max(1, config.getint("DOWNLOAD", "max_core_threads", fallback=12)),
@@ -2260,6 +2280,14 @@ class DownloadWorker(QObject):
         self.auto_install_types = list(auto_install_types or [])
         self.java_path = java_path
         self.download_options = dict(download_options or {})
+        self._cancel_event = threading.Event()
+
+    def request_stop(self):
+        self._cancel_event.set()
+
+    def is_cancel_requested(self):
+        thread = QThread.currentThread()
+        return self._cancel_event.is_set() or (thread and thread.isInterruptionRequested())
 
     def run(self):
         try:
@@ -2292,8 +2320,11 @@ class DownloadWorker(QObject):
                 self.version_id,
                 resolved_mirror_root,
                 progress_callback=on_progress,
+                cancel_callback=self.is_cancel_requested,
                 **self.download_options,
             ))
+            if self.is_cancel_requested():
+                raise RuntimeError("下载任务已取消")
             self.status.emit("正在解压 natives...")
             extract_natives(version_json, self.game_dir, self.version_id)
             payload = {"version": self.version_id}
@@ -2336,6 +2367,10 @@ class InstallWorker(QObject):
         self.mirror_source = mirror_source
         self.game_dir = game_dir
         self.java_path = java_path
+        self._cancel_event = threading.Event()
+
+    def request_stop(self):
+        self._cancel_event.set()
 
     def emit_snapshot(self, snapshot):
         value = snapshot.get("progress", 0.0)
@@ -2383,6 +2418,14 @@ class RepairWorker(QObject):
         self.mirror_source = mirror_source
         self.game_dir = os.path.abspath(game_dir)
         self.download_options = dict(download_options or {})
+        self._cancel_event = threading.Event()
+
+    def request_stop(self):
+        self._cancel_event.set()
+
+    def is_cancel_requested(self):
+        thread = QThread.currentThread()
+        return self._cancel_event.is_set() or (thread and thread.isInterruptionRequested())
 
     def run(self):
         try:
@@ -2405,6 +2448,8 @@ class RepairWorker(QObject):
             total_missing_after = 0
             report_path = ""
             for index, version_json in enumerate(reversed(chain), start=1):
+                if self.is_cancel_requested():
+                    raise RuntimeError("修复任务已取消")
                 version_id = version_json.get("id", self.version_id)
                 self.status.emit(f"正在校验并补全 {version_id}（{index}/{len(chain)}）...")
                 missing_before = collect_missing_game_files(version_json, self.game_dir, version_id)
@@ -2416,6 +2461,7 @@ class RepairWorker(QObject):
                     version_id,
                     MIRROR_SOURCES[self.mirror_source],
                     progress_callback=on_progress,
+                    cancel_callback=self.is_cancel_requested,
                     **self.download_options,
                 ))
                 missing_after = collect_missing_game_files(version_json, self.game_dir, version_id)
@@ -2505,8 +2551,8 @@ class ModpackImportWorker(QObject):
 
     def _download_file(self, url, target_path):
         os.makedirs(os.path.dirname(target_path), exist_ok=True)
-        with requests.get(url, stream=True, timeout=60) as response:
-            response.raise_for_status()
+        with http_client.get(url, stream=True, timeout=60) as response:
+            http_client.raise_for_status(response, "下载整合包文件")
             with open(target_path, "wb") as handle:
                 for chunk in response.iter_content(chunk_size=128 * 1024):
                     if chunk:
@@ -2652,7 +2698,7 @@ class ModpackImportWorker(QObject):
             self.status.emit(f"正在下载 CurseForge 文件 {idx}/{len(files)}：{project_id}/{file_id}")
             self.progress.emit(min(95, int(idx / max(len(files), 1) * 75) + 15))
             try:
-                meta_response = requests.get(
+                meta_response = http_client.get(
                     f"https://api.cfwidget.com/minecraft/mc-mods/{project_id}",
                     timeout=20,
                 )
@@ -3295,6 +3341,8 @@ class AuthWorker(QObject):
     def run(self):
         try:
             logger.info("AuthWorker started: auto_open_browser=%s", self.auto_open_browser)
+            self.status.emit("正在启动本地 Microsoft 登录回调服务...")
+            ensure_flask_running()
             login_url = authenticator.get_login_url()
             self.login_url_ready.emit(login_url)
             authenticator.authorization_code = None
@@ -5194,8 +5242,8 @@ class LauncherWindow(FluentWindow):
                 if not self.home_network_check.isChecked():
                     self.home_custom_text.setPlainText("联网主页未启用。")
                     return
-                response = requests.get(source, timeout=8)
-                response.raise_for_status()
+                response = http_client.get(source, timeout=8)
+                http_client.raise_for_status(response, "加载联网主页")
                 text = response.text
             else:
                 with open(source, "r", encoding="utf-8", errors="replace") as file_handle:
@@ -6273,13 +6321,15 @@ class LauncherWindow(FluentWindow):
         )
         stopped = []
         for name in ("download", "install", "modpack", "resource_install", "repair"):
+            worker = getattr(self, f"{name}_worker", None)
+            if worker and hasattr(worker, "request_stop"):
+                worker.request_stop()
             thread = getattr(self, f"{name}_thread", None)
             if thread and thread.isRunning():
                 thread.requestInterruption()
                 thread.quit()
-                if not thread.wait(1500):
-                    thread.terminate()
-                    thread.wait(1500)
+                if not thread.wait(5000):
+                    logger.warning("Worker did not stop within timeout after cancellation: %s", name)
                 stopped.append(name)
         self.set_download_running(False)
         self.progress_bar.setValue(0)
@@ -6830,6 +6880,7 @@ class LauncherWindow(FluentWindow):
         self.show_success("账号已删除", account_label(account))
 
     def copy_login_link(self):
+        ensure_flask_running()
         login_url = self.login_link_input.text().strip()
         if not login_url:
             login_url = authenticator.get_login_url()
@@ -6841,6 +6892,7 @@ class LauncherWindow(FluentWindow):
         self.show_success("已复制", "Microsoft 登录链接已复制到剪贴板。")
 
     def open_login_link(self):
+        ensure_flask_running()
         login_url = self.login_link_input.text().strip()
         if not login_url:
             login_url = authenticator.get_login_url()
@@ -7402,6 +7454,39 @@ class LauncherWindow(FluentWindow):
         self.log(f"Microsoft 登录失败：{message}")
         self.show_warning("登录失败", message)
 
+    def validate_launch_files(self, version):
+        game_dir = self.current_game_dir()
+        chain = get_version_inheritance_chain(game_dir, version)
+        if not chain:
+            return [f"未找到版本清单：{version}"]
+
+        issues = []
+        for version_json in reversed(chain):
+            version_id = version_json.get("id", version)
+            try:
+                missing = collect_missing_game_files(version_json, game_dir, version_id, include_assets=True)
+            except Exception as exc:
+                issues.append(f"{version_id}: 完整性检查失败：{exc}")
+                continue
+            for item in missing[:20]:
+                issues.append(f"{version_id}: {item.get('reason', '缺失')} {item.get('path') or item.get('label')}")
+            if len(missing) > 20:
+                issues.append(f"{version_id}: 还有 {len(missing) - 20} 个文件未列出")
+
+            has_native_library = any(
+                any(str(key).startswith("natives-") for key in library.get("downloads", {}).get("classifiers", {}).keys())
+                for library in version_json.get("libraries", [])
+                if isinstance(library, dict)
+            )
+            natives_dir = os.path.join(game_dir, "versions", version_id, f"{version_id}-natives")
+            has_extracted_native = False
+            if os.path.isdir(natives_dir):
+                with os.scandir(natives_dir) as entries:
+                    has_extracted_native = any(entries)
+            if has_native_library and not has_extracted_native:
+                issues.append(f"{version_id}: natives 未解压，请先使用版本补全/修复")
+        return issues
+
     def launch_game(self):
         java_path = self.java_combo.currentText().strip()
         version = self.current_selected_version()
@@ -7434,6 +7519,16 @@ class LauncherWindow(FluentWindow):
                 "Java 版本不兼容",
                 f"Minecraft {version} 至少需要 Java {required_java}，当前选择的是 Java {selected_java_major}。",
             )
+            return
+
+        integrity_issues = self.validate_launch_files(version)
+        if integrity_issues:
+            preview = "\n".join(integrity_issues[:8])
+            if len(integrity_issues) > 8:
+                preview += f"\n还有 {len(integrity_issues) - 8} 项未列出。"
+            self.show_warning("启动前检查未通过", f"{preview}\n\n请先在版本维护中执行补全/修复。")
+            self.launch_status_label.setText("启动前检查未通过，请先修复版本文件")
+            self.log(f"启动前检查未通过：{preview}")
             return
 
         launch_options = launch_options_for_version(
@@ -8241,7 +8336,6 @@ class LauncherWindow(FluentWindow):
 
 def main():
     load_config()
-    threading.Thread(target=run_flask_app, daemon=True).start()
     qt_app = QApplication(sys.argv)
     configured_theme = config.get("UI", "theme", fallback="dark").strip().lower()
     if configured_theme == "light":

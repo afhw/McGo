@@ -4,6 +4,7 @@ import re
 import shlex
 
 from launcher import find_version_json_path, get_local_versions, get_version_json
+from storage_utils import save_json_atomic
 
 
 VERSION_SETTINGS_FILE = "version_settings.json"
@@ -20,8 +21,7 @@ def load_version_settings(path=VERSION_SETTINGS_FILE):
 
 
 def save_version_settings(settings, path=VERSION_SETTINGS_FILE):
-    with open(path, "w", encoding="utf-8") as file_handle:
-        json.dump(settings, file_handle, ensure_ascii=False, indent=2)
+    save_json_atomic(path, settings, indent=2)
 
 
 def version_settings_entry(settings, version_id):
