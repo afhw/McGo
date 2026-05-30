@@ -44,7 +44,7 @@ python3 -m venv .venv
 sudo ufw allow 10721/tcp
 ```
 
-云服务器还需要在安全组里放行 `10721/tcp`。`flyliq.cn` 的 DNS 记录应指向这台服务器的公网 IP。
+云服务器还需要在安全组里放行 `10721/tcp`。
 
 ## systemd 示例
 
