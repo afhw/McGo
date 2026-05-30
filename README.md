@@ -12,7 +12,7 @@ python main.py
 轻量校验：
 
 ```bash
-python -m py_compile main.py launcher.py downloader.py auth.py auth_server.py java_utils.py version_utils.py log_utils.py
+python -m py_compile main.py launcher.py downloader.py app_workers.py auth.py auth_server.py external_auth.py file_utils.py java_runtime.py java_utils.py version_utils.py log_utils.py modpack_utils.py nat_utils.py resource_market.py ui_base.py p2p_tunnel.py p2p_server.py
 ```
 
 ## 文档导航
@@ -24,6 +24,7 @@ python -m py_compile main.py launcher.py downloader.py auth.py auth_server.py ja
 - [资源市场与 Mod 管理](docs/resources-and-mods.md)
 - [整合包导入导出](docs/modpacks.md)
 - [个性化、主页、音乐与联机入口](docs/personalization.md)
+- [P2P 联机与中继部署](docs/p2p.md)
 - [故障排查](docs/troubleshooting.md)
 
 ## 数据与安全

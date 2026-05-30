@@ -6,7 +6,6 @@ import re
 import sys
 import shutil
 import subprocess
-import tarfile
 import threading
 import tempfile
 import time
@@ -17,16 +16,9 @@ import zipfile
 import html
 from io import BytesIO
 from collections import deque
-from urllib.parse import urlparse
 
 import http_client
-from flask import Flask, request
-from markupsafe import escape
 from PyQt6.QtCore import (
-    QEasingCurve,
-    QPoint,
-    QPropertyAnimation,
-    QParallelAnimationGroup,
     QUrl,
     QThread,
     QTimer,
@@ -39,7 +31,6 @@ from PyQt6.QtWidgets import (
     QApplication,
     QAbstractItemView,
     QFileDialog,
-    QFrame,
     QGraphicsOpacityEffect,
     QGridLayout,
     QHBoxLayout,
@@ -55,11 +46,9 @@ from PyQt6.QtWidgets import (
 from qfluentwidgets import (
     Action,
     BodyLabel,
-    BreadcrumbBar,
     CaptionLabel,
     CardWidget,
     CheckBox,
-    ComboBox,
     FluentIcon,
     FluentWindow,
     IndeterminateProgressRing,
@@ -73,7 +62,6 @@ from qfluentwidgets import (
     ProgressBar,
     PushButton,
     RoundMenu,
-    ScrollArea,
     SegmentedWidget,
     SmoothMode,
     SpinBox,
@@ -81,21 +69,50 @@ from qfluentwidgets import (
     SubtitleLabel,
     TextEdit,
     Theme,
-    TitleLabel,
     setTheme,
 )
-from qfluentwidgets.common.smooth_scroll import SmoothMode as NativeSmoothMode
 from qfluentwidgets.common.animation import FluentAnimation
 from qfluentwidgets.components.navigation.navigation_panel import NavigationDisplayMode, NavigationTreeWidgetBase
-from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
 
+from app_workers import ExternalAuthWorker, NatDetectionWorker
 from auth import MicrosoftAuthenticator
+from auth_server import create_authenticator, start_flask_in_thread as ensure_flask_running
 from downloader import collect_missing_game_files, download_game_files, extract_natives, repair_game_files
+from external_auth import (
+    authlib_injector_args,
+    authlib_injector_download_url,
+    normalize_auth_server,
+    refresh_external_account,
+)
+from file_utils import sanitize_filename
+from java_runtime import extract_java_archive, find_java_in_directory, java_runtime_download_url
 from java_utils import find_java_paths, get_java_major_version, get_java_version
 from launcher import build_launch_command, get_local_versions, get_version_inheritance_chain, infer_required_java_version, launch_minecraft, get_version_json
 from log_utils import get_logger, redact_mapping, setup_logging
+from modpack_utils import analyze_crash_logs, export_modpack
+from p2p_tunnel import McgoP2PTunnel, P2PTunnelConfig, generate_room_code
+from resource_market import (
+    RESOURCE_SEARCH_SORTS,
+    RESOURCE_SOURCE_LABELS,
+    RESOURCE_TYPE_LABELS,
+    analyze_local_mod_file,
+    cache_resource_screenshot,
+    find_compatible_modrinth_version,
+    get_curseforge_resource_detail,
+    get_local_resource_detail,
+    get_modrinth_resource_detail,
+    hit_has_modrinth_compatibility,
+    install_modrinth_resource,
+    list_local_resources,
+    modrinth_loader_for_version,
+    normalize_minecraft_version_for_api,
+    resource_directory_for_type,
+    search_curseforge_resources,
+    search_modrinth_resources,
+)
 from secure_store import hydrate_accounts, redact_accounts
 from storage_utils import save_config_atomic, save_json_atomic
+from ui_base import NativeComboBox, P2PEventBridge, Page, UiMotionController
 from version_utils import (
     find_matching_fabric_versions,
     launch_options_for_version,
@@ -116,7 +133,6 @@ redirect_uri = "http://localhost:5000/login/callback"
 game_directory = ".minecraft"
 config_file = "launcher_config.ini"
 accounts_file = "accounts.json"
-AUTHLIB_INJECTOR_METADATA_URL = "https://authlib-injector.yushi.moe/artifact/latest.json"
 
 MIRROR_SOURCES = {
     "official": "https://launchermeta.mojang.com",
@@ -124,12 +140,9 @@ MIRROR_SOURCES = {
 }
 
 config = configparser.ConfigParser()
-authenticator = MicrosoftAuthenticator(client_id, redirect_uri)
-app = Flask(__name__)
+authenticator = create_authenticator(client_id, redirect_uri)
 LOG_PATH = setup_logging()
 logger = get_logger(__name__)
-flask_thread = None
-flask_thread_lock = threading.Lock()
 
 
 def hidden_subprocess_kwargs():
@@ -183,136 +196,6 @@ def recommended_memory_mb():
     return max(1024, int(recommended // 256 * 256))
 
 
-@app.route("/login/callback")
-def login_callback():
-    error = request.args.get("error")
-    if error:
-        logger.warning("Microsoft OAuth callback failed: error=%s", error)
-        return render_oauth_callback_page(
-            "Microsoft 登录失败",
-            "Microsoft 返回了错误，请回到 McGo 查看状态日志并重新登录。",
-            status="error",
-            detail=request.args.get("error_description", error),
-        ), 400
-
-    code = request.args.get("code")
-    if not code:
-        logger.warning("Microsoft OAuth callback missing authorization code")
-        return render_oauth_callback_page(
-            "缺少授权码",
-            "回调地址没有收到授权码，请回到 McGo 重新发起 Microsoft 登录。",
-            status="error",
-        ), 400
-
-    authenticator.authorization_code = code
-    logger.info("Microsoft OAuth callback received: has_code=%s", bool(authenticator.authorization_code))
-    return render_oauth_callback_page(
-        "登录成功",
-        "McGo 已收到 Microsoft 授权码。你可以关闭此页面，回到启动器继续。",
-    )
-
-
-@app.route("/")
-def oauth_callback_index():
-    return render_oauth_callback_page(
-        "McGo 登录回调服务",
-        "这个本地页面用于接收 Microsoft 登录回调。请从 McGo 启动器中发起登录。",
-    )
-
-
-def render_oauth_callback_page(title, message, status="success", detail=""):
-    is_success = status == "success"
-    accent = "#2e7d32" if is_success else "#b3261e"
-    icon = "✓" if is_success else "!"
-    escaped_title = escape(title)
-    escaped_message = escape(message)
-    escaped_detail = escape(detail)
-    detail_html = f"<p class='detail'>{escaped_detail}</p>" if detail else ""
-    return f"""<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{escaped_title}</title>
-  <style>
-    :root {{
-      color-scheme: light dark;
-      font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
-    }}
-    body {{
-      margin: 0;
-      min-height: 100vh;
-      display: grid;
-      place-items: center;
-      background: #f4f6f8;
-      color: #1f1f1f;
-    }}
-    main {{
-      width: min(520px, calc(100vw - 32px));
-      padding: 32px;
-      border: 1px solid rgba(0, 0, 0, 0.08);
-      border-radius: 10px;
-      background: white;
-      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.10);
-    }}
-    .icon {{
-      width: 48px;
-      height: 48px;
-      display: grid;
-      place-items: center;
-      border-radius: 50%;
-      background: {accent};
-      color: white;
-      font-size: 28px;
-      font-weight: 700;
-      margin-bottom: 18px;
-    }}
-    h1 {{
-      margin: 0 0 10px;
-      font-size: 24px;
-      font-weight: 650;
-    }}
-    p {{
-      margin: 0;
-      line-height: 1.65;
-      color: #4b5563;
-    }}
-    .detail {{
-      margin-top: 12px;
-      padding: 12px;
-      border-radius: 8px;
-      background: rgba(0, 0, 0, 0.04);
-      word-break: break-word;
-    }}
-    @media (prefers-color-scheme: dark) {{
-      body {{
-        background: #171717;
-        color: #f5f5f5;
-      }}
-      main {{
-        background: #242424;
-        border-color: rgba(255, 255, 255, 0.10);
-      }}
-      p {{
-        color: #c9c9c9;
-      }}
-      .detail {{
-        background: rgba(255, 255, 255, 0.08);
-      }}
-    }}
-  </style>
-</head>
-<body>
-  <main>
-    <div class="icon">{icon}</div>
-    <h1>{escaped_title}</h1>
-    <p>{escaped_message}</p>
-    {detail_html}
-  </main>
-</body>
-</html>"""
-
-
 def load_config():
     logger.debug("Loading config from %s", os.path.abspath(config_file))
     config.read(config_file)
@@ -336,6 +219,14 @@ def load_config():
         "MUSIC": {"path": "", "enabled": "False", "volume": "35", "pause_on_launch": "True"},
         "FEATURES": {"show_download": "True", "show_manage": "True"},
         "SERVERS": {"items": ""},
+        "P2P": {
+            "relay_host": "flyliq.cn",
+            "relay_port": "10721",
+            "room": "",
+            "secret": "",
+            "host_port": "25565",
+            "join_port": "25565",
+        },
         "ACCOUNTS": {"selected_account_id": ""},
     }
     for section, values in defaults.items():
@@ -773,238 +664,6 @@ INSTALL_TYPE_LABELS = {
 }
 
 
-def sanitize_filename(value, fallback="ImportedPack"):
-    cleaned = re.sub(r'[<>:"/\\|?*]+', "_", str(value or "").strip()).strip(". ")
-    return cleaned or fallback
-
-
-def sha1_file(path):
-    import hashlib
-
-    digest = hashlib.sha1()
-    with open(path, "rb") as file_handle:
-        for chunk in iter(lambda: file_handle.read(128 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def should_skip_pack_file(relative_path):
-    normalized = relative_path.replace("\\", "/").strip("/")
-    lowered = normalized.lower()
-    if not normalized:
-        return True
-    if lowered.startswith((".git/", "__pycache__/", "logs/", "crash-reports/")):
-        return True
-    if lowered in {"options.txt", "launcher_profiles.json"}:
-        return True
-    if lowered.endswith((".log", ".tmp", ".lock")):
-        return True
-    return False
-
-
-def iter_pack_files(root_dir):
-    for current_root, _, files in os.walk(root_dir):
-        for filename in files:
-            path = os.path.join(current_root, filename)
-            relative = os.path.relpath(path, root_dir).replace("\\", "/")
-            if should_skip_pack_file(relative):
-                continue
-            yield path, relative
-
-
-def detect_export_loader(game_dir, version_id):
-    version_json = get_version_json(game_dir, version_id) or {}
-    text = " ".join([
-        version_id,
-        version_json.get("id", ""),
-        version_json.get("inheritsFrom", ""),
-        " ".join(lib.get("name", "") for lib in version_json.get("libraries", []) if isinstance(lib, dict)),
-    ]).lower()
-    if "fabric-loader" in text:
-        match = re.search(r"fabric-loader[:/-]([0-9][^:\s/]*)", text)
-        return "fabric-loader", match.group(1) if match else ""
-    if "neoforge" in text:
-        match = re.search(r"neoforge[:/-]([0-9][^:\s/]*)", text)
-        return "neoforge", match.group(1) if match else ""
-    if "net.minecraftforge" in text or "forge-" in text:
-        match = re.search(r"forge[:/-]([0-9][^:\s/]*)", text)
-        return "forge", match.group(1) if match else ""
-    if "quilt-loader" in text:
-        match = re.search(r"quilt-loader[:/-]([0-9][^:\s/]*)", text)
-        return "quilt-loader", match.group(1) if match else ""
-    return "", ""
-
-
-def export_modpack(game_dir, settings, version_id, target_path, pack_format="modrinth", global_isolation=False):
-    runtime_dir = runtime_directory_for_version(game_dir, settings, version_id, global_isolation=global_isolation)
-    if not os.path.isdir(runtime_dir):
-        raise RuntimeError(f"运行目录不存在：{runtime_dir}")
-
-    minecraft_version = resolve_base_minecraft_version(game_dir, version_id)
-    pack_name = version_display_name(settings, version_id)
-    extension = os.path.splitext(target_path)[1].lower()
-    if extension == ".mrpack":
-        pack_format = "modrinth"
-    loader_key, loader_version = detect_export_loader(game_dir, version_id)
-    added = 0
-
-    with zipfile.ZipFile(target_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for file_path, relative in iter_pack_files(runtime_dir):
-            archive.write(file_path, f"overrides/{relative}")
-            added += 1
-
-        if pack_format == "modrinth":
-            dependencies = {"minecraft": minecraft_version}
-            if loader_key and loader_version:
-                dependencies[loader_key] = loader_version
-            index = {
-                "formatVersion": 1,
-                "game": "minecraft",
-                "versionId": sanitize_filename(version_id, "version"),
-                "name": pack_name,
-                "summary": f"Exported by McGo from {version_id}",
-                "files": [],
-                "dependencies": dependencies,
-            }
-            archive.writestr("modrinth.index.json", json.dumps(index, ensure_ascii=False, indent=2))
-        elif pack_format == "curseforge":
-            loader_id = ""
-            if loader_key == "fabric-loader":
-                loader_id = f"fabric-{loader_version}" if loader_version else "fabric"
-            elif loader_key:
-                loader_id = f"{loader_key}-{loader_version}" if loader_version else loader_key
-            manifest = {
-                "minecraft": {
-                    "version": minecraft_version,
-                    "modLoaders": [{"id": loader_id, "primary": True}] if loader_id else [],
-                },
-                "manifestType": "minecraftModpack",
-                "manifestVersion": 1,
-                "name": pack_name,
-                "version": "1.0.0",
-                "author": "McGo",
-                "files": [],
-                "overrides": "overrides",
-            }
-            archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
-    return added
-
-
-def analyze_crash_logs(game_dir, version_id, runtime_dir):
-    candidates = []
-    for base in (runtime_dir, os.path.join(game_dir, "versions", version_id), game_dir):
-        if not base:
-            continue
-        latest_log = os.path.join(base, "logs", "latest.log")
-        if os.path.isfile(latest_log):
-            candidates.append(latest_log)
-        crash_dir = os.path.join(base, "crash-reports")
-        if os.path.isdir(crash_dir):
-            reports = [
-                os.path.join(crash_dir, name)
-                for name in os.listdir(crash_dir)
-                if name.lower().endswith(".txt")
-            ]
-            candidates.extend(sorted(reports, key=os.path.getmtime, reverse=True)[:3])
-
-    unique = []
-    seen = set()
-    for path in candidates:
-        absolute = os.path.abspath(path)
-        if absolute not in seen:
-            seen.add(absolute)
-            unique.append(absolute)
-
-    if not unique:
-        return "未找到 latest.log 或 crash-reports。"
-
-    text_parts = []
-    for path in unique[:4]:
-        try:
-            with open(path, "r", encoding="utf-8", errors="replace") as file_handle:
-                text_parts.append(file_handle.read()[-120000:])
-        except OSError:
-            pass
-    text = "\n".join(text_parts)
-    lowered = text.lower()
-    findings = []
-
-    patterns = [
-        ("Java 版本不兼容", ["unsupported class file major version", "has been compiled by a more recent version", "java.lang.unsupportedclassversionerror"]),
-        ("Mod 缺少依赖", ["mod requires", "requires version", "missing dependencies", "modresolutionexception"]),
-        ("Mod 冲突或加载失败", ["failed to load mod", "mod loading has failed", "exception loading mod", "mixin apply failed"]),
-        ("显卡驱动/OpenGL 问题", ["opengl", "glfw error", "pixel format not accelerated", "lwjgl"]),
-        ("内存不足", ["outofmemoryerror", "java heap space", "unable to allocate"]),
-        ("认证或网络问题", ["authentication", "invalid session", "connection timed out", "unknownhostexception"]),
-        ("资源包或配置损坏", ["malformed", "jsonparseexception", "invalid byte", "could not parse"]),
-    ]
-    for label, needles in patterns:
-        if any(needle in lowered for needle in needles):
-            findings.append(label)
-
-    exception_lines = []
-    for line in text.splitlines():
-        if any(token in line for token in ("Exception", "Error", "Caused by:", "Failed to")):
-            cleaned = line.strip()
-            if cleaned and cleaned not in exception_lines:
-                exception_lines.append(cleaned)
-        if len(exception_lines) >= 8:
-            break
-
-    result = [f"分析文件：{len(unique)} 个"]
-    if findings:
-        result.append("可能原因：" + "；".join(findings))
-    else:
-        result.append("未匹配到常见崩溃类型，请查看下方关键行。")
-    if exception_lines:
-        result.append("关键行：")
-        result.extend(exception_lines[:8])
-    result.append(f"最新文件：{unique[0]}")
-    return "\n".join(result)
-
-
-RESOURCE_TYPE_LABELS = {
-    "mod": "Mod",
-    "resourcepack": "资源包",
-    "shader": "光影",
-    "datapack": "数据包",
-}
-
-
-RESOURCE_TYPE_FACETS = {
-    "mod": "project_type:mod",
-    "resourcepack": "project_type:resourcepack",
-    "shader": "project_type:shader",
-    "datapack": "project_type:datapack",
-}
-
-RESOURCE_SOURCE_LABELS = {
-    "modrinth": "Modrinth",
-    "curseforge": "CurseForge",
-    "local": "本地",
-}
-
-RESOURCE_SEARCH_SORTS = {
-    "相关度": "relevance",
-    "下载量": "downloads",
-    "收藏数": "follows",
-    "最近更新": "updated",
-}
-
-CURSEFORGE_CLASS_IDS = {
-    "mod": 6,
-    "resourcepack": 12,
-    "shader": 6552,
-    "datapack": 6945,
-}
-
-RESOURCE_EXTENSIONS = {
-    "mod": (".jar", ".jar.disabled"),
-    "resourcepack": (".zip",),
-    "shader": (".zip",),
-    "datapack": (".zip",),
-}
-
 VERSION_ICON_LABELS = ["自动", "草方块", "金块", "红石", "命令方块", "Fabric", "Forge", "NeoForge", "OptiFine"]
 
 
@@ -1025,833 +684,6 @@ class DownloadTask:
 
     def start(self):
         self.start_callback()
-
-
-def modrinth_loader_for_version(game_dir, version_id):
-    version_type = version_type_label(game_dir, version_id)
-    mapping = {
-        "Fabric": "fabric",
-        "Forge": "forge",
-        "NeoForge": "neoforge",
-        "OptiFine": "optifine",
-    }
-    return mapping.get(version_type, "")
-
-
-def normalize_minecraft_version_for_api(game_dir, version_id):
-    base_version = resolve_base_minecraft_version(game_dir, version_id)
-    match = re.search(r"(?<![\d.])(?:1|2|3|4|20|21|22|23|24|25|26|27|28|29|30)(?:\.\d{1,2}){1,2}(?:[-_](?:pre|rc)\d+)?(?![\d.])", str(base_version), flags=re.IGNORECASE)
-    if match:
-        logger.debug("Normalized Minecraft version for API: version_id=%s base=%s normalized=%s", version_id, base_version, match.group(0))
-        return match.group(0)
-    snapshot = re.search(r"(?<![0-9a-z])(\d{2}w\d{2}[a-z])(?![0-9a-z])", str(base_version), flags=re.IGNORECASE)
-    if snapshot:
-        logger.debug("Normalized Minecraft snapshot for API: version_id=%s base=%s normalized=%s", version_id, base_version, snapshot.group(1))
-        return snapshot.group(1)
-    logger.warning("Could not normalize Minecraft version for API: version_id=%s base=%s", version_id, base_version)
-    return base_version
-
-
-def resource_directory_for_type(game_dir, settings, version_id, resource_type, global_isolation=False):
-    runtime_dir = runtime_directory_for_version(game_dir, settings, version_id, global_isolation=global_isolation)
-    if resource_type == "mod":
-        return mods_directory_for_version(game_dir, settings, version_id, global_isolation=global_isolation)
-    if resource_type == "resourcepack":
-        return os.path.join(runtime_dir, "resourcepacks")
-    if resource_type == "shader":
-        return os.path.join(runtime_dir, "shaderpacks")
-    if resource_type == "datapack":
-        return os.path.join(runtime_dir, "saves")
-    return runtime_dir
-
-
-def search_modrinth_resources(query, resource_type, game_version="", loader="", limit=25, index="relevance"):
-    def run_search(current_game_version="", current_loader=""):
-        facets = [[RESOURCE_TYPE_FACETS.get(resource_type, "project_type:mod")]]
-        if current_game_version:
-            facets.append([f"versions:{current_game_version}"])
-        if resource_type == "mod" and current_loader:
-            facets.append([f"categories:{current_loader}"])
-        response = http_client.get(
-            "https://api.modrinth.com/v2/search",
-            params={
-                "query": query,
-                "limit": limit,
-                "index": index,
-                "facets": json.dumps(facets),
-            },
-            headers={"User-Agent": "McGo/1.0"},
-            timeout=30,
-        )
-        http_client.raise_for_status(response, "搜索 Modrinth 资源")
-        result_hits = response.json().get("hits", [])
-        logger.info(
-            "Modrinth search attempt: query=%s type=%s game=%s loader=%s index=%s hits=%d",
-            query,
-            resource_type,
-            current_game_version or "<any>",
-            current_loader or "<any>",
-            index,
-            len(result_hits),
-        )
-        return result_hits
-
-    logger.info(
-        "Modrinth search started: query=%s type=%s game=%s loader=%s index=%s limit=%d",
-        query,
-        resource_type,
-        game_version or "<any>",
-        loader or "<any>",
-        index,
-        limit,
-    )
-    attempts = [(game_version, loader)]
-    if loader:
-        attempts.append((game_version, ""))
-    if game_version:
-        attempts.append(("", loader))
-    attempts.append(("", ""))
-
-    seen_attempts = set()
-    hits = []
-    relaxed = False
-    for current_game_version, current_loader in attempts:
-        key = (current_game_version, current_loader)
-        if key in seen_attempts:
-            continue
-        seen_attempts.add(key)
-        hits = run_search(current_game_version, current_loader)
-        if hits:
-            relaxed = key != (game_version, loader)
-            break
-
-    for hit in hits:
-        hit["source"] = "modrinth"
-        hit["relaxed_search"] = relaxed
-    logger.info(
-        "Modrinth search finished: query=%s type=%s game=%s loader=%s hits=%d relaxed=%s",
-        query,
-        resource_type,
-        game_version or "<any>",
-        loader or "<any>",
-        len(hits),
-        relaxed,
-    )
-    return hits
-
-
-def strict_modrinth_search(query, resource_type, game_version="", loader="", limit=25, index="relevance"):
-    facets = [[RESOURCE_TYPE_FACETS.get(resource_type, "project_type:mod")]]
-    if game_version:
-        facets.append([f"versions:{game_version}"])
-    if resource_type == "mod" and loader:
-        facets.append([f"categories:{loader}"])
-    response = http_client.get(
-        "https://api.modrinth.com/v2/search",
-        params={
-            "query": query,
-            "limit": limit,
-            "index": index,
-            "facets": json.dumps(facets),
-        },
-        headers={"User-Agent": "McGo/1.0"},
-        timeout=30,
-    )
-    http_client.raise_for_status(response, "搜索 Modrinth 资源")
-    hits = response.json().get("hits", [])
-    for hit in hits:
-        hit["source"] = "modrinth"
-    return hits
-
-
-def get_modrinth_versions(project_id, resource_type, game_version, loader):
-    params = {"game_versions": json.dumps([game_version])} if game_version else {}
-    if resource_type == "mod" and loader:
-        params["loaders"] = json.dumps([loader])
-    logger.debug(
-        "Fetching Modrinth versions: project=%s type=%s game=%s loader=%s",
-        project_id,
-        resource_type,
-        game_version or "<any>",
-        loader or "<any>",
-    )
-    response = http_client.get(
-        f"https://api.modrinth.com/v2/project/{project_id}/version",
-        params=params,
-        headers={"User-Agent": "McGo/1.0"},
-        timeout=30,
-    )
-    http_client.raise_for_status(response, "获取 Modrinth 版本")
-    versions = response.json()
-    logger.info(
-        "Fetched Modrinth versions: project=%s type=%s game=%s loader=%s count=%d",
-        project_id,
-        resource_type,
-        game_version or "<any>",
-        loader or "<any>",
-        len(versions),
-    )
-    return versions
-
-
-def modrinth_version_is_compatible(version, resource_type, game_version="", loader=""):
-    game_versions = {str(item).lower() for item in version.get("game_versions", [])}
-    loaders = {str(item).lower() for item in version.get("loaders", [])}
-    if game_version and str(game_version).lower() not in game_versions:
-        return False
-    if resource_type == "mod" and loader and str(loader).lower() not in loaders:
-        return False
-    return True
-
-
-def find_compatible_modrinth_version(project_id, resource_type, game_version, loader):
-    versions = get_modrinth_versions(project_id, resource_type, game_version, loader)
-    if not versions and (game_version or loader):
-        logger.info(
-            "Modrinth exact version query returned no results, falling back to local filtering: project=%s type=%s game=%s loader=%s",
-            project_id,
-            resource_type,
-            game_version or "<any>",
-            loader or "<any>",
-        )
-        try:
-            versions = get_modrinth_versions(project_id, resource_type, "", "")
-        except Exception:
-            logger.exception("Modrinth fallback version query failed: project=%s", project_id)
-            versions = []
-        versions = [
-            item for item in versions
-            if modrinth_version_is_compatible(item, resource_type, game_version, loader)
-        ]
-    preferred = [item for item in versions if item.get("version_type") == "release"]
-    selected = (preferred or versions)[0] if versions else None
-    if selected:
-        logger.info(
-            "Selected Modrinth version: project=%s version=%s type=%s game_versions=%s loaders=%s",
-            project_id,
-            selected.get("version_number", ""),
-            selected.get("version_type", ""),
-            ",".join(str(item) for item in selected.get("game_versions", [])),
-            ",".join(str(item) for item in selected.get("loaders", [])),
-        )
-    else:
-        logger.warning(
-            "No compatible Modrinth version selected: project=%s type=%s game=%s loader=%s",
-            project_id,
-            resource_type,
-            game_version or "<any>",
-            loader or "<any>",
-        )
-    return selected
-
-
-def hit_has_modrinth_compatibility(hit, resource_type, game_version="", loader=""):
-    if game_version:
-        versions = {str(item).lower() for item in hit.get("versions", [])}
-        if versions and str(game_version).lower() not in versions:
-            return False
-    if resource_type == "mod" and loader:
-        categories = {str(item).lower() for item in hit.get("categories", [])}
-        display_categories = {str(item).lower() for item in hit.get("display_categories", [])}
-        all_categories = categories | display_categories
-        if all_categories and str(loader).lower() not in all_categories:
-            return False
-    return True
-
-
-def select_modrinth_version(project_id, resource_type, game_version, loader):
-    selected = find_compatible_modrinth_version(project_id, resource_type, game_version, loader)
-    if not selected:
-        target = f"Minecraft {game_version}" if game_version else "当前 Minecraft 版本"
-        if resource_type == "mod" and loader:
-            target += f" / {loader}"
-        raise RuntimeError(f"这个资源没有适配 {target} 的可安装文件。")
-    return selected
-
-
-def install_modrinth_resource(project_id, resource_type, game_version, loader, target_dir, install_dependencies=False, installed=None, status_callback=None, progress_callback=None):
-    installed = installed if installed is not None else set()
-    project_key = f"modrinth:{project_id}"
-    if project_key in installed:
-        logger.debug("Skipping already installed Modrinth dependency: project=%s", project_id)
-        return {"filename": "", "path": "", "version": "", "dependencies_installed": []}
-    installed.add(project_key)
-
-    logger.info(
-        "Installing Modrinth resource: project=%s type=%s game=%s loader=%s target=%s dependencies=%s",
-        project_id,
-        resource_type,
-        game_version or "<any>",
-        loader or "<any>",
-        os.path.abspath(target_dir),
-        install_dependencies,
-    )
-    selected = select_modrinth_version(project_id, resource_type, game_version, loader)
-    dependencies_installed = []
-    if install_dependencies:
-        for dependency in selected.get("dependencies", []):
-            if dependency.get("dependency_type") != "required":
-                continue
-            dep_project_id = dependency.get("project_id")
-            if not dep_project_id:
-                continue
-            logger.info(
-                "Installing required Modrinth dependency: parent=%s dependency=%s",
-                project_id,
-                dep_project_id,
-            )
-            if status_callback:
-                status_callback(f"正在安装依赖：{dep_project_id}")
-            dep_payload = install_modrinth_resource(
-                dep_project_id,
-                resource_type,
-                game_version,
-                loader,
-                target_dir,
-                install_dependencies=True,
-                installed=installed,
-                status_callback=status_callback,
-                progress_callback=progress_callback,
-            )
-            if dep_payload.get("filename"):
-                dependencies_installed.append(dep_payload.get("filename", dep_project_id))
-            dependencies_installed.extend(dep_payload.get("dependencies_installed", []))
-
-    files = selected.get("files", [])
-    primary = next((item for item in files if item.get("primary")), None) or (files[0] if files else None)
-    if not primary or not primary.get("url"):
-        logger.error(
-            "Selected Modrinth version has no downloadable file: project=%s version=%s",
-            project_id,
-            selected.get("version_number", ""),
-        )
-        raise RuntimeError("资源版本缺少可下载文件。")
-
-    filename = sanitize_filename(primary.get("filename") or f"{project_id}.jar", f"{project_id}.jar")
-    os.makedirs(target_dir, exist_ok=True)
-    target_path = os.path.join(target_dir, filename)
-    logger.info(
-        "Downloading Modrinth resource file: project=%s version=%s filename=%s size=%s target=%s",
-        project_id,
-        selected.get("version_number", ""),
-        filename,
-        primary.get("size", 0),
-        os.path.abspath(target_path),
-    )
-    stream_download(primary["url"], target_path, progress_callback, "下载资源")
-    expected_hash = primary.get("hashes", {}).get("sha1", "")
-    if expected_hash and sha1_file(target_path).lower() != expected_hash.lower():
-        logger.error("Modrinth resource SHA1 mismatch: project=%s target=%s", project_id, os.path.abspath(target_path))
-        raise RuntimeError("资源文件 SHA1 校验失败。")
-    logger.info(
-        "Modrinth resource installed: project=%s version=%s filename=%s dependencies=%d",
-        project_id,
-        selected.get("version_number", ""),
-        filename,
-        len(dependencies_installed),
-    )
-    return {
-        "filename": filename,
-        "path": target_path,
-        "version": selected.get("version_number", ""),
-        "dependencies_installed": dependencies_installed,
-    }
-
-
-def get_modrinth_resource_detail(project_id, resource_type, game_version, loader):
-    project_response = http_client.get(
-        f"https://api.modrinth.com/v2/project/{project_id}",
-        headers={"User-Agent": "McGo/1.0"},
-        timeout=30,
-    )
-    http_client.raise_for_status(project_response, "获取 Modrinth 项目详情")
-    project = project_response.json()
-    versions = get_modrinth_versions(project_id, resource_type, game_version, loader)
-    selected = (versions or [{}])[0]
-    screenshots = project.get("gallery", [])[:5]
-    dependencies = [
-        item for item in selected.get("dependencies", [])
-        if item.get("dependency_type") in {"required", "optional"}
-    ]
-    return {
-        "source": "modrinth",
-        "title": project.get("title", project_id),
-        "description": project.get("description", ""),
-        "body": project.get("body", ""),
-        "downloads": project.get("downloads", 0),
-        "followers": project.get("followers", 0),
-        "project_url": f"https://modrinth.com/{project.get('project_type', 'mod')}/{project.get('slug', project_id)}",
-        "screenshots": [item.get("url", "") for item in screenshots if item.get("url")],
-        "dependencies": dependencies,
-        "versions": versions[:8],
-    }
-
-
-def curseforge_headers():
-    api_key = os.environ.get("CURSEFORGE_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("CurseForge 官方 API 需要 CURSEFORGE_API_KEY 环境变量。")
-    return {"Accept": "application/json", "x-api-key": api_key, "User-Agent": "McGo/1.0"}
-
-
-def search_curseforge_resources(query, resource_type, game_version="", loader="", limit=25):
-    params = {
-        "gameId": 432,
-        "searchFilter": query,
-        "pageSize": limit,
-        "sortField": 2,
-        "sortOrder": "desc",
-    }
-    class_id = CURSEFORGE_CLASS_IDS.get(resource_type)
-    if class_id:
-        params["classId"] = class_id
-    if game_version:
-        params["gameVersion"] = game_version
-    response = http_client.get(
-        "https://api.curseforge.com/v1/mods/search",
-        params=params,
-        headers=curseforge_headers(),
-        timeout=30,
-    )
-    http_client.raise_for_status(response, "搜索 CurseForge 资源")
-    hits = []
-    for item in response.json().get("data", []):
-        links = item.get("links", {})
-        logo = item.get("logo") or {}
-        hits.append({
-            "source": "curseforge",
-            "project_id": item.get("id"),
-            "title": item.get("name", ""),
-            "slug": item.get("slug", ""),
-            "description": item.get("summary", ""),
-            "downloads": item.get("downloadCount", 0),
-            "follows": item.get("thumbsUpCount", 0),
-            "project_url": links.get("websiteUrl", ""),
-            "icon_url": logo.get("thumbnailUrl", ""),
-        })
-    return hits
-
-
-def get_curseforge_resource_detail(project_id):
-    response = http_client.get(
-        f"https://api.curseforge.com/v1/mods/{project_id}",
-        headers=curseforge_headers(),
-        timeout=30,
-    )
-    http_client.raise_for_status(response, "获取 CurseForge 项目详情")
-    project = response.json().get("data", {})
-    files_response = http_client.get(
-        f"https://api.curseforge.com/v1/mods/{project_id}/files",
-        headers=curseforge_headers(),
-        timeout=30,
-    )
-    http_client.raise_for_status(files_response, "获取 CurseForge 文件列表")
-    files = files_response.json().get("data", [])[:8]
-    links = project.get("links", {})
-    screenshots = [
-        screenshot.get("url", "")
-        for screenshot in project.get("screenshots", [])[:5]
-        if screenshot.get("url")
-    ]
-    return {
-        "source": "curseforge",
-        "title": project.get("name", str(project_id)),
-        "description": project.get("summary", ""),
-        "body": "",
-        "downloads": project.get("downloadCount", 0),
-        "followers": project.get("thumbsUpCount", 0),
-        "project_url": links.get("websiteUrl", ""),
-        "screenshots": screenshots,
-        "dependencies": [],
-        "versions": files,
-    }
-
-
-def list_local_resources(query, resource_type, target_dir):
-    lowered_query = query.lower()
-    extensions = RESOURCE_EXTENSIONS.get(resource_type, (".jar", ".zip"))
-    hits = []
-    if not os.path.isdir(target_dir):
-        return hits
-    for current_root, _, files in os.walk(target_dir):
-        for filename in files:
-            lowered = filename.lower()
-            if not lowered.endswith(extensions):
-                continue
-            if lowered_query and lowered_query not in lowered:
-                continue
-            path = os.path.join(current_root, filename)
-            try:
-                stat = os.stat(path)
-            except OSError:
-                continue
-            hits.append({
-                "source": "local",
-                "project_id": path,
-                "title": filename,
-                "slug": filename,
-                "description": os.path.relpath(path, target_dir),
-                "downloads": stat.st_size,
-                "follows": 0,
-                "path": path,
-                "updated": stat.st_mtime,
-            })
-    hits.sort(key=lambda item: item.get("updated", 0), reverse=True)
-    return hits[:100]
-
-
-def analyze_local_mod_file(path, mods_dir):
-    basename = os.path.basename(path)
-    lowered = basename.lower()
-    status = "禁用" if lowered.endswith(".jar.disabled") else "启用"
-    hints = []
-    if lowered.endswith(".jar.disabled"):
-        hints.append("当前不会被加载")
-    dependency_markers = {
-        "fabric-api": "Fabric API",
-        "architectury": "Architectury API",
-        "cloth-config": "Cloth Config",
-        "modmenu": "Mod Menu",
-        "geckolib": "GeckoLib",
-        "balm": "Balm",
-        "moonlight": "Moonlight Lib",
-    }
-    available = set()
-    if os.path.isdir(mods_dir):
-        available = {name.lower().replace(".disabled", "") for name in os.listdir(mods_dir)}
-    for marker, label in dependency_markers.items():
-        if marker in lowered:
-            continue
-        if any(marker in name for name in available):
-            continue
-        if marker in {"fabric-api"} and ("fabric" in lowered or basename.endswith(".jar")):
-            hints.append(f"可能需要 {label}")
-            break
-    return status, hints
-
-
-def get_local_resource_detail(path):
-    stat = os.stat(path)
-    status, hints = analyze_local_mod_file(path, os.path.dirname(path))
-    return {
-        "source": "local",
-        "title": os.path.basename(path),
-        "description": os.path.abspath(path),
-        "body": "",
-        "downloads": stat.st_size,
-        "followers": 0,
-        "project_url": os.path.abspath(os.path.dirname(path)),
-        "screenshots": [],
-        "dependencies": [{"dependency_type": "hint", "project_id": hint} for hint in hints],
-        "versions": [],
-        "status": status,
-    }
-
-
-def cache_resource_screenshot(url):
-    if not url:
-        return ""
-    cache_dir = os.path.join(tempfile.gettempdir(), "mcgo-resource-screenshots")
-    os.makedirs(cache_dir, exist_ok=True)
-    extension = os.path.splitext(url.split("?", 1)[0])[1].lower()
-    if extension not in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}:
-        extension = ".jpg"
-    safe_name = sanitize_filename(sha1_text(url), "screenshot") + extension
-    target_path = os.path.join(cache_dir, safe_name)
-    if os.path.isfile(target_path) and os.path.getsize(target_path) > 0:
-        return target_path
-    response = http_client.get(url, headers={"User-Agent": "McGo/1.0"}, timeout=30)
-    http_client.raise_for_status(response, "下载资源截图")
-    with open(target_path, "wb") as file_handle:
-        file_handle.write(response.content)
-    return target_path
-
-
-def sha1_text(value):
-    import hashlib
-
-    return hashlib.sha1(str(value).encode("utf-8", errors="ignore")).hexdigest()
-
-
-def current_platform_name():
-    if sys.platform.startswith("win"):
-        return "windows"
-    if sys.platform == "darwin":
-        return "mac"
-    return "linux"
-
-
-def current_arch_name():
-    machine = os.environ.get("PROCESSOR_ARCHITECTURE", "")
-    if not machine and hasattr(os, "uname"):
-        machine = os.uname().machine
-    machine = str(machine).lower()
-    if machine in {"amd64", "x86_64"}:
-        return "x64"
-    if machine in {"aarch64", "arm64"}:
-        return "aarch64"
-    if machine in {"x86", "i386", "i686"}:
-        return "x32"
-    return "x64"
-
-
-def java_runtime_download_url(major_version):
-    response = http_client.get(
-        f"https://api.adoptium.net/v3/assets/latest/{major_version}/hotspot",
-        params={
-            "architecture": current_arch_name(),
-            "image_type": "jre",
-            "os": current_platform_name(),
-            "vendor": "eclipse",
-        },
-        headers={"User-Agent": "McGo/1.0"},
-        timeout=30,
-    )
-    http_client.raise_for_status(response, "获取 Java 下载地址")
-    data = response.json()
-    if not data:
-        raise RuntimeError(f"未找到 Java {major_version} 的可下载运行时。")
-    package = data[0].get("binary", {}).get("package", {})
-    link = package.get("link")
-    if not link:
-        raise RuntimeError("Adoptium 返回数据缺少下载链接。")
-    return link, package.get("name") or os.path.basename(link)
-
-
-def find_java_in_directory(root_dir):
-    candidates = []
-    for current_root, _, files in os.walk(root_dir):
-        for filename in files:
-            if filename not in ("java", "java.exe"):
-                continue
-            path = os.path.join(current_root, filename)
-            if os.path.basename(os.path.dirname(path)).lower() == "bin":
-                candidates.append(path)
-    candidates.sort(key=lambda path: (len(path), path))
-    return candidates[0] if candidates else ""
-
-
-def extract_java_archive(archive_path, target_dir):
-    if zipfile.is_zipfile(archive_path):
-        with zipfile.ZipFile(archive_path, "r") as archive:
-            archive.extractall(target_dir)
-        return
-    if tarfile.is_tarfile(archive_path):
-        with tarfile.open(archive_path, "r:*") as archive:
-            archive.extractall(target_dir)
-        return
-    raise RuntimeError("Java 运行时压缩包格式不受支持。")
-
-
-def normalize_auth_server(server_url):
-    server = (server_url or "").strip().rstrip("/")
-    if not server:
-        raise RuntimeError("请填写外置登录服务器地址。")
-    if not server.startswith(("http://", "https://")):
-        server = "https://" + server
-    parsed = urlparse(server)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise RuntimeError("外置登录服务器地址格式不正确。")
-    if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
-        raise RuntimeError("外置登录服务器必须使用 HTTPS，本机测试地址除外。")
-    if server.endswith("/authserver"):
-        server = server[: -len("/authserver")]
-    return server
-
-
-def external_auth_endpoint(server, action):
-    return f"{normalize_auth_server(server)}/authserver/{action}"
-
-
-def external_auth_headers():
-    return {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "McGo/1.0"}
-
-
-def external_auth_error(response, action):
-    labels = {
-        "authenticate": "登录",
-        "refresh": "刷新",
-        "validate": "验证",
-    }
-    action_label = labels.get(action, action)
-    detail = ""
-    try:
-        data = response.json()
-        detail = data.get("errorMessage") or data.get("error") or ""
-    except ValueError:
-        detail = response.text[:300].strip()
-    if response.status_code in {401, 403}:
-        return f"外置登录{action_label}被拒绝，请检查用户名、密码或令牌。{('详情：' + detail) if detail else ''}"
-    if response.status_code == 404:
-        return "认证端点不存在，请确认地址是 Yggdrasil/Authlib-Injector 根地址，例如 https://example.com/api/yggdrasil。"
-    if response.status_code >= 500:
-        return f"认证服务器内部错误（{response.status_code}）。{('详情：' + detail) if detail else ''}"
-    return f"外置登录{action_label}失败（HTTP {response.status_code}）。{('详情：' + detail) if detail else ''}"
-
-
-def raise_for_external_auth(response, action):
-    if 200 <= response.status_code < 300:
-        return
-    raise RuntimeError(external_auth_error(response, action))
-
-
-def probe_external_auth_server(server_url):
-    server = normalize_auth_server(server_url)
-    probes = [
-        f"{server}/authserver",
-        f"{server}/authserver/validate",
-        server,
-    ]
-    errors = []
-    for url in probes:
-        try:
-            if url.endswith("/validate"):
-                response = http_client.post(url, json={"accessToken": "mcgo-probe"}, headers=external_auth_headers(), timeout=10)
-            else:
-                response = http_client.get(url, headers={"Accept": "application/json", "User-Agent": "McGo/1.0"}, timeout=10)
-            if response.status_code < 500:
-                return {
-                    "server": server,
-                    "status": response.status_code,
-                    "message": f"服务器可访问，探测端点返回 HTTP {response.status_code}",
-                }
-            errors.append(f"{url}: HTTP {response.status_code}")
-        except http_client.HttpRequestError as exc:
-            errors.append(f"{url}: {exc}")
-    raise RuntimeError("认证服务器不可访问：" + "；".join(errors[-2:]))
-
-
-def authenticate_external_account(server_url, username, password, client_token=""):
-    server = normalize_auth_server(server_url)
-    if not username.strip() or not password:
-        raise RuntimeError("外置登录需要用户名和密码。")
-    client_token = client_token or str(uuidlib.uuid4())
-    logger.info("Authenticating external account: server=%s username=%s", server, username.strip())
-    payload = {
-        "agent": {"name": "Minecraft", "version": 1},
-        "username": username.strip(),
-        "password": password,
-        "clientToken": client_token,
-        "requestUser": True,
-    }
-    try:
-        response = http_client.post(
-            external_auth_endpoint(server, "authenticate"),
-            json=payload,
-            headers=external_auth_headers(),
-            timeout=30,
-        )
-    except http_client.HttpRequestError as exc:
-        raise RuntimeError(f"无法连接外置登录服务器：{exc}") from exc
-    raise_for_external_auth(response, "authenticate")
-    try:
-        data = response.json()
-    except ValueError as exc:
-        raise RuntimeError("外置登录服务器返回的不是有效 JSON。") from exc
-    selected = data.get("selectedProfile") or {}
-    if not selected.get("id") or not selected.get("name") or not data.get("accessToken"):
-        raise RuntimeError("外置登录服务器返回的数据不完整。")
-    logger.info("External account authenticated: server=%s username=%s uuid=%s", server, selected.get("name"), selected.get("id"))
-    return {
-        "server": server,
-        "username": selected.get("name"),
-        "display_name": selected.get("name"),
-        "uuid": selected.get("id"),
-        "access_token": data.get("accessToken"),
-        "client_token": data.get("clientToken", client_token),
-    }
-
-
-def refresh_external_account(account):
-    server = normalize_auth_server(account.get("auth_server", ""))
-    access_token = account.get("access_token", "")
-    client_token = account.get("client_token", "")
-    if not access_token:
-        raise RuntimeError("外置登录账号缺少 Access Token，请重新登录。")
-    logger.info(
-        "Refreshing external account: server=%s username=%s uuid=%s",
-        server,
-        account.get("username", ""),
-        account.get("uuid", ""),
-    )
-    payload = {
-        "accessToken": access_token,
-        "clientToken": client_token,
-        "requestUser": True,
-    }
-    try:
-        response = http_client.post(
-            external_auth_endpoint(server, "refresh"),
-            json=payload,
-            headers=external_auth_headers(),
-            timeout=30,
-        )
-    except http_client.HttpRequestError as exc:
-        raise RuntimeError(f"无法连接外置登录服务器：{exc}") from exc
-    if response.status_code == 403:
-        validate_payload = {"accessToken": access_token, "clientToken": client_token}
-        try:
-            validate_response = http_client.post(
-                external_auth_endpoint(server, "validate"),
-                json=validate_payload,
-                headers=external_auth_headers(),
-                timeout=30,
-            )
-        except http_client.HttpRequestError as exc:
-            raise RuntimeError(f"无法验证外置登录令牌：{exc}") from exc
-        raise_for_external_auth(validate_response, "validate")
-        logger.info("External account token validated without refresh: server=%s username=%s", server, account.get("username", ""))
-        return dict(account)
-    raise_for_external_auth(response, "refresh")
-    try:
-        data = response.json()
-    except ValueError as exc:
-        raise RuntimeError("外置登录刷新接口返回的不是有效 JSON。") from exc
-    selected = data.get("selectedProfile") or {}
-    refreshed = dict(account)
-    refreshed["access_token"] = data.get("accessToken", access_token)
-    refreshed["client_token"] = data.get("clientToken", client_token)
-    if selected.get("id"):
-        refreshed["uuid"] = selected.get("id")
-    if selected.get("name"):
-        refreshed["username"] = selected.get("name")
-        refreshed["display_name"] = selected.get("name")
-    logger.info("External account refreshed: server=%s username=%s uuid=%s", server, refreshed.get("username", ""), refreshed.get("uuid", ""))
-    return refreshed
-
-
-def authlib_injector_download_url():
-    logger.info("Fetching authlib-injector metadata: url=%s", AUTHLIB_INJECTOR_METADATA_URL)
-    response = http_client.get(AUTHLIB_INJECTOR_METADATA_URL, headers={"User-Agent": "McGo/1.0"}, timeout=30)
-    http_client.raise_for_status(response, "获取 authlib-injector 元数据")
-    data = response.json()
-    version = data.get("version") or "latest"
-    checksums = data.get("checksums") or {}
-    url = (
-        data.get("download_url")
-        or data.get("downloadUrl")
-        or data.get("url")
-        or f"https://authlib-injector.yushi.moe/artifact/{version}/authlib-injector.jar"
-    )
-    filename = data.get("fileName") or data.get("filename") or f"authlib-injector-{version}.jar"
-    logger.info("Authlib-injector metadata fetched: filename=%s url=%s has_sha256=%s", filename, url, bool(checksums.get("sha256", "")))
-    return url, filename, checksums.get("sha256", "")
-
-
-def authlib_injector_args(account):
-    if account.get("type") != "external":
-        return []
-    injector_path = (account.get("authlib_injector_path") or "").strip()
-    server = normalize_auth_server(account.get("auth_server", ""))
-    if not injector_path:
-        raise RuntimeError("外置登录账号缺少 authlib-injector jar 路径。")
-    if not os.path.isfile(injector_path):
-        raise RuntimeError(f"authlib-injector jar 不存在：{injector_path}")
-    logger.debug("Authlib-injector args prepared: server=%s injector=%s", server, injector_path)
-    return [
-        f"-javaagent:{injector_path}={server}",
-        f"-Dauthlibinjector.yggdrasil.prefetched={server}",
-    ]
 
 
 class InstallerEngine:
@@ -2233,25 +1065,6 @@ class InstallerEngine:
             "steps": list(install_types),
             "install_type": install_types[-1] if install_types else "",
         }
-
-
-def run_flask_app():
-    app.run(port=5000, debug=False, use_reloader=False)
-
-
-def ensure_flask_running():
-    global flask_thread
-    with flask_thread_lock:
-        if flask_thread and flask_thread.is_alive():
-            return flask_thread
-        flask_thread = threading.Thread(
-            target=run_flask_app,
-            name="McGoOAuthCallbackServer",
-            daemon=True,
-        )
-        flask_thread.start()
-        logger.info("Microsoft OAuth callback server started lazily: %s", redirect_uri)
-        return flask_thread
 
 
 def read_download_options():
@@ -3371,52 +2184,6 @@ class AuthWorker(QObject):
             self.failed.emit(str(e))
 
 
-class ExternalAuthWorker(QObject):
-    status = Signal(str)
-    finished = Signal(dict)
-    failed = Signal(str)
-
-    def __init__(self, action, server="", username="", password="", injector_path="", account=None):
-        super().__init__()
-        self.action = action
-        self.server = server
-        self.username = username
-        self.password = password
-        self.injector_path = injector_path
-        self.account = dict(account or {})
-
-    def run(self):
-        try:
-            if self.action == "probe":
-                self.status.emit("正在探测外置登录服务器...")
-                payload = probe_external_auth_server(self.server)
-                payload["action"] = "probe"
-                self.finished.emit(payload)
-                return
-
-            if self.action == "login":
-                if not self.injector_path or not os.path.isfile(self.injector_path):
-                    raise RuntimeError("请选择有效的 authlib-injector.jar。")
-                self.status.emit("正在连接外置登录服务器...")
-                auth_payload = authenticate_external_account(self.server, self.username, self.password)
-                auth_payload["action"] = "login"
-                auth_payload["authlib_injector_path"] = self.injector_path
-                self.finished.emit(auth_payload)
-                return
-
-            if self.action == "refresh":
-                self.status.emit("正在刷新或验证外置登录账号...")
-                refreshed = refresh_external_account(self.account)
-                refreshed["action"] = "refresh"
-                self.finished.emit(refreshed)
-                return
-
-            raise RuntimeError(f"未知外置登录任务：{self.action}")
-        except Exception as exc:
-            logger.exception("ExternalAuthWorker failed: action=%s", self.action)
-            self.failed.emit(str(exc))
-
-
 class ScanWorker(QObject):
     status = Signal(str)
     finished = Signal(dict)
@@ -3589,193 +2356,6 @@ class LaunchWorker(QObject):
             self.failed.emit(str(exc))
 
 
-class Page(ScrollArea):
-    def __init__(self, object_name, title, subtitle):
-        super().__init__()
-        self.setObjectName(object_name)
-        self._configure_scroll_behavior()
-        self.view = QWidget()
-        self.view.setStyleSheet("background: transparent;")
-        self.layout = QVBoxLayout(self.view)
-        self.layout.setContentsMargins(32, 28, 32, 32)
-        self.layout.setSpacing(18)
-        self.layout.addWidget(TitleLabel(title))
-        self.layout.addWidget(CaptionLabel(subtitle))
-        self.breadcrumb_bar = BreadcrumbBar()
-        self.breadcrumb_bar.setObjectName(f"{object_name}Breadcrumb")
-        self.layout.addWidget(self.breadcrumb_bar)
-        self.setWidget(self.view)
-        self.setWidgetResizable(True)
-        self.setFrameShape(QFrame.Shape.NoFrame)
-        self.set_breadcrumbs([])
-
-    def _configure_scroll_behavior(self):
-        self.setSmoothMode(SmoothMode.NO_SMOOTH, Qt.Orientation.Vertical)
-        self.setSmoothMode(SmoothMode.NO_SMOOTH, Qt.Orientation.Horizontal)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-
-    def set_breadcrumbs(self, crumbs):
-        self.breadcrumb_bar.blockSignals(True)
-        self.breadcrumb_bar.clear()
-        if not crumbs:
-            self.breadcrumb_bar.setVisible(False)
-            self.breadcrumb_bar.blockSignals(False)
-            return
-
-        self.breadcrumb_bar.setVisible(True)
-        for index, crumb in enumerate(crumbs):
-            route_key = crumb.get("route_key") or f"breadcrumb_{index}"
-            self.breadcrumb_bar.addItem(route_key, crumb.get("label", ""))
-        self.breadcrumb_bar.setCurrentIndex(len(crumbs) - 1)
-        self.breadcrumb_bar.blockSignals(False)
-
-
-class NativeComboBoxMenu(ComboBoxMenu):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        if hasattr(self.view, "scrollDelegate"):
-            self.view.scrollDelegate.verticalSmoothScroll.setSmoothMode(NativeSmoothMode.NO_SMOOTH)
-            self.view.scrollDelegate.horizonSmoothScroll.setSmoothMode(NativeSmoothMode.NO_SMOOTH)
-
-
-class NativeComboBox(ComboBox):
-    def _createComboMenu(self):
-        return NativeComboBoxMenu(self)
-
-
-class UiMotionController(QObject):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.animations = []
-        self.last_trigger_at = {}
-
-    def _track(self, animation):
-        self.animations.append(animation)
-
-        def cleanup():
-            try:
-                self.animations.remove(animation)
-            except ValueError:
-                pass
-
-        if isinstance(animation, QParallelAnimationGroup):
-            animation.finished.connect(cleanup)
-        else:
-            animation.finished.connect(cleanup)
-        return animation
-
-    def _opacity_effect(self, widget):
-        effect = widget.graphicsEffect()
-        if isinstance(effect, QGraphicsOpacityEffect):
-            effect.setEnabled(True)
-            return effect
-
-        effect = QGraphicsOpacityEffect(widget)
-        effect.setOpacity(0.0)
-        effect.setEnabled(False)
-        widget.setGraphicsEffect(effect)
-        effect.setEnabled(True)
-        return effect
-
-    def _finish_with_effect(self, animation, effect):
-        def cleanup_effect():
-            effect.setOpacity(1.0)
-            effect.setEnabled(False)
-
-        animation.finished.connect(cleanup_effect)
-
-    def _curve_accelerate(self):
-        return FluentAnimation.createBezierCurve(0.18, 0.0, 0.0, 1.0)
-
-    def _curve_decelerate(self):
-        return FluentAnimation.createBezierCurve(0.12, 0.82, 0.22, 1.0)
-
-    def _curve_emphasized(self):
-        return FluentAnimation.createBezierCurve(0.2, 0.0, 0.0, 1.0)
-
-    def fade_slide_in(self, widget, offset=18, duration=320):
-        if widget is None:
-            return
-
-        effect = self._opacity_effect(widget)
-        effect.setOpacity(0.0)
-
-        opacity_animation = QPropertyAnimation(effect, b"opacity", widget)
-        opacity_animation.setDuration(duration)
-        opacity_animation.setStartValue(0.0)
-        opacity_animation.setEndValue(1.0)
-        opacity_animation.setEasingCurve(self._curve_accelerate())
-        self._finish_with_effect(opacity_animation, effect)
-
-        group = QParallelAnimationGroup(widget)
-        group.addAnimation(opacity_animation)
-        self._track(group).start()
-
-    def cross_fade_stack(self, stack, index, duration=260):
-        if stack is None or index < 0 or index >= stack.count():
-            return
-
-        current = stack.currentWidget()
-        target = stack.widget(index)
-        if target is None or current is target:
-            stack.setCurrentIndex(index)
-            return
-
-        effect = self._opacity_effect(target)
-
-        effect.setOpacity(0.0)
-        stack.setCurrentIndex(index)
-
-        opacity_animation = QPropertyAnimation(effect, b"opacity", target)
-        opacity_animation.setDuration(duration)
-        opacity_animation.setStartValue(0.0)
-        opacity_animation.setEndValue(1.0)
-        opacity_animation.setEasingCurve(self._curve_accelerate())
-        self._finish_with_effect(opacity_animation, effect)
-
-        group = QParallelAnimationGroup(target)
-        group.addAnimation(opacity_animation)
-        self._track(group).start()
-
-    def pulse_list(self, list_widget, duration=220):
-        if list_widget is None:
-            return
-
-        effect = self._opacity_effect(list_widget)
-        effect.setOpacity(0.24)
-
-        animation = QPropertyAnimation(effect, b"opacity", list_widget)
-        animation.setDuration(duration)
-        animation.setStartValue(0.24)
-        animation.setEndValue(1.0)
-        animation.setEasingCurve(self._curve_decelerate())
-        self._finish_with_effect(animation, effect)
-        self._track(animation).start()
-
-    def pulse_widget(self, widget, duration=220, start_opacity=0.55, throttle_key=None, min_interval=0.0):
-        if widget is None:
-            return
-
-        if throttle_key:
-            now = time.monotonic()
-            previous = self.last_trigger_at.get(throttle_key, 0.0)
-            if now - previous < min_interval:
-                return
-            self.last_trigger_at[throttle_key] = now
-
-        effect = self._opacity_effect(widget)
-        effect.setOpacity(start_opacity)
-
-        animation = QPropertyAnimation(effect, b"opacity", widget)
-        animation.setDuration(duration)
-        animation.setStartValue(start_opacity)
-        animation.setEndValue(1.0)
-        animation.setEasingCurve(self._curve_decelerate())
-        self._finish_with_effect(animation, effect)
-        self._track(animation).start()
-
-
 class LauncherWindow(FluentWindow):
     def __init__(self):
         super().__init__()
@@ -3808,6 +2388,13 @@ class LauncherWindow(FluentWindow):
         self.external_auth_worker = None
         self.launch_thread = None
         self.launch_worker = None
+        self.nat_thread = None
+        self.nat_worker = None
+        self.p2p_tunnel = None
+        self.p2p_bridge = P2PEventBridge()
+        self.p2p_bridge.status.connect(self.on_p2p_status)
+        self.p2p_bridge.stopped.connect(self.on_p2p_stopped)
+        self.p2p_bridge.failed.connect(self.on_p2p_failed)
         self.download_task_queue = deque()
         self.active_download_task = None
         self.last_failed_download_task = None
@@ -3834,7 +2421,7 @@ class LauncherWindow(FluentWindow):
         self.setMicaEffectEnabled(False)
         self.setCustomBackgroundColor("#f5f5f5", "#202020")
         self.setStyleSheet("""
-            Page, QWidget#homePage, QWidget#launchPage, QWidget#downloadPage, QWidget#settingsPage, QWidget#logPage {
+            Page, QWidget#homePage, QWidget#launchPage, QWidget#downloadPage, QWidget#onlinePage, QWidget#settingsPage, QWidget#logPage {
                 background: transparent;
             }
             CardWidget {
@@ -3861,6 +2448,14 @@ class LauncherWindow(FluentWindow):
 
     def animate_initial_views(self):
         self.animate_card_group(getattr(self, "home_cards", []))
+
+    def closeEvent(self, event):
+        if self.p2p_tunnel:
+            self.p2p_tunnel.stop()
+        if self.nat_thread and self.nat_thread.isRunning():
+            self.nat_thread.quit()
+            self.nat_thread.wait(3500)
+        super().closeEvent(event)
 
     def animate_card_group(self, widgets):
         for widget in widgets:
@@ -3989,6 +2584,31 @@ class LauncherWindow(FluentWindow):
         self.server_list_input.setAcceptRichText(False)
         self.server_list_input.setPlainText(config.get("SERVERS", "items", fallback=""))
         self.server_list_input.setPlaceholderText("每行一个服务器，例如：mc.example.com:25565 | 生存服")
+        self.p2p_relay_host_input = LineEdit()
+        self.p2p_relay_host_input.setText(config.get("P2P", "relay_host", fallback="flyliq.cn"))
+        self.p2p_relay_host_input.setPlaceholderText("flyliq.cn")
+        self.p2p_relay_port_input = SpinBox()
+        self.p2p_relay_port_input.setRange(1, 65535)
+        self.p2p_relay_port_input.setValue(config.getint("P2P", "relay_port", fallback=10721))
+        self.p2p_room_input = LineEdit()
+        self.p2p_room_input.setText(config.get("P2P", "room", fallback=""))
+        self.p2p_room_input.setPlaceholderText("留空会自动生成房间号")
+        self.p2p_secret_input = PasswordLineEdit()
+        self.p2p_secret_input.setText(config.get("P2P", "secret", fallback=""))
+        self.p2p_secret_input.setPlaceholderText("可选；加入者需要填写相同口令")
+        self.p2p_host_port_input = SpinBox()
+        self.p2p_host_port_input.setRange(1, 65535)
+        self.p2p_host_port_input.setValue(config.getint("P2P", "host_port", fallback=25565))
+        self.p2p_join_port_input = SpinBox()
+        self.p2p_join_port_input.setRange(1, 65535)
+        self.p2p_join_port_input.setValue(config.getint("P2P", "join_port", fallback=25565))
+        self.p2p_status_label = BodyLabel("P2P 隧道未启动")
+        self.nat_status_label = BodyLabel("NAT 类型：未检测")
+        self.nat_detail_text = TextEdit()
+        self.nat_detail_text.setReadOnly(True)
+        self.nat_detail_text.setAcceptRichText(False)
+        self.nat_detail_text.setMinimumHeight(150)
+        self.nat_detail_text.setPlainText("点击“检测 NAT 类型”后显示 STUN 探测结果。")
         self.show_download_check = CheckBox("显示下载页")
         self.show_download_check.setChecked(config.getboolean("FEATURES", "show_download", fallback=True))
         self.show_manage_check = CheckBox("显示管理页")
@@ -4122,13 +2742,15 @@ class LauncherWindow(FluentWindow):
         self.home_page = Page("homePage", "McGo", "一个 Fluent 风格的 Minecraft 启动器")
         self.launch_page = Page("launchPage", "启动游戏", "选择 Java 和本地版本，然后启动 Minecraft")
         self.download_page = Page("downloadPage", "下载游戏", "选择版本类型、镜像源和目标版本")
+        self.online_page = Page("onlinePage", "联机", "服务器列表、NAT 检测与 McGo P2P 隧道")
         self.manage_page = Page("managePage", "管理中心", "将账号、环境和日志按任务分组，减少来回切页")
-        for page in (self.home_page, self.launch_page, self.download_page, self.manage_page):
+        for page in (self.home_page, self.launch_page, self.download_page, self.online_page, self.manage_page):
             page.breadcrumb_bar.currentItemChanged.connect(self.on_breadcrumb_changed)
         self.page_breadcrumb_labels = {
             self.home_page: "首页",
             self.launch_page: "启动",
             self.download_page: "下载",
+            self.online_page: "联机",
             self.manage_page: "管理",
         }
         self.version_section_labels = {
@@ -4166,6 +2788,7 @@ class LauncherWindow(FluentWindow):
         self.build_home_page()
         self.build_launch_page()
         self.build_download_page()
+        self.build_online_page()
         self.build_manage_page()
         self.update_breadcrumbs()
 
@@ -4173,6 +2796,7 @@ class LauncherWindow(FluentWindow):
         self.addSubInterface(self.home_page, FluentIcon.HOME, "首页")
         self.addSubInterface(self.launch_page, FluentIcon.GAME, "启动")
         self.addSubInterface(self.download_page, FluentIcon.DOWNLOAD, "下载")
+        self.addSubInterface(self.online_page, FluentIcon.CONNECT, "联机")
         self.addSubInterface(self.manage_page, FluentIcon.SETTING, "管理")
         self.navigation_pages = {
             "download": self.download_page,
@@ -4239,6 +2863,8 @@ class LauncherWindow(FluentWindow):
             self.animate_card_group(getattr(self, "launch_cards", []))
         elif page is self.download_page:
             self.animate_card_group(getattr(self, "download_cards", []))
+        elif page is self.online_page:
+            self.animate_card_group(getattr(self, "online_cards", []))
         elif page is self.manage_page:
             self.animate_card_group(getattr(self, "manage_cards", []))
 
@@ -4246,7 +2872,7 @@ class LauncherWindow(FluentWindow):
         return {"label": label, "route_key": route_key}
 
     def update_breadcrumbs(self, page=None):
-        if not all(hasattr(self, name) for name in ("home_page", "launch_page", "download_page", "manage_page")):
+        if not all(hasattr(self, name) for name in ("home_page", "launch_page", "download_page", "online_page", "manage_page")):
             return
         if page is None:
             page = self.stackedWidget.currentWidget() if hasattr(self, "stackedWidget") else self.home_page
@@ -4271,6 +2897,8 @@ class LauncherWindow(FluentWindow):
                 crumbs.append(self.breadcrumb_crumb(category, f"download_category_{category}"))
             if hasattr(self, "download_stack") and self.download_stack.isVisible():
                 crumbs.append(self.breadcrumb_crumb(self.download_section_labels.get(section, "下载原版"), f"download_{section}"))
+        elif page is self.online_page:
+            crumbs = [home_crumb, self.breadcrumb_crumb("联机", "online")]
         elif page is self.manage_page:
             section = getattr(self, "current_manage_section", "accounts")
             crumbs = [home_crumb, self.breadcrumb_crumb("管理", "manage")]
@@ -4328,6 +2956,8 @@ class LauncherWindow(FluentWindow):
             self.open_download_category(route_key.removeprefix("download_category_"))
         elif route_key.startswith("download_") and not route_key.startswith("download_category_"):
             self.open_download_section(route_key.removeprefix("download_"))
+        elif route_key == "online":
+            self.open_online_page()
         elif route_key == "manage":
             self.open_manage_overview()
         elif route_key.startswith("manage_category_"):
@@ -4415,14 +3045,17 @@ class LauncherWindow(FluentWindow):
         manage_button = PrimaryPushButton("1. 管理账号与环境")
         download_button = PushButton("2. 下载版本")
         launch_button = PushButton("3. 启动游戏")
+        online_button = PushButton("联机")
         refresh_button = PushButton("刷新本地状态")
         manage_button.clicked.connect(lambda: self.open_manage_section("accounts"))
         refresh_button.clicked.connect(self.refresh_all)
         download_button.clicked.connect(lambda: self.open_download_section("vanilla"))
         launch_button.clicked.connect(self.open_version_overview)
+        online_button.clicked.connect(self.open_online_page)
         row.addWidget(manage_button)
         row.addWidget(download_button)
         row.addWidget(launch_button)
+        row.addWidget(online_button)
         row.addWidget(refresh_button)
         row.addStretch()
         quick_layout.addLayout(row)
@@ -5068,7 +3701,7 @@ class LauncherWindow(FluentWindow):
         return card
 
     def build_server_section(self):
-        card, layout = self.make_card("联机入口", "维护常用服务器地址，并可复制到剪贴板")
+        card, layout = self.make_card("联机入口", "维护常用服务器地址，并启动 McGo P2P 联机隧道")
         layout.addWidget(self.server_list_input)
         row = QHBoxLayout()
         copy_button = PushButton("复制首个服务器")
@@ -5079,7 +3712,66 @@ class LauncherWindow(FluentWindow):
         row.addWidget(save_button)
         row.addStretch()
         layout.addLayout(row)
+
+        p2p_grid = QGridLayout()
+        p2p_grid.setHorizontalSpacing(16)
+        p2p_grid.setVerticalSpacing(10)
+        p2p_grid.addWidget(CaptionLabel("中继地址"), 0, 0)
+        p2p_grid.addWidget(self.p2p_relay_host_input, 1, 0)
+        p2p_grid.addWidget(CaptionLabel("中继端口"), 0, 1)
+        p2p_grid.addWidget(self.p2p_relay_port_input, 1, 1)
+        p2p_grid.addWidget(CaptionLabel("房间号"), 2, 0)
+        p2p_grid.addWidget(self.p2p_room_input, 3, 0)
+        p2p_grid.addWidget(CaptionLabel("房间口令"), 2, 1)
+        p2p_grid.addWidget(self.p2p_secret_input, 3, 1)
+        p2p_grid.addWidget(CaptionLabel("房主 Minecraft LAN 端口"), 4, 0)
+        p2p_grid.addWidget(self.p2p_host_port_input, 5, 0)
+        p2p_grid.addWidget(CaptionLabel("加入者本地监听端口"), 4, 1)
+        p2p_grid.addWidget(self.p2p_join_port_input, 5, 1)
+        layout.addLayout(p2p_grid)
+        layout.addWidget(CaptionLabel("房主需要先在游戏内“对局域网开放”，把聊天栏显示的端口填到房主端口。加入者启动隧道后在 Minecraft 中连接 127.0.0.1:本地监听端口。"))
+        layout.addWidget(self.p2p_status_label)
+
+        p2p_row = QHBoxLayout()
+        self.p2p_start_host_button = PushButton("作为房主启动")
+        self.p2p_start_join_button = PushButton("作为加入者启动")
+        self.p2p_stop_button = PushButton("停止 P2P")
+        copy_invite_button = PushButton("复制邀请信息")
+        self.p2p_stop_button.setEnabled(False)
+        self.p2p_start_host_button.clicked.connect(self.start_p2p_host)
+        self.p2p_start_join_button.clicked.connect(self.start_p2p_join)
+        self.p2p_stop_button.clicked.connect(self.stop_p2p)
+        copy_invite_button.clicked.connect(self.copy_p2p_invite)
+        p2p_row.addWidget(self.p2p_start_host_button)
+        p2p_row.addWidget(self.p2p_start_join_button)
+        p2p_row.addWidget(self.p2p_stop_button)
+        p2p_row.addWidget(copy_invite_button)
+        p2p_row.addStretch()
+        layout.addLayout(p2p_row)
         return card
+
+    def build_nat_section(self):
+        card, layout = self.make_card("NAT 类型检测", "通过 STUN 检测当前网络的 UDP 公网映射")
+        layout.addWidget(self.nat_status_label)
+        layout.addWidget(self.nat_detail_text)
+        row = QHBoxLayout()
+        self.nat_detect_button = PrimaryPushButton("检测 NAT 类型")
+        self.nat_copy_button = PushButton("复制检测结果")
+        self.nat_detect_button.clicked.connect(self.start_nat_detection)
+        self.nat_copy_button.clicked.connect(self.copy_nat_result)
+        row.addWidget(self.nat_detect_button)
+        row.addWidget(self.nat_copy_button)
+        row.addStretch()
+        layout.addLayout(row)
+        return card
+
+    def build_online_page(self):
+        nat_card = self.build_nat_section()
+        server_card = self.build_server_section()
+        self.online_page.layout.addWidget(nat_card)
+        self.online_page.layout.addWidget(server_card)
+        self.online_page.layout.addStretch()
+        self.online_cards = [nat_card, server_card]
 
     def build_log_section(self):
         card, layout = self.make_card("状态日志", "把下载、登录和启动日志集中到一个分页里，避免单独切主菜单")
@@ -5151,7 +3843,6 @@ class LauncherWindow(FluentWindow):
         environment_layout.setContentsMargins(0, 0, 0, 0)
         environment_layout.addWidget(self.build_environment_section())
         environment_layout.addWidget(self.build_personalization_section())
-        environment_layout.addWidget(self.build_server_section())
         environment_layout.addStretch()
 
         log_layout = QVBoxLayout(self.log_manage_view)
@@ -5202,6 +3893,9 @@ class LauncherWindow(FluentWindow):
         self.switch_download_section(section_key, category)
         if section_key == "resources":
             self.refresh_resource_target_versions()
+
+    def open_online_page(self):
+        self.switch_main_page(self.online_page, self.online_cards)
 
     def open_version_section(self, section_key, category=None):
         self.switch_main_page(self.launch_page, self.launch_cards)
@@ -5291,6 +3985,170 @@ class LauncherWindow(FluentWindow):
                 self.show_success("服务器已复制", server)
                 return
         self.show_warning("没有服务器", "请先填写服务器地址。")
+
+    def start_nat_detection(self):
+        if self.nat_thread and self.nat_thread.isRunning():
+            self.show_warning("NAT 检测正在运行", "请等待当前检测完成。")
+            return
+        self.nat_status_label.setText("NAT 类型：检测中")
+        self.nat_detail_text.setPlainText("正在连接 STUN 服务器...")
+        self.nat_detect_button.setEnabled(False)
+
+        self.nat_thread = QThread()
+        self.nat_worker = NatDetectionWorker()
+        self.nat_worker.moveToThread(self.nat_thread)
+        self.nat_thread.started.connect(self.nat_worker.run)
+        self.nat_worker.status.connect(self.on_nat_detection_status)
+        self.nat_worker.finished.connect(self.on_nat_detection_finished)
+        self.nat_worker.failed.connect(self.on_nat_detection_failed)
+        self.nat_worker.finished.connect(self.nat_thread.quit)
+        self.nat_worker.failed.connect(self.nat_thread.quit)
+        self.nat_worker.finished.connect(self.nat_worker.deleteLater)
+        self.nat_worker.failed.connect(self.nat_worker.deleteLater)
+        self.nat_thread.finished.connect(self.clear_nat_detection_task)
+        self.nat_thread.finished.connect(self.nat_thread.deleteLater)
+        self.nat_thread.start()
+
+    def clear_nat_detection_task(self):
+        self.nat_thread = None
+        self.nat_worker = None
+        if hasattr(self, "nat_detect_button"):
+            self.nat_detect_button.setEnabled(True)
+
+    def on_nat_detection_status(self, message):
+        self.nat_detail_text.setPlainText(message)
+
+    def on_nat_detection_finished(self, result):
+        nat_type = result.get("nat_type", "未知")
+        summary = result.get("summary", "")
+        details = result.get("details", "")
+        self.nat_status_label.setText(f"NAT 类型：{nat_type}")
+        self.nat_detail_text.setPlainText("\n".join(part for part in (summary, details) if part))
+        self.log(f"NAT 类型检测完成：{nat_type}")
+
+    def on_nat_detection_failed(self, message):
+        self.nat_status_label.setText("NAT 类型：检测失败")
+        self.nat_detail_text.setPlainText(message)
+        self.show_warning("NAT 检测失败", message)
+        self.log(f"NAT 检测失败：{message}")
+
+    def copy_nat_result(self):
+        text = self.nat_detail_text.toPlainText().strip()
+        if not text:
+            self.show_warning("没有检测结果", "请先检测 NAT 类型。")
+            return
+        QApplication.clipboard().setText(f"{self.nat_status_label.text()}\n{text}")
+        self.show_success("NAT 检测结果已复制", self.nat_status_label.text())
+
+    def save_p2p_settings(self):
+        config["P2P"]["relay_host"] = self.p2p_relay_host_input.text().strip() or "flyliq.cn"
+        config["P2P"]["relay_port"] = str(self.p2p_relay_port_input.value())
+        config["P2P"]["room"] = self.p2p_room_input.text().strip()
+        config["P2P"]["secret"] = self.p2p_secret_input.text().strip()
+        config["P2P"]["host_port"] = str(self.p2p_host_port_input.value())
+        config["P2P"]["join_port"] = str(self.p2p_join_port_input.value())
+        save_config()
+
+    def ensure_p2p_room(self):
+        room = self.p2p_room_input.text().strip()
+        if not room:
+            room = generate_room_code()
+            self.p2p_room_input.setText(room)
+        return room
+
+    def current_p2p_config(self, mode):
+        room = self.ensure_p2p_room()
+        port = self.p2p_host_port_input.value() if mode == "host" else self.p2p_join_port_input.value()
+        return P2PTunnelConfig(
+            mode=mode,
+            relay_host=self.p2p_relay_host_input.text().strip() or "flyliq.cn",
+            relay_port=self.p2p_relay_port_input.value(),
+            room=room,
+            secret=self.p2p_secret_input.text().strip(),
+            local_port=port,
+        )
+
+    def p2p_is_running(self):
+        return bool(self.p2p_tunnel and self.p2p_tunnel.is_running())
+
+    def set_p2p_running(self, running):
+        if hasattr(self, "p2p_start_host_button"):
+            self.p2p_start_host_button.setEnabled(not running)
+            self.p2p_start_join_button.setEnabled(not running)
+            self.p2p_stop_button.setEnabled(running)
+        for control_name in (
+            "p2p_relay_host_input",
+            "p2p_relay_port_input",
+            "p2p_room_input",
+            "p2p_secret_input",
+            "p2p_host_port_input",
+            "p2p_join_port_input",
+        ):
+            if hasattr(self, control_name):
+                getattr(self, control_name).setEnabled(not running)
+
+    def start_p2p_host(self):
+        self.start_p2p_tunnel("host")
+
+    def start_p2p_join(self):
+        self.start_p2p_tunnel("join")
+
+    def start_p2p_tunnel(self, mode):
+        if self.p2p_is_running():
+            self.show_warning("P2P 正在运行", "请先停止当前 P2P 隧道。")
+            return
+        tunnel_config = self.current_p2p_config(mode)
+        self.save_p2p_settings()
+        self.p2p_tunnel = McgoP2PTunnel(
+            tunnel_config,
+            status_callback=self.p2p_bridge.status.emit,
+            stopped_callback=self.p2p_bridge.stopped.emit,
+            failed_callback=self.p2p_bridge.failed.emit,
+        )
+        self.set_p2p_running(True)
+        self.p2p_status_label.setText("正在连接 P2P 中继...")
+        self.p2p_tunnel.start()
+        role_label = "房主" if mode == "host" else "加入者"
+        self.log(f"P2P {role_label}隧道启动中：{tunnel_config.relay_host}:{tunnel_config.relay_port} / 房间 {tunnel_config.room}")
+
+    def stop_p2p(self):
+        if not self.p2p_tunnel:
+            self.set_p2p_running(False)
+            return
+        self.p2p_status_label.setText("正在停止 P2P 隧道...")
+        self.p2p_tunnel.stop()
+
+    def copy_p2p_invite(self):
+        room = self.ensure_p2p_room()
+        self.save_p2p_settings()
+        invite = (
+            "McGo P2P 联机\n"
+            f"中继：{self.p2p_relay_host_input.text().strip() or 'flyliq.cn'}:{self.p2p_relay_port_input.value()}\n"
+            f"房间：{room}\n"
+            f"口令：{self.p2p_secret_input.text().strip() or '无'}\n"
+            f"加入者本地服务器：127.0.0.1:{self.p2p_join_port_input.value()}"
+        )
+        QApplication.clipboard().setText(invite)
+        self.show_success("邀请信息已复制", f"房间 {room}")
+
+    def on_p2p_status(self, message):
+        if hasattr(self, "p2p_status_label"):
+            self.p2p_status_label.setText(message)
+        self.log(message)
+
+    def on_p2p_stopped(self, message):
+        self.set_p2p_running(False)
+        self.p2p_tunnel = None
+        if hasattr(self, "p2p_status_label"):
+            self.p2p_status_label.setText(message)
+        self.log(message)
+
+    def on_p2p_failed(self, message):
+        self.set_p2p_running(False)
+        if hasattr(self, "p2p_status_label"):
+            self.p2p_status_label.setText(f"P2P 隧道失败：{message}")
+        self.show_warning("P2P 隧道失败", message)
+        self.log(f"P2P 隧道失败：{message}")
 
     def apply_feature_visibility(self):
         if not hasattr(self, "navigation_pages"):
@@ -7389,6 +6247,12 @@ class LauncherWindow(FluentWindow):
         config["FEATURES"]["show_download"] = str(self.show_download_check.isChecked())
         config["FEATURES"]["show_manage"] = str(self.show_manage_check.isChecked())
         config["SERVERS"]["items"] = self.server_list_input.toPlainText().strip()
+        config["P2P"]["relay_host"] = self.p2p_relay_host_input.text().strip() or "flyliq.cn"
+        config["P2P"]["relay_port"] = str(self.p2p_relay_port_input.value())
+        config["P2P"]["room"] = self.p2p_room_input.text().strip()
+        config["P2P"]["secret"] = self.p2p_secret_input.text().strip()
+        config["P2P"]["host_port"] = str(self.p2p_host_port_input.value())
+        config["P2P"]["join_port"] = str(self.p2p_join_port_input.value())
         save_config()
         self.apply_theme_image()
         self.refresh_home_content()
