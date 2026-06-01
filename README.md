@@ -12,7 +12,7 @@ python main.py
 轻量校验：
 
 ```bash
-python -m py_compile main.py launcher.py downloader.py app_workers.py auth.py auth_server.py external_auth.py file_utils.py install_services.py installer_engine.py java_runtime.py java_utils.py version_utils.py log_utils.py modpack_utils.py nat_utils.py process_utils.py resource_market.py resource_workers.py ui_base.py p2p_tunnel.py p2p_server.py
+python -m py_compile main.py ui_window.py app_settings.py app_media.py app_format.py launcher.py downloader.py app_workers.py auth.py auth_server.py external_auth.py file_utils.py install_services.py installer_engine.py java_runtime.py java_utils.py version_utils.py log_utils.py modpack_utils.py nat_utils.py process_utils.py resource_market.py resource_workers.py ui_base.py p2p_tunnel.py p2p_server.py
 ```
 
 ## 文档导航
