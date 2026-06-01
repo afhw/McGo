@@ -11,6 +11,7 @@ import uuid as uuidlib
 import webbrowser
 import html
 from collections import deque
+from urllib.parse import urlparse
 
 import http_client
 from PyQt6.QtCore import (
@@ -306,6 +307,24 @@ def read_download_options():
     }
 
 
+def concise_download_error(message):
+    text = str(message or "").strip()
+    if not text:
+        return "下载任务失败，请查看日志获取详细信息。"
+
+    parts = [part.strip() for part in text.split("；") if part.strip()]
+    if parts and all("404" in part for part in parts):
+        urls = re.findall(r"https?://[^\s'；,]+", parts[0])
+        url = urls[0].rstrip(",:;，；") if urls else ""
+        filename = os.path.basename(urlparse(url).path) if url else ""
+        if not filename:
+            match = re.search(r"([^/\\；:'\"]+\.jar)", parts[0])
+            filename = match.group(1) if match else "目标文件"
+        return f"{filename} 在当前镜像源和官方源均不存在（404）。请切换镜像源或重新刷新版本信息后重试。"
+
+    return text if len(text) <= 240 else f"{text[:237]}..."
+
+
 
 class LauncherWindow(FluentWindow):
     def __init__(self):
@@ -353,6 +372,7 @@ class LauncherWindow(FluentWindow):
         self.scan_threads = {}
         self.scan_workers = {}
         self.scan_feedback_tasks = set()
+        self.pending_local_version_selection = ""
         self.java_versions = {}
         self.accounts = load_accounts()
         self.version_settings = load_version_settings()
@@ -2425,13 +2445,11 @@ class LauncherWindow(FluentWindow):
             if self.version_supports_resource_type(version_id, resource_type)
         ]
         preferred = self.preferred_version_id(filtered)
-        self.resource_version_combo.blockSignals(True)
-        self.resource_version_combo.clear()
         self.resource_version_ids = list(filtered)
-        self.resource_version_combo.addItems([self.version_display_name(version_id) for version_id in filtered])
-        if preferred in filtered:
-            self.resource_version_combo.setCurrentIndex(filtered.index(preferred))
-        self.resource_version_combo.blockSignals(False)
+        self.resource_version_combo.reset_items(
+            [self.version_display_name(version_id) for version_id in filtered],
+            current_index=filtered.index(preferred) if preferred in filtered else None,
+        )
 
     def on_version_display_selected(self, version_label):
         current_index = self.version_display_combo.currentIndex()
@@ -3247,20 +3265,19 @@ class LauncherWindow(FluentWindow):
         self.account_combo.blockSignals(True)
         self.manage_account_combo.blockSignals(True)
         self.delete_account_combo.blockSignals(True)
-        self.account_combo.clear()
-        self.manage_account_combo.clear()
-        self.delete_account_combo.clear()
         self.account_index_ids = []
         self.manage_account_index_ids = []
         self.delete_account_index_ids = []
+        labels = []
         for account in self.accounts:
             account_id = account.get("id", "")
-            self.account_combo.addItem(account_label(account))
-            self.manage_account_combo.addItem(account_label(account))
-            self.delete_account_combo.addItem(account_label(account))
+            labels.append(account_label(account))
             self.account_index_ids.append(account_id)
             self.manage_account_index_ids.append(account_id)
             self.delete_account_index_ids.append(account_id)
+        self.account_combo.reset_items(labels)
+        self.manage_account_combo.reset_items(labels)
+        self.delete_account_combo.reset_items(labels)
 
         if self.accounts:
             selected_index = 0
@@ -3782,10 +3799,8 @@ class LauncherWindow(FluentWindow):
         if task == "java":
             paths = payload.get("paths", [])
             show_feedback = self.should_show_scan_feedback(task)
-            self.java_combo.clear()
             self.java_versions = payload.get("versions", {})
-            for path in paths:
-                self.java_combo.addItem(path)
+            self.java_combo.reset_items(paths)
             if paths:
                 self.apply_recommended_java(self.current_selected_version())
                 self.log(f"找到 {len(paths)} 个 Java。")
@@ -3803,6 +3818,7 @@ class LauncherWindow(FluentWindow):
             versions = payload.get("versions", [])
             show_feedback = self.should_show_scan_feedback(task)
             previous_version = self.current_selected_version()
+            pending_version = self.pending_local_version_selection
             current_category = self.version_category_combo.currentText().strip() if hasattr(self, "version_category_combo") else "全部版本"
             filtered = []
             for version in versions:
@@ -3819,15 +3835,14 @@ class LauncherWindow(FluentWindow):
                     filtered.append(version)
             filtered.sort(key=lambda item: (not self.version_settings_entry(item).get("favorite", False), item.lower()))
             last_version = self.version_settings.get("_meta", {}).get("last_launched_version", "")
-            current_version = previous_version
-            self.local_version_combo.blockSignals(True)
-            self.local_version_combo.clear()
-            self.local_version_combo.addItems(versions)
-            self.local_version_combo.blockSignals(False)
+            current_version = pending_version or previous_version
+            self.local_version_combo.reset_items(
+                versions,
+                current_text=current_version if current_version in versions else "",
+            )
             self.version_display_combo.blockSignals(True)
-            self.version_display_combo.clear()
             self.version_display_ids = list(filtered)
-            self.version_display_combo.addItems([self.version_display_name(version) for version in filtered])
+            self.version_display_combo.reset_items([self.version_display_name(version) for version in filtered])
             self.version_list.blockSignals(True)
             self.version_list.clear()
             self.version_list_ids = list(filtered)
@@ -3864,6 +3879,8 @@ class LauncherWindow(FluentWindow):
             self.version_list.blockSignals(False)
             if selected_version:
                 self.set_selected_version(selected_version, sync_display=False)
+            if pending_version:
+                self.pending_local_version_selection = ""
             self.refresh_install_versions(versions)
             self.refresh_resource_target_versions(versions)
             self.motion.pulse_list(self.version_list)
@@ -3883,8 +3900,7 @@ class LauncherWindow(FluentWindow):
         if task == "remote_versions":
             versions = payload.get("versions", [])
             show_feedback = self.should_show_scan_feedback(task)
-            self.remote_version_combo.clear()
-            self.remote_version_combo.addItems(versions)
+            self.remote_version_combo.reset_items(versions)
             self.log(f"远程版本数量：{len(versions)}")
             self.update_home_summary()
             if show_feedback:
@@ -3893,6 +3909,8 @@ class LauncherWindow(FluentWindow):
 
     def on_scan_failed(self, task_type, message):
         show_feedback = self.should_show_scan_feedback(task_type)
+        if task_type == "local_versions":
+            self.pending_local_version_selection = ""
         if task_type == "remote_versions":
             self.log(f"刷新远程版本失败：{message}")
             if show_feedback:
@@ -4084,7 +4102,9 @@ class LauncherWindow(FluentWindow):
         version = get_java_version(path)
         self.java_version_label.setText(version or "无法获取 Java 版本")
 
-    def refresh_local_versions(self, _checked=False, *, show_feedback=True):
+    def refresh_local_versions(self, _checked=False, *, show_feedback=True, select_version=""):
+        if select_version:
+            self.pending_local_version_selection = select_version
         self.start_scan_task("local_versions", game_dir=self.current_game_dir(), show_feedback=show_feedback)
 
     def refresh_install_versions(self, existing_versions=None):
@@ -4095,14 +4115,10 @@ class LauncherWindow(FluentWindow):
             if fabric_versions:
                 versions = fabric_versions
         current = self.install_version_combo.currentText().strip()
-        self.install_version_combo.blockSignals(True)
-        self.install_version_combo.clear()
-        self.install_version_combo.addItems(versions)
-        if current:
-            index = self.install_version_combo.findText(current)
-            if index >= 0:
-                self.install_version_combo.setCurrentIndex(index)
-        self.install_version_combo.blockSignals(False)
+        self.install_version_combo.reset_items(
+            versions,
+            current_text=current if current in versions else "",
+        )
 
     def update_download_addon_controls(self):
         selected_loader = self.download_install_combo.currentText().strip() if hasattr(self, "download_install_combo") else "不安装"
@@ -4895,34 +4911,32 @@ class LauncherWindow(FluentWindow):
         version = payload.get("version", "")
         post_install = payload.get("post_install")
         self.log(f"Minecraft {version} 下载完成。")
-        self.refresh_local_versions(show_feedback=False)
-        self.local_version_combo.setCurrentText(version)
         if post_install:
             installed_version = post_install.get("installed_version", version)
             alias = self.apply_auto_version_alias(installed_version, post_install.get("steps", []))
+            self.refresh_local_versions(show_feedback=False, select_version=installed_version)
             self.download_metrics_label.setText(post_install.get("message", "下载和安装完成"))
             self.install_status_label.setText("附加安装完成")
             self.install_metrics_label.setText(post_install.get("message", "附加安装已完成"))
-            index = self.local_version_combo.findText(installed_version)
-            if index >= 0:
-                self.local_version_combo.setCurrentIndex(index)
             if alias:
                 self.show_success("下载和安装完成", f"已自动命名为：{alias}")
             else:
                 self.show_success("下载和安装完成", f"Minecraft {version} 已下载，并完成附加安装。")
         else:
+            self.refresh_local_versions(show_feedback=False, select_version=version)
             self.download_metrics_label.setText("下载完成")
             self.install_status_label.setText("本次未执行附加安装")
             self.install_metrics_label.setText("如需 Fabric / Forge / NeoForge / OptiFine，可切到“安装扩展”")
             self.show_success("下载完成", f"Minecraft {version} 已下载完成。")
 
     def on_download_failed(self, message):
+        display_message = concise_download_error(message)
         self.set_download_running(False)
         self.finish_download_task(failed=True)
-        self.log(f"下载失败：{message}")
-        self.download_metrics_label.setText(f"下载失败：{message}")
+        self.log(f"下载失败：{display_message}")
+        self.download_metrics_label.setText(f"下载失败：{display_message}")
         self.install_status_label.setText("附加安装未开始")
-        self.show_warning("下载失败", message)
+        self.show_warning("下载失败", display_message)
 
     def on_install_finished(self, payload):
         self.set_download_running(False)
@@ -4936,10 +4950,7 @@ class LauncherWindow(FluentWindow):
         if installed_version:
             install_types = [payload.get("install_type", "")]
             alias = self.apply_auto_version_alias(installed_version, install_types)
-            self.refresh_local_versions(show_feedback=False)
-            index = self.local_version_combo.findText(installed_version)
-            if index >= 0:
-                self.local_version_combo.setCurrentIndex(index)
+            self.refresh_local_versions(show_feedback=False, select_version=installed_version)
             if alias:
                 self.show_success("安装完成", f"已自动命名为：{alias}")
                 return
@@ -4998,9 +5009,7 @@ class LauncherWindow(FluentWindow):
                 entry["alias_auto"] = True
             entry["use_isolated_directory"] = True
             save_version_settings(self.version_settings)
-        self.refresh_local_versions(show_feedback=False)
-        if version:
-            self.local_version_combo.setCurrentText(version)
+        self.refresh_local_versions(show_feedback=False, select_version=version)
         message = payload.get("message", "整合包导入完成")
         missing_report = payload.get("missing_report", "")
         self.download_metrics_label.setText("整合包导入完成")

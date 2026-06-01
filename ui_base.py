@@ -2,11 +2,13 @@ import time
 
 from PyQt6.QtCore import (
     QParallelAnimationGroup,
+    QPoint,
     QPropertyAnimation,
     Qt,
     QObject,
     pyqtSignal as Signal,
 )
+from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import QFrame, QGraphicsOpacityEffect, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BreadcrumbBar,
@@ -19,6 +21,7 @@ from qfluentwidgets import (
 from qfluentwidgets.common.animation import FluentAnimation
 from qfluentwidgets.common.smooth_scroll import SmoothMode as NativeSmoothMode
 from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
+from qfluentwidgets.components.widgets.menu import MenuAnimationType
 
 
 class Page(ScrollArea):
@@ -80,6 +83,55 @@ class NativeComboBoxMenu(ComboBoxMenu):
 class NativeComboBox(ComboBox):
     def _createComboMenu(self):
         return NativeComboBoxMenu(self)
+
+    def _menu_min_width(self):
+        text_width = 0
+        for index in range(self.count()):
+            text_width = max(text_width, self.fontMetrics().horizontalAdvance(self.itemText(index)))
+        return max(160, min(max(text_width + 56, 180), 640))
+
+    def _showComboMenu(self):
+        if not self.items:
+            return
+
+        menu = self._createComboMenu()
+        for index, item in enumerate(self.items):
+            action = QAction(item.icon, item.text, triggered=lambda checked=False, i=index: self._onItemClicked(i))
+            action.setEnabled(item.isEnabled)
+            menu.addAction(action)
+
+        menu.view.setMinimumWidth(self._menu_min_width())
+        menu.view.adjustSize()
+        menu.adjustSize()
+        menu.setMaxVisibleItems(self.maxVisibleItems())
+        menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        menu.closedSignal.connect(self._onDropMenuClosed)
+        self.dropMenu = menu
+
+        if self.currentIndex() >= 0 and menu.actions():
+            menu.setDefaultAction(menu.actions()[self.currentIndex()])
+
+        below = self.mapToGlobal(QPoint(0, self.height()))
+        above = self.mapToGlobal(QPoint(0, 0))
+        drop_height = menu.view.heightForAnimation(below, MenuAnimationType.DROP_DOWN)
+        pull_height = menu.view.heightForAnimation(above, MenuAnimationType.PULL_UP)
+        if drop_height >= pull_height:
+            menu.view.adjustSize(below, MenuAnimationType.DROP_DOWN)
+            menu.exec(below, aniType=MenuAnimationType.DROP_DOWN)
+        else:
+            menu.view.adjustSize(above, MenuAnimationType.PULL_UP)
+            menu.exec(above, aniType=MenuAnimationType.PULL_UP)
+
+    def reset_items(self, texts, current_text="", current_index=None):
+        self._closeComboMenu()
+        was_blocked = self.blockSignals(True)
+        self.clear()
+        self.addItems(list(texts or []))
+        if current_index is not None:
+            self.setCurrentIndex(current_index)
+        elif current_text:
+            self.setCurrentText(current_text)
+        self.blockSignals(was_blocked)
 
 
 class UiMotionController(QObject):

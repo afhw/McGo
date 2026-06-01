@@ -255,6 +255,11 @@ def _maven_library_url(library, relative_path):
     return f"{base_url}/{relative_path.replace(os.sep, '/')}"
 
 
+def _is_native_only_library(library):
+    downloads = library.get("downloads", {})
+    return bool(library.get("natives") and downloads.get("classifiers") and not downloads.get("artifact"))
+
+
 def _current_native_os_name():
     system = platform.system().lower()
     if "windows" in system or system == "win32":
@@ -495,7 +500,7 @@ def _build_core_jobs(version_json, game_directory, version_id, mirror_source):
                 sha1=artifact.get("sha1", ""),
                 label=os.path.basename(artifact["path"]),
             ))
-        else:
+        elif not _is_native_only_library(library):
             relative_library_path = _maven_library_path(library.get("name"))
             if relative_library_path:
                 jobs.append(DownloadJob(
