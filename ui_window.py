@@ -9,25 +9,23 @@ import html
 from collections import deque
 
 import http_client
-from PyQt6.QtCore import (
-    QThread,
-    QTimer,
-    Qt,
-)
-from PyQt6.QtWidgets import (
+from qt_compat import (
     QApplication,
     QAbstractItemView,
     QFileDialog,
     QGraphicsOpacityEffect,
     QGridLayout,
     QHBoxLayout,
-    QMessageBox,
     QListWidgetItem,
+    QMessageBox,
+    QThread,
+    QTimer,
     QSizePolicy,
     QTextEdit,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
+    Qt,
 )
 from qfluentwidgets import (
     Action,
@@ -1562,7 +1560,7 @@ class LauncherWindow(FluentWindow):
             ".minecraft/versions 保存版本清单与客户端；libraries 保存依赖库；assets 保存资源文件。\n"
             "启用资源隔离后，存档、Mod、资源包、光影和截图会优先放入 versions/<版本名>/。\n\n"
             "关于\n"
-            "McGo 是 PyQt6 / QFluentWidgets 编写的 Minecraft 启动器。\n"
+            "McGo 是 PySide6 / QFluentWidgets 编写的 Minecraft 启动器。\n"
             "鸣谢：Mojang 版本元数据、BMCLAPI 镜像、Modrinth、CurseForge、authlib-injector、QFluentWidgets。"
         )
         layout.addWidget(help_text)

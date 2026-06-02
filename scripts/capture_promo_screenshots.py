@@ -13,8 +13,7 @@ sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)
 os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "0")
 
-from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
+from qt_compat import QApplication, Qt  # noqa: E402
 from qfluentwidgets import Theme, setTheme  # noqa: E402
 
 import main as mcgo_main  # noqa: E402

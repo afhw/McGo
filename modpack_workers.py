@@ -5,7 +5,7 @@ import shutil
 import zipfile
 
 import http_client
-from PyQt6.QtCore import QObject, pyqtSignal as Signal
+from qt_compat import QObject, Signal
 
 from downloader import download_game_files, extract_natives
 from file_utils import sanitize_filename

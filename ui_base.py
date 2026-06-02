@@ -1,15 +1,18 @@
 import time
 
-from PyQt6.QtCore import (
+from qt_compat import (
+    QAction,
+    QFrame,
+    QGraphicsOpacityEffect,
+    QObject,
     QParallelAnimationGroup,
     QPoint,
     QPropertyAnimation,
+    QVBoxLayout,
+    QWidget,
     Qt,
-    QObject,
-    pyqtSignal as Signal,
+    Signal,
 )
-from PyQt6.QtGui import QAction
-from PyQt6.QtWidgets import QFrame, QGraphicsOpacityEffect, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BreadcrumbBar,
     CaptionLabel,

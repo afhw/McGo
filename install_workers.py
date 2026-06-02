@@ -5,7 +5,7 @@ import shutil
 import tempfile
 import threading
 
-from PyQt6.QtCore import QThread, QObject, pyqtSignal as Signal
+from qt_compat import QObject, QThread, Signal
 
 from downloader import collect_missing_game_files, download_game_files, extract_natives, repair_game_files
 from external_auth import authlib_injector_download_url

@@ -1,6 +1,6 @@
 # McGo
 
-McGo 是一个基于 PyQt6 和 QFluentWidgets 的 Minecraft 启动器，支持账号管理、游戏下载、加载器安装、资源市场、整合包导入导出、版本独立设置和本地实例管理。
+McGo 是一个基于 PySide6 和 QFluentWidgets 的 Minecraft 启动器，支持账号管理、游戏下载、加载器安装、资源市场、整合包导入导出、版本独立设置和本地实例管理。
 
 ## 快速开始
 
@@ -12,7 +12,7 @@ python main.py
 轻量校验：
 
 ```bash
-python -m py_compile main.py ui_window.py app_settings.py app_media.py app_format.py launcher.py downloader.py app_workers.py auth.py auth_server.py external_auth.py file_utils.py install_services.py installer_engine.py java_runtime.py java_utils.py version_utils.py log_utils.py modpack_utils.py nat_utils.py process_utils.py resource_market.py resource_workers.py ui_base.py p2p_tunnel.py p2p_server.py
+python -m py_compile main.py qt_compat.py ui_window.py app_settings.py app_media.py app_format.py launcher.py downloader.py app_workers.py auth.py auth_server.py external_auth.py file_utils.py install_services.py installer_engine.py java_runtime.py java_utils.py version_utils.py log_utils.py modpack_utils.py nat_utils.py process_utils.py resource_market.py resource_workers.py ui_base.py p2p_tunnel.py p2p_server.py
 ```
 
 ## 文档导航

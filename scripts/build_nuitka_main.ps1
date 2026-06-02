@@ -5,7 +5,7 @@ python -m nuitka `
   --standalone `
   --onefile `
   --windows-console-mode=disable `
-  --enable-plugin=pyqt6 `
+  --enable-plugin=pyside6 `
   --assume-yes-for-downloads `
   --include-data-dir=assets=assets `
   --include-package-data=qfluentwidgets `

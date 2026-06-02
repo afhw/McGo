@@ -1,7 +1,7 @@
 import asyncio
 import subprocess
 
-from PyQt6.QtCore import QObject, pyqtSignal as Signal
+from qt_compat import QObject, Signal
 
 from auth import MicrosoftAuthenticator
 from external_auth import authlib_injector_args, refresh_external_account

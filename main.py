@@ -12,7 +12,7 @@ def __getattr__(name):
 
 
 def main():
-    from PyQt6.QtWidgets import QApplication
+    from qt_compat import QApplication
     from qfluentwidgets import Theme, setTheme
     from ui_window import LauncherWindow
 

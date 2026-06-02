@@ -48,7 +48,7 @@ F_TINY = font(22)
 
 VIDEO_TITLE = "McGo：把下载、账号、资源和联机放进一个 Minecraft 启动器"
 VIDEO_DESC = (
-    "McGo 是基于 PyQt6 和 QFluentWidgets 的 Minecraft 启动器，支持账号管理、游戏下载、"
+    "McGo 是基于 PySide6 和 QFluentWidgets 的 Minecraft 启动器，支持账号管理、游戏下载、"
     "加载器安装、资源市场、整合包导入导出、版本独立设置和 P2P 联机入口。"
 )
 VOICE_SCRIPT = (
@@ -697,7 +697,7 @@ def write_copy():
 单机游戏 / Minecraft / 工具分享 / 软件推荐
 
 标签建议：
-Minecraft, 我的世界, 启动器, McGo, Mod, 整合包, P2P联机, PyQt6
+Minecraft, 我的世界, 启动器, McGo, Mod, 整合包, P2P联机, PySide6
 
 置顶评论建议：
 视频画面使用项目自动化截图生成，账号与服务器信息均为演示数据。

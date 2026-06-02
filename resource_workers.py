@@ -1,4 +1,4 @@
-from PyQt6.QtCore import QThread, QObject, pyqtSignal as Signal
+from qt_compat import QObject, QThread, Signal
 
 from log_utils import get_logger
 from resource_market import (

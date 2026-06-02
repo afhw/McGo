@@ -3,7 +3,7 @@ import os
 import uuid as uuidlib
 import webbrowser
 
-from PyQt6.QtCore import QThread, QObject, pyqtSignal as Signal
+from qt_compat import QObject, QThread, Signal
 
 from external_auth import authenticate_external_account, probe_external_auth_server, refresh_external_account
 from install_services import get_remote_versions

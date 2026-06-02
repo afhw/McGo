@@ -1,6 +1,6 @@
 markupsafe
-PyQt6>=6.10.0
-PyQt6-Fluent-Widgets>=1.10.0
+PySide6>=6.10.0
+PySide6-Fluent-Widgets>=1.10.0
 requests>=2.31.0
 flask>=3.0.0
 aiohttp>=3.9.0

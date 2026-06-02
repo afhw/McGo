@@ -14,8 +14,8 @@ class BackgroundMusicController:
 
     def ensure_player(self):
         if self.player is None or self.audio_output is None:
-            from PyQt6.QtCore import QUrl
-            from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
+            from qt_compat import QUrl
+            from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 
             self.url_type = QUrl
             self.player = QMediaPlayer(self.parent)
