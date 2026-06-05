@@ -92,6 +92,7 @@ def load_config():
         "USER": {"username": "", "uuid": "", "accessToken": ""},
         "DOWNLOAD": {
             "mirror_source": "official",
+            "download_preset": "均衡",
             "max_core_threads": "12",
             "max_asset_threads": "24",
             "speed_limit_kbps": "0",

@@ -120,10 +120,10 @@ class NativeComboBox(ComboBox):
         pull_height = menu.view.heightForAnimation(above, MenuAnimationType.PULL_UP)
         if drop_height >= pull_height:
             menu.view.adjustSize(below, MenuAnimationType.DROP_DOWN)
-            menu.exec(below, aniType=MenuAnimationType.DROP_DOWN)
+            type(menu).exec(menu, below, aniType=MenuAnimationType.DROP_DOWN)
         else:
             menu.view.adjustSize(above, MenuAnimationType.PULL_UP)
-            menu.exec(above, aniType=MenuAnimationType.PULL_UP)
+            type(menu).exec(menu, above, aniType=MenuAnimationType.PULL_UP)
 
     def reset_items(self, texts, current_text="", current_index=None):
         self._closeComboMenu()

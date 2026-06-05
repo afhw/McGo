@@ -274,6 +274,7 @@ class LauncherWindow(FluentWindow):
         self.mirror_combo = NativeComboBox()
         self.mirror_combo.addItems(list(MIRROR_SOURCES.keys()))
         self.mirror_combo.setCurrentText(config.get("DOWNLOAD", "mirror_source", fallback="official"))
+        self.mirror_combo.currentTextChanged.connect(self.on_mirror_source_changed)
         self.download_preset_combo = NativeComboBox()
         self.download_preset_combo.addItems(list(DOWNLOAD_PRESETS.keys()))
         self.download_preset_combo.currentTextChanged.connect(self.apply_download_preset)
@@ -294,6 +295,7 @@ class LauncherWindow(FluentWindow):
         self.download_cache_combo = NativeComboBox()
         self.download_cache_combo.addItems(["reuse", "network_only"])
         self.download_cache_combo.setCurrentText(config.get("DOWNLOAD", "cache_strategy", fallback="reuse"))
+        self.download_preset_combo.setCurrentText(config.get("DOWNLOAD", "download_preset", fallback="均衡"))
         self.login_mode_combo = NativeComboBox()
         self.login_mode_combo.addItems(["offline", "microsoft", "external"])
         self.login_mode_combo.setCurrentText("microsoft" if config.getboolean("AUTH", "use_microsoft_login", fallback=False) else "offline")
@@ -473,7 +475,7 @@ class LauncherWindow(FluentWindow):
         self.version_type_combo.currentTextChanged.connect(lambda _: self.log("版本类型已更改，点击“刷新远程版本”重新加载列表。"))
         self.download_fabric_api_check = CheckBox("同时安装 Fabric API")
         self.download_fabric_api_check.stateChanged.connect(lambda _: self.update_download_addon_controls())
-        self.download_addon_hint_label = CaptionLabel("可在下载原版后自动继续安装；Fabric API 仅在 Fabric 一起安装时可用。")
+        self.download_addon_hint_label = CaptionLabel("可在下载原版后自动安装模组加载器；Fabric API 仅在 Fabric 一起安装时可用。")
         self.download_warning_label = CaptionLabel("")
         self.resource_query_input = LineEdit()
         self.resource_query_input.setPlaceholderText("搜索 Mod、资源包、光影或数据包")
@@ -507,7 +509,7 @@ class LauncherWindow(FluentWindow):
     def build_pages(self):
         self.home_page = Page("homePage", "McGo", "一个 Fluent 风格的 Minecraft 启动器")
         self.launch_page = Page("launchPage", "启动游戏", "选择 Java 和本地版本，然后启动 Minecraft")
-        self.download_page = Page("downloadPage", "下载游戏", "选择版本类型、镜像源和目标版本")
+        self.download_page = Page("downloadPage", "下载游戏", "选择版本类型、镜像源、目标版本和模组适配")
         self.online_page = Page("onlinePage", "联机", "服务器列表、NAT 检测与 McGo P2P 隧道")
         self.manage_page = Page("managePage", "管理中心", "将账号、环境和日志按任务分组，减少来回切页")
         for page in (self.home_page, self.launch_page, self.download_page, self.online_page, self.manage_page):
@@ -696,7 +698,7 @@ class LauncherWindow(FluentWindow):
         if button is None:
             return
         can_go_back = len(getattr(self, "current_breadcrumbs", [])) > 1
-        button.setVisible(can_go_back)
+        button.setVisible(True)
         button.setEnabled(can_go_back)
 
     def go_back_one_level(self):
@@ -1135,12 +1137,12 @@ class LauncherWindow(FluentWindow):
         self.download_modpack_view = QWidget()
         self.download_resource_view = QWidget()
 
-        download_card, download_layout = self.make_card("下载原版", "原版下载支持一并勾选后续安装项，减少重复操作")
+        download_card, download_layout = self.make_card("下载原版 + 模组适配", "选择原版后可一并安装 Fabric、Forge、NeoForge、OptiFine 和 Fabric API")
         self.add_labeled_control(download_layout, "版本类型", self.version_type_combo)
         self.add_labeled_control(download_layout, "远程版本", self.remote_version_combo)
         self.add_labeled_control(download_layout, "镜像源", self.mirror_combo)
         self.download_preset_row = self.add_labeled_control(download_layout, "下载预设", self.download_preset_combo)
-        self.add_labeled_control(download_layout, "下载时安装", self.download_install_combo)
+        self.add_labeled_control(download_layout, "模组加载器 / 适配", self.download_install_combo)
         download_layout.addWidget(self.download_fabric_api_check)
         download_tuning_row = QHBoxLayout()
         self.download_tuning_rows = {}
@@ -2243,6 +2245,16 @@ class LauncherWindow(FluentWindow):
             [self.version_display_name(version_id) for version_id in filtered],
             current_index=filtered.index(preferred) if preferred in filtered else None,
         )
+
+    def select_resource_target_version(self, version_id):
+        if not version_id or not hasattr(self, "resource_version_combo"):
+            return False
+        versions = get_local_versions(self.current_game_dir())
+        self.refresh_resource_target_versions(versions)
+        if version_id not in self.resource_version_ids:
+            return False
+        self.resource_version_combo.setCurrentIndex(self.resource_version_ids.index(version_id))
+        return True
 
     def on_version_display_selected(self, version_label):
         current_index = self.version_display_combo.currentIndex()
@@ -3935,7 +3947,7 @@ class LauncherWindow(FluentWindow):
             labels = [INSTALL_TYPE_LABELS.get(item, item) for item in selected]
             self.download_addon_hint_label.setText(f"下载完成后将继续安装：{' + '.join(labels)}")
         else:
-            self.download_addon_hint_label.setText("可在下载原版后自动继续安装；Fabric API 仅在 Fabric 一起安装时可用。")
+            self.download_addon_hint_label.setText("可在下载原版后自动安装模组加载器；Fabric API 仅在 Fabric 一起安装时可用。")
 
         warnings = []
         if fabric_checked and not self.download_fabric_api_check.isChecked():
@@ -3946,6 +3958,18 @@ class LauncherWindow(FluentWindow):
             warnings.append("提示：Forge / NeoForge 安装依赖 Java，安装过程可能需要更久。")
         if hasattr(self, "download_warning_label"):
             self.download_warning_label.setText(" ".join(warnings))
+
+    def on_mirror_source_changed(self, mirror_source):
+        config["DOWNLOAD"]["mirror_source"] = mirror_source
+        save_config()
+        self.log(f"镜像源已切换为 {mirror_source}，刷新远程版本后生效。")
+        if hasattr(self, "remote_version_combo") and self.remote_version_combo.count():
+            self.remote_version_combo.reset_items(
+                ["点击刷新远程版本"],
+                current_text="点击刷新远程版本",
+            )
+        if hasattr(self, "download_metrics_label"):
+            self.download_metrics_label.setText("镜像源已更新，请刷新远程版本列表")
 
     def get_selected_download_addons(self):
         install_types = []
@@ -3994,6 +4018,7 @@ class LauncherWindow(FluentWindow):
                 self.upsert_account(account)
             config["ACCOUNTS"]["selected_account_id"] = account.get("id", "")
         config["DOWNLOAD"]["mirror_source"] = self.mirror_combo.currentText()
+        config["DOWNLOAD"]["download_preset"] = self.download_preset_combo.currentText()
         config["DOWNLOAD"]["max_core_threads"] = str(self.download_core_threads_input.value())
         config["DOWNLOAD"]["max_asset_threads"] = str(self.download_asset_threads_input.value())
         config["DOWNLOAD"]["speed_limit_kbps"] = str(self.download_speed_limit_input.value())
@@ -4731,9 +4756,11 @@ class LauncherWindow(FluentWindow):
             installed_version = post_install.get("installed_version", version)
             alias = self.apply_auto_version_alias(installed_version, post_install.get("steps", []))
             self.refresh_local_versions(show_feedback=False, select_version=installed_version)
+            resource_target_selected = self.select_resource_target_version(installed_version)
             self.download_metrics_label.setText(post_install.get("message", "下载和安装完成"))
             self.install_status_label.setText("附加安装完成")
-            self.install_metrics_label.setText(post_install.get("message", "附加安装已完成"))
+            target_hint = "，资源市场目标已切换到新版本" if resource_target_selected else ""
+            self.install_metrics_label.setText(f"{post_install.get('message', '附加安装已完成')}{target_hint}")
             if alias:
                 self.show_success("下载和安装完成", f"已自动命名为：{alias}")
             else:
@@ -4742,7 +4769,7 @@ class LauncherWindow(FluentWindow):
             self.refresh_local_versions(show_feedback=False, select_version=version)
             self.download_metrics_label.setText("下载完成")
             self.install_status_label.setText("本次未执行附加安装")
-            self.install_metrics_label.setText("如需 Fabric / Forge / NeoForge / OptiFine，可切到“安装扩展”")
+            self.install_metrics_label.setText("如需模组适配，可在原版下载页直接选择加载器后重新下载或使用安装扩展")
             self.show_success("下载完成", f"Minecraft {version} 已下载完成。")
 
     def on_download_failed(self, message):
