@@ -172,14 +172,33 @@ class ResourceCompatibilityWorker(QObject):
 
 class ResourceDetailWorker(QObject):
     finished = Signal(dict)
-    failed = Signal(str)
+    failed = Signal(dict)
+    canceled = Signal(dict)
 
-    def __init__(self, hit, resource_type, game_version, loader):
+    def __init__(self, hit, resource_type, game_version, loader, generation=0):
         super().__init__()
         self.hit = dict(hit)
         self.resource_type = resource_type
         self.game_version = game_version
         self.loader = loader
+        self.generation = generation
+        self._stop_requested = False
+
+    def request_stop(self):
+        self._stop_requested = True
+
+    def stop_requested(self):
+        thread = QThread.currentThread()
+        return self._stop_requested or thread.isInterruptionRequested()
+
+    def emit_canceled(self, source):
+        logger.info(
+            "ResourceDetailWorker canceled: source=%s project=%s generation=%s",
+            source,
+            self.hit.get("project_id") or self.hit.get("slug") or self.hit.get("path"),
+            self.generation,
+        )
+        self.canceled.emit({"generation": self.generation, "hit": self.hit})
 
     def run(self):
         try:
@@ -205,13 +224,24 @@ class ResourceDetailWorker(QObject):
                 detail = get_local_resource_detail(self.hit.get("path") or self.hit.get("project_id"))
             else:
                 raise RuntimeError(f"不支持的资源来源：{source}")
+            if self.stop_requested():
+                self.emit_canceled(source)
+                return
             detail["hit"] = self.hit
+            detail["detail_generation"] = self.generation
             cached_screenshots = []
             for screenshot in detail.get("screenshots", [])[:5]:
+                if self.stop_requested():
+                    self.emit_canceled(source)
+                    return
                 try:
                     cached = cache_resource_screenshot(screenshot)
-                except Exception:
+                except Exception as exc:
+                    logger.warning("Failed to cache resource screenshot: url=%s error=%s", screenshot, exc)
                     cached = ""
+                if self.stop_requested():
+                    self.emit_canceled(source)
+                    return
                 cached_screenshots.append({
                     "url": screenshot,
                     "path": cached,
@@ -231,7 +261,7 @@ class ResourceDetailWorker(QObject):
                 self.hit.get("source", "modrinth"),
                 self.hit.get("project_id") or self.hit.get("slug") or self.hit.get("path"),
             )
-            self.failed.emit(str(exc))
+            self.failed.emit({"message": str(exc), "generation": self.generation, "hit": self.hit})
 
 
 class ResourceInstallWorker(QObject):

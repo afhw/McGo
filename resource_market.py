@@ -224,7 +224,7 @@ def strict_modrinth_search(query, resource_type, game_version="", loader="", lim
     return hits
 
 
-def get_modrinth_versions(project_id, resource_type, game_version, loader):
+def get_modrinth_versions(project_id, resource_type, game_version, loader, timeout=30, retries=2):
     params = {"game_versions": json.dumps([game_version])} if game_version else {}
     if resource_type == "mod" and loader:
         params["loaders"] = json.dumps([loader])
@@ -239,7 +239,8 @@ def get_modrinth_versions(project_id, resource_type, game_version, loader):
         f"https://api.modrinth.com/v2/project/{project_id}/version",
         params=params,
         headers={"User-Agent": "McGo/1.0"},
-        timeout=30,
+        timeout=timeout,
+        retries=retries,
     )
     http_client.raise_for_status(response, "获取 Modrinth 版本")
     versions = response.json()
@@ -422,11 +423,12 @@ def get_modrinth_resource_detail(project_id, resource_type, game_version, loader
     project_response = http_client.get(
         f"https://api.modrinth.com/v2/project/{project_id}",
         headers={"User-Agent": "McGo/1.0"},
-        timeout=30,
+        timeout=10,
+        retries=0,
     )
     http_client.raise_for_status(project_response, "获取 Modrinth 项目详情")
     project = project_response.json()
-    versions = get_modrinth_versions(project_id, resource_type, game_version, loader)
+    versions = get_modrinth_versions(project_id, resource_type, game_version, loader, timeout=10, retries=0)
     selected = (versions or [{}])[0]
     screenshots = project.get("gallery", [])[:5]
     dependencies = [
@@ -620,7 +622,7 @@ def cache_resource_screenshot(url):
     target_path = os.path.join(cache_dir, safe_name)
     if os.path.isfile(target_path) and os.path.getsize(target_path) > 0:
         return target_path
-    response = http_client.get(url, headers={"User-Agent": "McGo/1.0"}, timeout=30)
+    response = http_client.get(url, headers={"User-Agent": "McGo/1.0"}, timeout=5, retries=0)
     http_client.raise_for_status(response, "下载资源截图")
     with open(target_path, "wb") as file_handle:
         file_handle.write(response.content)

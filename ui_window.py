@@ -142,6 +142,11 @@ class LauncherWindow(FluentWindow):
         self.resource_search_generation = 0
         self.resource_detail_thread = None
         self.resource_detail_worker = None
+        self.resource_detail_request_key = ""
+        self.resource_detail_queue = deque()
+        self.resource_detail_generation = 0
+        self.resource_detail_active_generation = 0
+        self.resource_detail_canceling_generations = set()
         self.resource_install_thread = None
         self.resource_install_worker = None
         self.resource_search_hits = []
@@ -3740,6 +3745,7 @@ class LauncherWindow(FluentWindow):
         account = self.current_account()
         account_text = account_label(account) if account else "未选择"
         self.home_account_label.setText(f"账号：{account_text}")
+        self.update_launch_method_label(account)
         if hasattr(self, "account_summary_label"):
             self.account_summary_label.setText(f"当前账号：{account_text}")
             self.motion.pulse_widget(self.account_summary_label, duration=200, start_opacity=0.58, throttle_key="account_summary", min_interval=0.15)
@@ -3912,6 +3918,19 @@ class LauncherWindow(FluentWindow):
             return
         version = get_java_version(path)
         self.java_version_label.setText(version or "无法获取 Java 版本")
+
+    def account_type_label(self, account):
+        if not account:
+            return "未选择"
+        account_type_labels = {"microsoft": "Microsoft", "external": "外置登录", "offline": "离线"}
+        return account_type_labels.get(account.get("type"), account.get("type", "未知"))
+
+    def update_launch_method_label(self, account=None):
+        if not hasattr(self, "launch_method_label"):
+            return
+        if account is None:
+            account = self.current_account()
+        self.launch_method_label.setText(f"登录方式：{self.account_type_label(account)}")
 
     def refresh_local_versions(self, _checked=False, *, show_feedback=True, select_version=""):
         if select_version:
@@ -4206,8 +4225,7 @@ class LauncherWindow(FluentWindow):
         self.launch_status_label.setText("正在准备启动...")
         self.launch_progress_bar.setValue(5)
         self.launch_stage_label.setText("当前步骤：准备启动")
-        account_type_labels = {"microsoft": "Microsoft", "external": "外置登录", "offline": "离线"}
-        self.launch_method_label.setText(f"登录方式：{account_type_labels.get(account.get('type'), account.get('type', '未知'))}")
+        self.update_launch_method_label(account)
         self.launch_progress_label.setText("启动进度：5%")
         from launch_workers import LaunchWorker
 
@@ -4664,6 +4682,19 @@ class LauncherWindow(FluentWindow):
             else:
                 self.resource_status_label.setText("等待搜索")
 
+    def resource_detail_key(self, hit):
+        if not isinstance(hit, dict):
+            return ""
+        source = hit.get("source", "modrinth")
+        identity = hit.get("project_id") or hit.get("slug") or hit.get("path") or hit.get("title", "")
+        return f"{source}:{identity}"
+
+    def current_resource_detail_key(self):
+        current_item = self.resource_result_list.currentItem()
+        if current_item is None:
+            return ""
+        return self.resource_detail_key(current_item.data(Qt.ItemDataRole.UserRole))
+
     def show_selected_resource_detail(self):
         current_item = self.resource_result_list.currentItem()
         if current_item is None:
@@ -4671,11 +4702,52 @@ class LauncherWindow(FluentWindow):
         hit = current_item.data(Qt.ItemDataRole.UserRole)
         if not isinstance(hit, dict):
             return
+        self.enqueue_resource_detail(hit, priority=True)
+
+    def enqueue_resource_detail(self, hit, priority=False):
+        request_key = self.resource_detail_key(hit)
         if self.resource_detail_thread and self.resource_detail_thread.isRunning():
-            self.resource_detail_thread.quit()
-            self.resource_detail_thread.wait(500)
+            if request_key == self.resource_detail_request_key:
+                return
+            if priority:
+                self.resource_detail_queue.clear()
+                self.resource_detail_queue.appendleft(dict(hit))
+                self.cancel_active_resource_detail()
+                self.resource_detail_loading.setVisible(True)
+                self.resource_detail_button.setEnabled(False)
+                self.resource_detail_view.setPlainText("正在切换详情...")
+            else:
+                self.resource_detail_queue.append(dict(hit))
+            return
+        self.start_resource_detail_for_hit(hit)
+
+    def cancel_active_resource_detail(self):
+        generation = self.resource_detail_active_generation
+        if generation:
+            self.resource_detail_canceling_generations.add(generation)
+        worker = self.resource_detail_worker
+        if worker and hasattr(worker, "request_stop"):
+            worker.request_stop()
+        thread = self.resource_detail_thread
+        if thread and thread.isRunning():
+            thread.requestInterruption()
+
+    def start_resource_detail_for_hit(self, hit):
+        if not isinstance(hit, dict):
+            self.resource_detail_loading.setVisible(False)
+            self.resource_detail_button.setEnabled(True)
+            return
+        if self.resource_detail_thread and self.resource_detail_thread.isRunning():
+            self.enqueue_resource_detail(hit, priority=True)
+            return
+        current_item = self.resource_result_list.currentItem()
+        if current_item is not None and self.resource_detail_key(current_item.data(Qt.ItemDataRole.UserRole)) != self.resource_detail_key(hit):
+            self.resource_detail_loading.setVisible(False)
+            self.resource_detail_button.setEnabled(True)
+            return
 
         self.resource_detail_loading.setVisible(True)
+        self.resource_detail_button.setEnabled(False)
         self.resource_detail_view.setPlainText("正在加载详情...")
         resource_type = self.resource_type_combo.currentText().strip() or "mod"
         version_id = self.current_resource_version()
@@ -4683,17 +4755,35 @@ class LauncherWindow(FluentWindow):
         loader = modrinth_loader_for_version(self.current_game_dir(), version_id) if version_id else ""
         from resource_workers import ResourceDetailWorker
 
+        request_key = self.resource_detail_key(hit)
         self.resource_detail_thread = QThread()
-        self.resource_detail_worker = ResourceDetailWorker(hit, resource_type, game_version, loader)
+        self.resource_detail_generation += 1
+        generation = self.resource_detail_generation
+        self.resource_detail_active_generation = generation
+        self.resource_detail_worker = ResourceDetailWorker(hit, resource_type, game_version, loader, generation=generation)
+        self.resource_detail_request_key = request_key
         self.resource_detail_worker.moveToThread(self.resource_detail_thread)
+        self.resource_detail_thread.setProperty("resource_detail_generation", generation)
         self.resource_detail_thread.started.connect(self.resource_detail_worker.run)
         self.resource_detail_worker.finished.connect(self.on_resource_detail_finished)
         self.resource_detail_worker.failed.connect(self.on_resource_detail_failed)
+        self.resource_detail_worker.canceled.connect(self.on_resource_detail_canceled)
         self.resource_detail_worker.finished.connect(self.resource_detail_thread.quit)
         self.resource_detail_worker.failed.connect(self.resource_detail_thread.quit)
+        self.resource_detail_worker.canceled.connect(self.resource_detail_thread.quit)
+        self.resource_detail_worker.finished.connect(self.resource_detail_worker.deleteLater)
+        self.resource_detail_worker.failed.connect(self.resource_detail_worker.deleteLater)
+        self.resource_detail_worker.canceled.connect(self.resource_detail_worker.deleteLater)
+        self.resource_detail_thread.finished.connect(self.on_resource_detail_thread_finished)
+        self.resource_detail_thread.finished.connect(self.resource_detail_thread.deleteLater)
         self.resource_detail_thread.start()
 
     def on_resource_detail_finished(self, detail):
+        generation = detail.get("detail_generation", 0)
+        if generation != self.resource_detail_active_generation or generation in self.resource_detail_canceling_generations:
+            return
+        if self.resource_detail_key(detail.get("hit", {})) != self.current_resource_detail_key():
+            return
         self.resource_detail_loading.setVisible(False)
         source = RESOURCE_SOURCE_LABELS.get(detail.get("source", ""), detail.get("source", ""))
         parts = [
@@ -4710,16 +4800,18 @@ class LauncherWindow(FluentWindow):
             parts.append(f"<p>状态：{html.escape(str(detail.get('status')))}</p>")
         screenshots = detail.get("screenshots", [])
         if screenshots:
-            parts.append("<p>截图：</p>")
-            parts.append("<div>")
+            parts.append("<p>截图：</p><div>")
             for screenshot in screenshots[:5]:
                 path = screenshot.get("path") if isinstance(screenshot, dict) else ""
                 url = screenshot.get("url") if isinstance(screenshot, dict) else screenshot
-                src = html.escape(os.path.abspath(path).replace("\\", "/") if path else str(url))
-                parts.append(f"<img src='{src}' width='360' style='margin: 0 10px 10px 0;' />")
-                if not path and url:
-                    escaped_url = html.escape(str(url))
-                    parts.append(f"<p>{escaped_url}</p>")
+                src = path or url
+                if not src:
+                    continue
+                if path:
+                    src = "file:///" + os.path.abspath(path).replace("\\", "/")
+                escaped_src = html.escape(str(src))
+                escaped_url = html.escape(str(url or src))
+                parts.append(f"<a href='{escaped_url}'><img src='{escaped_src}' width='360' style='margin: 0 10px 10px 0;' /></a>")
             parts.append("</div>")
         dependencies = detail.get("dependencies", [])
         if dependencies:
@@ -4741,10 +4833,33 @@ class LauncherWindow(FluentWindow):
         self.resource_detail_view.setHtml("".join(parts))
         self.motion.pulse_widget(self.resource_detail_view.viewport(), duration=180, start_opacity=0.6, throttle_key="resource_detail", min_interval=0.2)
 
-    def on_resource_detail_failed(self, message):
+    def on_resource_detail_failed(self, payload):
+        generation = payload.get("generation", 0) if isinstance(payload, dict) else 0
+        if generation != self.resource_detail_active_generation or generation in self.resource_detail_canceling_generations:
+            return
+        message = payload.get("message", "") if isinstance(payload, dict) else str(payload)
         self.resource_detail_loading.setVisible(False)
         self.resource_detail_view.setPlainText(f"详情加载失败：{message}")
         self.log(f"资源详情加载失败：{message}")
+
+    def on_resource_detail_canceled(self, payload):
+        generation = payload.get("generation", 0) if isinstance(payload, dict) else 0
+        self.resource_detail_canceling_generations.add(generation)
+
+    def on_resource_detail_thread_finished(self):
+        thread = self.sender()
+        generation = int(thread.property("resource_detail_generation") or 0) if thread else 0
+        self.resource_detail_canceling_generations.discard(generation)
+        if thread is self.resource_detail_thread:
+            self.resource_detail_thread = None
+            self.resource_detail_worker = None
+            self.resource_detail_request_key = ""
+            self.resource_detail_active_generation = 0
+        if self.resource_detail_queue:
+            next_hit = self.resource_detail_queue.popleft()
+            QTimer.singleShot(0, lambda hit=next_hit: self.start_resource_detail_for_hit(hit))
+            return
+        self.resource_detail_button.setEnabled(True)
 
     def on_download_finished(self, payload):
         self.set_download_running(False)
