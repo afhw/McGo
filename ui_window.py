@@ -2,6 +2,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import types
 import uuid as uuidlib
 import webbrowser
@@ -60,6 +61,8 @@ from qfluentwidgets.components.navigation.navigation_panel import NavigationDisp
 
 from app_format import format_bytes, format_resource_hit_label
 from app_settings import (
+    APP_VERSION,
+    DEFAULT_UPDATE_MANIFEST_URL,
     DOWNLOAD_PRESETS,
     GC_STRATEGIES,
     LOG_PATH,
@@ -81,6 +84,8 @@ from app_settings import (
     system_memory_mb,
 )
 from app_media import BackgroundMusicController
+from app_workers import LauncherUpdateWorker
+from capsule_utils import export_capsule, import_capsule
 from external_auth import (
     authlib_injector_args,
     normalize_auth_server,
@@ -94,6 +99,7 @@ from install_services import (
     MIRROR_SOURCES,
 )
 from modpack_utils import analyze_crash_logs, export_modpack
+from p2p_files import CapsuleFileHost, CapsuleFilePullWorker
 from p2p_tunnel import McgoP2PTunnel, P2PTunnelConfig, generate_room_code
 from resource_market import (
     RESOURCE_SEARCH_SORTS,
@@ -105,6 +111,7 @@ from resource_market import (
     resource_directory_for_type,
 )
 from ui_base import NativeComboBox, P2PEventBridge, Page, UiMotionController
+from updater import can_replace_current_executable, schedule_windows_replace_and_restart
 from version_utils import (
     find_matching_fabric_versions,
     launch_options_for_version,
@@ -162,11 +169,24 @@ class LauncherWindow(FluentWindow):
         self.launch_worker = None
         self.nat_thread = None
         self.nat_worker = None
+        self.update_thread = None
+        self.update_worker = None
+        self.pending_update_manifest = None
+        self.pending_update_result = None
+        self.pending_update_result_silent = False
+        self.update_apply_after_download = False
         self.p2p_tunnel = None
+        self.capsule_file_host = None
+        self.capsule_pull_thread = None
+        self.capsule_pull_worker = None
+        self.pending_capsule_payload = None
         self.p2p_bridge = P2PEventBridge()
         self.p2p_bridge.status.connect(self.on_p2p_status)
         self.p2p_bridge.stopped.connect(self.on_p2p_stopped)
         self.p2p_bridge.failed.connect(self.on_p2p_failed)
+        self.capsule_bridge = P2PEventBridge()
+        self.capsule_bridge.status.connect(self.on_capsule_host_status)
+        self.capsule_bridge.failed.connect(self.on_capsule_host_failed)
         self.music_controller = BackgroundMusicController(self)
         self.download_task_queue = deque()
         self.active_download_task = None
@@ -212,6 +232,8 @@ class LauncherWindow(FluentWindow):
         self.log("QFluentWidgets 界面已启动。远程版本列表已延后加载。")
         QTimer.singleShot(0, self.initialize_background_state)
         QTimer.singleShot(40, self.animate_initial_views)
+        if config.getboolean("UPDATE", "auto_check", fallback=True):
+            QTimer.singleShot(3500, lambda: self.start_update_check(silent=True))
 
     def initialize_background_state(self):
         self.refresh_java_paths(show_feedback=False)
@@ -223,6 +245,14 @@ class LauncherWindow(FluentWindow):
     def closeEvent(self, event):
         if self.p2p_tunnel:
             self.p2p_tunnel.stop()
+        if self.capsule_file_host:
+            self.capsule_file_host.stop()
+        if self.capsule_pull_thread and self.capsule_pull_thread.isRunning():
+            self.capsule_pull_thread.quit()
+            self.capsule_pull_thread.wait(3500)
+        if self.update_thread and self.update_thread.isRunning():
+            self.update_thread.quit()
+            self.update_thread.wait(3500)
         if self.nat_thread and self.nat_thread.isRunning():
             self.nat_thread.quit()
             self.nat_thread.wait(3500)
@@ -386,6 +416,12 @@ class LauncherWindow(FluentWindow):
         self.show_download_check.setChecked(config.getboolean("FEATURES", "show_download", fallback=True))
         self.show_manage_check = CheckBox("显示管理页")
         self.show_manage_check.setChecked(config.getboolean("FEATURES", "show_manage", fallback=True))
+        self.update_auto_check = CheckBox("启动时自动检查 McGo 更新")
+        self.update_auto_check.setChecked(config.getboolean("UPDATE", "auto_check", fallback=True))
+        self.update_manifest_input = LineEdit()
+        self.update_manifest_input.setText(config.get("UPDATE", "manifest_url", fallback=DEFAULT_UPDATE_MANIFEST_URL))
+        self.update_manifest_input.setPlaceholderText(DEFAULT_UPDATE_MANIFEST_URL)
+        self.update_status_label = BodyLabel(f"当前 McGo 版本：{APP_VERSION}")
         self.auto_open_browser_check = CheckBox("Microsoft 登录时自动打开浏览器")
         self.auto_open_browser_check.setChecked(config.getboolean("AUTH", "auto_open_browser", fallback=True))
         self.resource_isolation_check = CheckBox("启用资源隔离（每个版本使用独立 versions/<版本名> 运行目录）")
@@ -1420,6 +1456,9 @@ class LauncherWindow(FluentWindow):
         self.add_labeled_control(game_layout, "主页内容", self.home_content_input)
         game_layout.addWidget(self.home_network_check)
         game_layout.addWidget(self.resource_isolation_check)
+        game_layout.addWidget(self.update_auto_check)
+        self.add_labeled_control(game_layout, "更新清单", self.update_manifest_input)
+        game_layout.addWidget(self.update_status_label)
         self.add_labeled_control(game_layout, "Java 路径", self.java_combo)
         game_layout.addWidget(self.java_version_label)
         game_row = QHBoxLayout()
@@ -1431,6 +1470,7 @@ class LauncherWindow(FluentWindow):
         refresh_java_button = PushButton("刷新 Java")
         self.download_java_button = PushButton("下载推荐 Java")
         refresh_versions_button = PushButton("刷新本地版本")
+        self.check_update_button = PushButton("检查 McGo 更新")
         choose_button.clicked.connect(self.choose_game_directory)
         open_button.clicked.connect(self.open_game_directory)
         theme_image_button.clicked.connect(self.choose_theme_image)
@@ -1439,6 +1479,7 @@ class LauncherWindow(FluentWindow):
         refresh_java_button.clicked.connect(self.refresh_java_paths)
         self.download_java_button.clicked.connect(self.download_recommended_java)
         refresh_versions_button.clicked.connect(self.refresh_local_versions)
+        self.check_update_button.clicked.connect(lambda: self.start_update_check(silent=False))
         game_row.addWidget(choose_button)
         game_row.addWidget(open_button)
         game_row.addWidget(theme_image_button)
@@ -1447,6 +1488,7 @@ class LauncherWindow(FluentWindow):
         game_row.addWidget(refresh_java_button)
         game_row.addWidget(self.download_java_button)
         game_row.addWidget(refresh_versions_button)
+        game_row.addWidget(self.check_update_button)
         game_row.addStretch()
         game_layout.addLayout(game_row)
         return game_card
@@ -1510,15 +1552,29 @@ class LauncherWindow(FluentWindow):
         self.p2p_start_join_button = PushButton("作为加入者启动")
         self.p2p_stop_button = PushButton("停止 P2P")
         copy_invite_button = PushButton("复制邀请信息")
+        self.import_capsule_button = PushButton("导入开黑胶囊")
+        self.export_capsule_button = PushButton("导出开黑胶囊")
+        self.capsule_host_button = PushButton("补包服务未启动")
+        self.capsule_pull_button = PushButton("补齐胶囊文件")
         self.p2p_stop_button.setEnabled(False)
+        self.capsule_host_button.setEnabled(False)
+        self.capsule_pull_button.setEnabled(False)
         self.p2p_start_host_button.clicked.connect(self.start_p2p_host)
         self.p2p_start_join_button.clicked.connect(self.start_p2p_join)
         self.p2p_stop_button.clicked.connect(self.stop_p2p)
         copy_invite_button.clicked.connect(self.copy_p2p_invite)
+        self.import_capsule_button.clicked.connect(self.import_capsule_file)
+        self.export_capsule_button.clicked.connect(self.export_current_capsule)
+        self.capsule_host_button.clicked.connect(self.stop_capsule_file_host)
+        self.capsule_pull_button.clicked.connect(self.pull_capsule_files)
         p2p_row.addWidget(self.p2p_start_host_button)
         p2p_row.addWidget(self.p2p_start_join_button)
         p2p_row.addWidget(self.p2p_stop_button)
         p2p_row.addWidget(copy_invite_button)
+        p2p_row.addWidget(self.import_capsule_button)
+        p2p_row.addWidget(self.export_capsule_button)
+        p2p_row.addWidget(self.capsule_host_button)
+        p2p_row.addWidget(self.capsule_pull_button)
         p2p_row.addStretch()
         layout.addLayout(p2p_row)
         return card
@@ -1881,12 +1937,15 @@ class LauncherWindow(FluentWindow):
         self.p2p_tunnel.start()
         role_label = "房主" if mode == "host" else "加入者"
         self.log(f"P2P {role_label}隧道启动中：{tunnel_config.relay_host}:{tunnel_config.relay_port} / 房间 {tunnel_config.room}")
+        if mode == "host":
+            self.start_capsule_file_host(tunnel_config)
 
     def stop_p2p(self):
         if not self.p2p_tunnel:
             self.set_p2p_running(False)
             return
         self.p2p_status_label.setText("正在停止 P2P 隧道...")
+        self.stop_capsule_file_host(show_status=False)
         self.p2p_tunnel.stop()
 
     def copy_p2p_invite(self):
@@ -1902,12 +1961,155 @@ class LauncherWindow(FluentWindow):
         QApplication.clipboard().setText(invite)
         self.show_success("邀请信息已复制", f"房间 {room}")
 
+    def current_p2p_invite_payload(self):
+        room = self.ensure_p2p_room()
+        return {
+            "relay_host": self.p2p_relay_host_input.text().strip() or "flyliq.cn",
+            "relay_port": self.p2p_relay_port_input.value(),
+            "room": room,
+            "secret": self.p2p_secret_input.text().strip(),
+            "host_port": self.p2p_host_port_input.value(),
+            "join_port": self.p2p_join_port_input.value(),
+        }
+
+    def apply_p2p_invite_payload(self, payload):
+        if not isinstance(payload, dict):
+            return
+        relay_host = str(payload.get("relay_host") or payload.get("relayHost") or "").strip()
+        if relay_host:
+            self.p2p_relay_host_input.setText(relay_host)
+        for key, control in (
+            ("relay_port", self.p2p_relay_port_input),
+            ("host_port", self.p2p_host_port_input),
+            ("join_port", self.p2p_join_port_input),
+        ):
+            value = payload.get(key)
+            try:
+                port = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= port <= 65535:
+                control.setValue(port)
+        room = str(payload.get("room") or "").strip()
+        if room:
+            self.p2p_room_input.setText(room)
+        secret = str(payload.get("secret") or "").strip()
+        self.p2p_secret_input.setText(secret)
+        self.save_p2p_settings()
+
+    def capsule_file_host_running(self):
+        return bool(self.capsule_file_host and self.capsule_file_host.is_running())
+
+    def start_capsule_file_host(self, p2p_config=None):
+        if self.capsule_file_host_running():
+            return
+        version_id = self.current_resource_version()
+        if not version_id:
+            self.log("胶囊补包服务未启动：没有可提供补包的版本。")
+            self.capsule_host_button.setText("补包服务未启动")
+            self.capsule_host_button.setEnabled(False)
+            return
+        runtime_dir = self.runtime_directory_for_version(version_id)
+        if not os.path.isdir(runtime_dir):
+            self.log(f"胶囊补包服务未启动：运行目录不存在 {runtime_dir}")
+            self.capsule_host_button.setText("补包服务未启动")
+            self.capsule_host_button.setEnabled(False)
+            return
+
+        p2p_config = p2p_config or self.current_p2p_config("host")
+        self.capsule_file_host = CapsuleFileHost(
+            runtime_dir,
+            p2p_config,
+            status_callback=self.capsule_bridge.status.emit,
+            failed_callback=self.capsule_bridge.failed.emit,
+        )
+        self.capsule_file_host.start()
+        self.capsule_host_button.setText("正在启动补包服务")
+        self.capsule_host_button.setEnabled(True)
+        self.log(f"胶囊补包服务启动中：版本 {version_id} / 房间 {p2p_config.room}-FILES")
+
+    def stop_capsule_file_host(self, show_status=True):
+        if self.capsule_file_host:
+            self.capsule_file_host.stop()
+            self.capsule_file_host = None
+        self.capsule_host_button.setText("补包服务未启动")
+        self.capsule_host_button.setEnabled(False)
+        if show_status:
+            self.p2p_status_label.setText("胶囊补包服务已停止")
+
+    def pull_capsule_files(self):
+        payload = self.pending_capsule_payload or {}
+        version_id = payload.get("version", "")
+        files = payload.get("files", [])
+        runtime_dir = payload.get("runtime_dir", "")
+        if not version_id or not runtime_dir or not files:
+            self.show_warning("没有胶囊清单", "请先导入开黑胶囊。")
+            return
+        if self.capsule_pull_thread and self.capsule_pull_thread.isRunning():
+            self.show_warning("补包进行中", "请等待当前胶囊补包完成。")
+            return
+
+        self.save_p2p_settings()
+        self.progress_bar.setValue(0)
+        self.download_metrics_label.setText("准备补齐胶囊文件...")
+        self.install_status_label.setText(f"正在连接房主补包服务：{version_id}")
+        self.install_metrics_label.setText(f"待检查文件：{len(files)}")
+        self.set_download_running(True)
+        self.capsule_pull_thread = QThread()
+        self.capsule_pull_worker = CapsuleFilePullWorker(runtime_dir, files, self.current_p2p_config("join"))
+        self.capsule_pull_worker.moveToThread(self.capsule_pull_thread)
+        self.capsule_pull_thread.started.connect(self.capsule_pull_worker.run)
+        self.capsule_pull_worker.progress.connect(self.progress_bar.setValue)
+        self.capsule_pull_worker.status.connect(self.on_capsule_pull_status)
+        self.capsule_pull_worker.finished.connect(self.on_capsule_pull_finished)
+        self.capsule_pull_worker.failed.connect(self.on_capsule_pull_failed)
+        self.capsule_pull_worker.finished.connect(self.capsule_pull_thread.quit)
+        self.capsule_pull_worker.failed.connect(self.capsule_pull_thread.quit)
+        self.capsule_pull_worker.finished.connect(self.capsule_pull_worker.deleteLater)
+        self.capsule_pull_worker.failed.connect(self.capsule_pull_worker.deleteLater)
+        self.capsule_pull_thread.finished.connect(self.clear_capsule_pull_task)
+        self.capsule_pull_thread.start()
+
+    def on_capsule_pull_status(self, message):
+        self.install_status_label.setText(message)
+        self.log(message)
+
+    def on_capsule_pull_finished(self, payload):
+        self.set_download_running(False)
+        downloaded = payload.get("downloaded", 0)
+        total = payload.get("total", 0)
+        byte_count = payload.get("bytes", 0)
+        self.progress_bar.setValue(100)
+        self.download_metrics_label.setText("胶囊补包完成")
+        self.install_status_label.setText(f"已补齐 {downloaded}/{total} 个文件")
+        self.install_metrics_label.setText(f"传输：{format_bytes(byte_count)}")
+        if self.pending_capsule_payload:
+            self.pending_capsule_payload["missing_files"] = []
+        if hasattr(self, "capsule_pull_button"):
+            self.capsule_pull_button.setEnabled(bool(self.pending_capsule_payload and self.pending_capsule_payload.get("files")))
+        self.show_success("胶囊补包完成", f"已补齐 {downloaded} 个文件。")
+        self.log(f"胶囊补包完成：{downloaded}/{total}，{format_bytes(byte_count)}")
+
+    def on_capsule_pull_failed(self, message):
+        self.set_download_running(False)
+        self.download_metrics_label.setText(f"胶囊补包失败：{message}")
+        self.install_status_label.setText("胶囊补包失败")
+        self.install_metrics_label.setText(message)
+        self.show_warning("补包失败", message)
+        self.log(f"胶囊补包失败：{message}")
+
+    def clear_capsule_pull_task(self):
+        self.capsule_pull_thread = None
+        self.capsule_pull_worker = None
+        self.set_download_running(False)
+
     def on_p2p_status(self, message):
         if hasattr(self, "p2p_status_label"):
             self.p2p_status_label.setText(message)
         self.log(message)
 
     def on_p2p_stopped(self, message):
+        self.stop_capsule_file_host(show_status=False)
         self.set_p2p_running(False)
         self.p2p_tunnel = None
         if hasattr(self, "p2p_status_label"):
@@ -1915,11 +2117,30 @@ class LauncherWindow(FluentWindow):
         self.log(message)
 
     def on_p2p_failed(self, message):
+        self.stop_capsule_file_host(show_status=False)
         self.set_p2p_running(False)
+        self.p2p_tunnel = None
         if hasattr(self, "p2p_status_label"):
             self.p2p_status_label.setText(f"P2P 隧道失败：{message}")
         self.show_warning("P2P 隧道失败", message)
         self.log(f"P2P 隧道失败：{message}")
+
+    def on_capsule_host_status(self, message):
+        if "胶囊补包服务已启动" in str(message):
+            self.capsule_host_button.setText("停止胶囊补包")
+            self.capsule_host_button.setEnabled(True)
+        self.log(message)
+
+    def on_capsule_host_failed(self, message):
+        self.capsule_file_host = None
+        if hasattr(self, "capsule_host_button"):
+            self.capsule_host_button.setText("补包服务未启动")
+            self.capsule_host_button.setEnabled(False)
+        text = str(message)
+        if "room already exists" in text:
+            text = "补包房间已占用，请确认没有重复启动同一个房间的房主端。"
+        self.show_warning("胶囊补包服务失败", text)
+        self.log(f"胶囊补包服务失败：{text}")
 
     def apply_feature_visibility(self):
         if not hasattr(self, "navigation_pages"):
@@ -2638,6 +2859,102 @@ class LauncherWindow(FluentWindow):
         self.show_success("导出完成", f"已写入 {added} 个文件：{target_path}")
         self.log(f"整合包已导出：{target_path}")
 
+    def export_current_capsule(self):
+        version_id = self.current_resource_version()
+        if not version_id:
+            self.show_warning("缺少版本", "请先在资源市场里选择安装目标版本。")
+            return
+
+        default_name = sanitize_filename(self.version_display_name(version_id), version_id)
+        target_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "导出开黑胶囊",
+            os.path.join(self.current_game_dir(), f"{default_name}.mcgo-capsule"),
+            "McGo 开黑胶囊 (*.mcgo-capsule);;所有文件 (*.*)",
+        )
+        if not target_path:
+            return
+        if not target_path.lower().endswith(".mcgo-capsule"):
+            target_path += ".mcgo-capsule"
+
+        try:
+            self.save_p2p_settings()
+            payload = export_capsule(
+                self.current_game_dir(),
+                self.version_settings,
+                version_id,
+                target_path,
+                p2p_info=self.current_p2p_invite_payload(),
+                global_isolation=self.resource_isolation_check.isChecked(),
+            )
+        except Exception as exc:
+            self.show_warning("导出失败", str(exc))
+            self.log(f"开黑胶囊导出失败：{exc}")
+            return
+
+        message = f"已写入 {payload['file_count']} 个私有文件清单，约 {format_bytes(payload['total_size'])} 待 P2P 补包。"
+        self.show_success("胶囊已导出", message)
+        self.log(f"开黑胶囊已导出：{target_path} | {message}")
+
+    def import_capsule_file(self):
+        capsule_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择开黑胶囊",
+            "",
+            "McGo 开黑胶囊 (*.mcgo-capsule);;所有文件 (*.*)",
+        )
+        if not capsule_path:
+            return
+
+        try:
+            payload = import_capsule(
+                capsule_path,
+                self.current_game_dir(),
+                self.version_settings,
+                global_isolation=self.resource_isolation_check.isChecked(),
+            )
+            save_version_settings(self.version_settings)
+        except Exception as exc:
+            self.show_warning("导入失败", str(exc))
+            self.log(f"开黑胶囊导入失败：{exc}")
+            return
+
+        version_id = payload.get("version", "")
+        p2p_payload = payload.get("p2p", {})
+        if p2p_payload:
+            self.apply_p2p_invite_payload(p2p_payload)
+        self.pending_capsule_payload = payload
+        self.refresh_local_versions(show_feedback=False, select_version=version_id)
+        files = payload.get("files", [])
+        missing_files = payload.get("missing_files", [])
+        self.download_metrics_label.setText("开黑胶囊导入完成")
+        self.install_status_label.setText(f"已导入 {payload.get('name', version_id)}")
+        self.install_metrics_label.setText(
+            f"目标版本：{version_id} | 清单文件：{len(files)} | 待补包：{len(missing_files)}"
+        )
+        if hasattr(self, "capsule_pull_button"):
+            self.capsule_pull_button.setEnabled(bool(files) and not self.is_download_task_running())
+        self.show_success("胶囊已导入", f"{version_id} 已创建，正在自动校验并补全版本文件。")
+        self.log(
+            f"开黑胶囊已导入：{capsule_path} -> {version_id}，"
+            f"清单 {len(files)} 个，待补包 {len(missing_files)} 个。"
+        )
+        self.queue_capsule_repair(version_id)
+
+    def queue_capsule_repair(self, version_id):
+        if not version_id:
+            return
+        mirror_key = self.mirror_combo.currentText()
+        game_dir = self.current_game_dir()
+        task = DownloadTask(
+            "repair",
+            f"补全胶囊版本文件 {version_id}",
+            lambda version_id=version_id,
+            mirror_key=mirror_key,
+            game_dir=game_dir: self._start_repair_task(version_id, mirror_key, game_dir, auto_capsule=True),
+        )
+        self.queue_download_task(task)
+
     def analyze_current_crash(self):
         version_id = self.current_resource_version()
         if not version_id:
@@ -2671,7 +2988,7 @@ class LauncherWindow(FluentWindow):
         )
         self.queue_download_task(task)
 
-    def _start_repair_task(self, version_id, mirror_key, game_dir):
+    def _start_repair_task(self, version_id, mirror_key, game_dir, auto_capsule=False):
         logger.info("Repair task starting from UI queue: version=%s mirror=%s game_dir=%s", version_id, mirror_key, game_dir)
         self.repair_progress_bar.setValue(0)
         self.repair_status_label.setText(f"准备补全 {version_id}...")
@@ -2687,7 +3004,7 @@ class LauncherWindow(FluentWindow):
         self.repair_worker.progress.connect(self.repair_progress_bar.setValue)
         self.repair_worker.metrics.connect(self.update_repair_metrics)
         self.repair_worker.status.connect(lambda message: self.repair_status_label.setText(message))
-        self.repair_worker.finished.connect(self.on_repair_finished)
+        self.repair_worker.finished.connect(lambda payload, capsule=auto_capsule: self.on_repair_finished(payload, capsule))
         self.repair_worker.failed.connect(self.on_repair_failed)
         self.repair_worker.finished.connect(self.repair_thread.quit)
         self.repair_worker.failed.connect(self.repair_thread.quit)
@@ -2853,6 +3170,7 @@ class LauncherWindow(FluentWindow):
             self.modpack_thread,
             self.resource_install_thread,
             self.repair_thread,
+            self.capsule_pull_thread,
         )
         return any(thread and thread.isRunning() for thread in threads)
 
@@ -2951,7 +3269,7 @@ class LauncherWindow(FluentWindow):
             len(self.download_task_queue),
         )
         stopped = []
-        for name in ("download", "install", "modpack", "resource_install", "repair"):
+        for name in ("download", "install", "modpack", "resource_install", "repair", "capsule_pull"):
             worker = getattr(self, f"{name}_worker", None)
             if worker and hasattr(worker, "request_stop"):
                 worker.request_stop()
@@ -2980,6 +3298,13 @@ class LauncherWindow(FluentWindow):
             self.refresh_install_versions_button.setEnabled(not running)
         if hasattr(self, "import_modpack_button"):
             self.import_modpack_button.setEnabled(not running)
+        if hasattr(self, "import_capsule_button"):
+            self.import_capsule_button.setEnabled(not running)
+        if hasattr(self, "export_capsule_button"):
+            self.export_capsule_button.setEnabled(not running)
+        if hasattr(self, "capsule_pull_button"):
+            payload = self.pending_capsule_payload or {}
+            self.capsule_pull_button.setEnabled(not running and bool(payload.get("files")))
         if hasattr(self, "search_resource_button"):
             self.search_resource_button.setEnabled(not running)
         if hasattr(self, "resource_detail_button"):
@@ -3736,6 +4061,141 @@ class LauncherWindow(FluentWindow):
             self.show_warning("刷新失败", message)
             self.finish_scan_feedback(task_type)
 
+    def update_manifest_url(self):
+        return self.update_manifest_input.text().strip() or DEFAULT_UPDATE_MANIFEST_URL
+
+    def update_task_running(self):
+        return bool(self.update_thread and self.update_thread.isRunning())
+
+    def start_update_check(self, silent=False):
+        if self.update_task_running():
+            if not silent:
+                self.show_info("检查更新", "更新任务正在运行。")
+            return
+        self.start_update_task("check", silent=silent)
+
+    def start_update_download(self, apply_after_download=False):
+        if self.update_task_running():
+            self.show_info("检查更新", "更新任务正在运行。")
+            return
+        manifest = self.pending_update_manifest or {}
+        if not manifest:
+            self.start_update_check(silent=False)
+            return
+        self.update_apply_after_download = apply_after_download
+        self.start_update_task("download", manifest=manifest, silent=False)
+
+    def start_update_task(self, action, manifest=None, silent=False):
+        self.update_thread = QThread()
+        self.update_worker = LauncherUpdateWorker(action, self.update_manifest_url(), APP_VERSION, manifest=manifest)
+        self.update_worker.moveToThread(self.update_thread)
+        self.update_thread.started.connect(self.update_worker.run)
+        self.update_worker.status.connect(self.on_update_status)
+        self.update_worker.progress.connect(self.progress_bar.setValue)
+        self.update_worker.finished.connect(lambda payload, quiet=silent: self.defer_update_finished(payload, quiet))
+        self.update_worker.failed.connect(lambda message, quiet=silent: self.on_update_failed(message, quiet))
+        self.update_worker.finished.connect(self.update_thread.quit)
+        self.update_worker.failed.connect(self.update_thread.quit)
+        self.update_worker.finished.connect(self.update_worker.deleteLater)
+        self.update_worker.failed.connect(self.update_worker.deleteLater)
+        self.update_thread.finished.connect(self.clear_update_task)
+        if hasattr(self, "check_update_button"):
+            self.check_update_button.setEnabled(False)
+        if not silent:
+            self.update_status_label.setText("正在检查 McGo 更新...")
+        self.update_thread.start()
+
+    def clear_update_task(self):
+        self.update_thread = None
+        self.update_worker = None
+        if hasattr(self, "check_update_button"):
+            self.check_update_button.setEnabled(True)
+        if self.pending_update_result is not None:
+            payload = self.pending_update_result
+            silent = self.pending_update_result_silent
+            self.pending_update_result = None
+            self.pending_update_result_silent = False
+            QTimer.singleShot(0, lambda payload=payload, silent=silent: self.on_update_finished(payload, silent))
+
+    def on_update_status(self, message):
+        self.update_status_label.setText(message)
+        self.log(message)
+
+    def quit_for_update(self):
+        threading.Timer(1.2, lambda: os._exit(0)).start()
+        QApplication.quit()
+
+    def defer_update_finished(self, payload, silent=False):
+        self.pending_update_result = dict(payload or {})
+        self.pending_update_result_silent = silent
+
+    def on_update_finished(self, payload, silent=False):
+        action = payload.get("action", "")
+        if action == "check":
+            if not payload.get("update_available"):
+                self.update_status_label.setText(f"当前已是最新版：{APP_VERSION}")
+                if not silent:
+                    self.show_success("检查更新", f"当前已是最新版：{APP_VERSION}")
+                return
+            self.pending_update_manifest = payload
+            version = payload.get("version", "")
+            notes = payload.get("notes", "")
+            self.update_status_label.setText(f"发现新版本：{version}")
+            self.log(f"发现 McGo 新版本：{APP_VERSION} -> {version}")
+            if silent:
+                self.show_info("发现 McGo 更新", f"新版本 {version} 可用，可在管理页下载安装。")
+                return
+            detail = f"发现 McGo {version}，是否现在下载并重启更新？"
+            if notes:
+                detail += f"\n\n{notes[:500]}"
+            reply = QMessageBox.question(
+                self,
+                "发现 McGo 更新",
+                detail,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self.start_update_download(apply_after_download=True)
+            return
+
+        if action == "download":
+            self.pending_update_manifest = payload
+            version = payload.get("version", "")
+            self.update_status_label.setText(f"McGo {version} 已下载")
+            if not can_replace_current_executable():
+                self.update_apply_after_download = False
+                self.update_status_label.setText(f"McGo {version} 已下载，请手动替换当前程序")
+                self.show_success("更新已下载", f"当前不是打包后的 McGo.exe，已保存：{payload.get('path', '')}")
+                return
+            if self.update_apply_after_download:
+                self.update_apply_after_download = False
+                self.update_status_label.setText("正在退出并应用更新...")
+                self.log(f"正在应用 McGo {version} 更新：{payload.get('path', '')}")
+                schedule_windows_replace_and_restart(payload["path"])
+                self.quit_for_update()
+                return
+            reply = QMessageBox.question(
+                self,
+                "重启并更新",
+                f"McGo {version} 已下载。是否现在退出并替换当前程序？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                schedule_windows_replace_and_restart(payload["path"])
+                self.quit_for_update()
+
+    def on_update_failed(self, message, silent=False):
+        self.update_apply_after_download = False
+        if silent:
+            self.update_status_label.setText(f"当前 McGo 版本：{APP_VERSION}")
+        else:
+            self.update_status_label.setText(f"检查更新失败：{message}")
+        self.log(f"检查更新失败：{message}")
+        if not silent:
+            self.show_warning("检查更新失败", message)
+
     def refresh_all(self):
         self.refresh_java_paths(show_feedback=True)
         self.refresh_local_versions(show_feedback=True)
@@ -4054,6 +4514,8 @@ class LauncherWindow(FluentWindow):
         config["MUSIC"]["enabled"] = str(self.music_enabled_check.isChecked())
         config["MUSIC"]["volume"] = str(self.music_volume_input.value())
         config["MUSIC"]["pause_on_launch"] = str(self.music_pause_on_launch_check.isChecked())
+        config["UPDATE"]["auto_check"] = str(self.update_auto_check.isChecked())
+        config["UPDATE"]["manifest_url"] = self.update_manifest_url()
         config["FEATURES"]["show_download"] = str(self.show_download_check.isChecked())
         config["FEATURES"]["show_manage"] = str(self.show_manage_check.isChecked())
         config["SERVERS"]["items"] = self.server_list_input.toPlainText().strip()
@@ -4925,7 +5387,7 @@ class LauncherWindow(FluentWindow):
         self.install_metrics_label.setText(message)
         self.show_warning("安装失败", message)
 
-    def on_repair_finished(self, payload):
+    def on_repair_finished(self, payload, auto_capsule=False):
         self.set_download_running(False)
         self.finish_download_task(failed=False)
         version = payload.get("version", "")
@@ -4944,7 +5406,10 @@ class LauncherWindow(FluentWindow):
         else:
             self.repair_status_label.setText("版本文件已校验并补全")
             self.repair_metrics_label.setText(f"{version} | 修复前缺失/损坏 {missing_before} 项")
-            self.show_success("补全完成", f"{version} 的缺失文件已补齐。")
+            if auto_capsule:
+                self.show_success("胶囊版本已就绪", f"{version} 的游戏文件已补齐，可继续补齐胶囊文件。")
+            else:
+                self.show_success("补全完成", f"{version} 的缺失文件已补齐。")
             self.log(f"版本补全完成：{version}，修复前缺失/损坏 {missing_before} 项")
 
     def on_repair_failed(self, message):

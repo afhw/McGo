@@ -17,6 +17,8 @@ redirect_uri = "http://localhost:5000/login/callback"
 game_directory = ".minecraft"
 config_file = "launcher_config.ini"
 accounts_file = "accounts.json"
+APP_VERSION = "1.0.8"
+DEFAULT_UPDATE_MANIFEST_URL = "https://mcgo.flyliq.cn/update.json"
 
 config = configparser.ConfigParser()
 LOG_PATH = setup_logging()
@@ -107,6 +109,7 @@ def load_config():
         "UI": {"advanced_mode": "False", "theme": "dark", "theme_image": ""},
         "HOME": {"content_source": "", "allow_network": "False"},
         "MUSIC": {"path": "", "enabled": "False", "volume": "35", "pause_on_launch": "True"},
+        "UPDATE": {"auto_check": "True", "manifest_url": DEFAULT_UPDATE_MANIFEST_URL},
         "FEATURES": {"show_download": "True", "show_manage": "True"},
         "SERVERS": {"items": ""},
         "P2P": {

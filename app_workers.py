@@ -11,6 +11,7 @@ from java_utils import find_java_paths, get_java_major_version
 from launcher import get_local_versions
 from log_utils import get_logger
 from nat_utils import detect_nat_type
+from updater import check_for_update, download_update
 
 
 logger = get_logger(__name__)
@@ -121,6 +122,45 @@ class NatDetectionWorker(QObject):
             self.finished.emit(result)
         except Exception as exc:
             logger.exception("NAT detection failed")
+            self.failed.emit(str(exc))
+
+
+class LauncherUpdateWorker(QObject):
+    status = Signal(str)
+    progress = Signal(int)
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, action, manifest_url, current_version, manifest=None):
+        super().__init__()
+        self.action = action
+        self.manifest_url = manifest_url
+        self.current_version = current_version
+        self.manifest = dict(manifest or {})
+
+    def run(self):
+        try:
+            if self.action == "check":
+                self.status.emit("正在检查 McGo 更新...")
+                payload = check_for_update(self.manifest_url, self.current_version)
+                payload["action"] = "check"
+                self.finished.emit(payload)
+                return
+            if self.action == "download":
+                manifest = dict(self.manifest)
+                if not manifest:
+                    manifest = check_for_update(self.manifest_url, self.current_version)
+                payload = download_update(
+                    manifest,
+                    progress_callback=self.progress.emit,
+                    status_callback=self.status.emit,
+                )
+                payload["action"] = "download"
+                self.finished.emit(payload)
+                return
+            raise RuntimeError(f"未知更新任务：{self.action}")
+        except Exception as exc:
+            logger.exception("Launcher update task failed: action=%s", self.action)
             self.failed.emit(str(exc))
 
 

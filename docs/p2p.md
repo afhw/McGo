@@ -1,6 +1,6 @@
 # P2P 联机与中继部署
 
-McGo 的 P2P 联机使用一个轻量 TCP 中继来打通 Minecraft Java 版的局域网联机流量。房主在游戏内“对局域网开放”后，把聊天栏显示的端口填到 McGo；加入者启动隧道后，在 Minecraft 里连接本机地址。
+McGo 的 P2P 联机会优先尝试 UDP 打洞。打洞成功后，启动器会在 UDP 上构建一个可靠有序的 TCP 字节流隧道来承载 Minecraft Java 版的局域网联机流量；如果 UDP 不可用，会自动回退到 TCP 中继转发。房主在游戏内“对局域网开放”后，把聊天栏显示的端口填到 McGo；加入者启动隧道后，在 Minecraft 里连接本机地址。
 
 默认中继地址：
 
@@ -38,13 +38,21 @@ python3 -m venv .venv
 .venv/bin/python p2p_server.py --host 0.0.0.0 --port 10721
 ```
 
-如果使用防火墙，放行 TCP 端口：
+如果使用防火墙，需要同时放行 TCP 和 UDP 端口。TCP 用于房间控制和中继回退，UDP 用于打洞协调：
 
 ```bash
 sudo ufw allow 10721/tcp
+sudo ufw allow 10721/udp
 ```
 
-云服务器还需要在安全组里放行 `10721/tcp`。
+云服务器还需要在安全组里同时放行 `10721/tcp` 和 `10721/udp`。
+
+默认 TCP 中继回退会按每个方向 `8192 KiB/s` 限速，避免中继被单个房间打满。可以调整或关闭：
+
+```bash
+.venv/bin/python p2p_server.py --host 0.0.0.0 --port 10721 --relay-rate-limit-kbps 4096
+.venv/bin/python p2p_server.py --host 0.0.0.0 --port 10721 --relay-rate-limit-kbps 0
+```
 
 ## systemd 示例
 
@@ -58,7 +66,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/mcgo-p2p
-ExecStart=/opt/mcgo-p2p/.venv/bin/python /opt/mcgo-p2p/p2p_server.py --host 0.0.0.0 --port 10721
+ExecStart=/opt/mcgo-p2p/.venv/bin/python /opt/mcgo-p2p/p2p_server.py --host 0.0.0.0 --port 10721 --relay-rate-limit-kbps 8192
 Restart=always
 RestartSec=3
 User=mcgo
@@ -110,4 +118,4 @@ python3 -m nuitka \
 
 ## 说明
 
-这是中继辅助的 P2P 隧道，不是公网 Minecraft 服务器。中继只负责按房间转发 TCP 字节流，不理解 Minecraft 协议，也不保存账号信息。请只把房间号和口令发给可信玩家。
+这是中继辅助的 P2P 隧道，不是公网 Minecraft 服务器。中继负责房间控制、UDP 端点交换，以及 UDP 不可用时的 TCP 字节流转发；它不理解 Minecraft 协议，也不保存账号信息。请只把房间号和口令发给可信玩家。

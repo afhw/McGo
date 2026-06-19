@@ -204,6 +204,26 @@ class RepairWorker(QObject):
         thread = QThread.currentThread()
         return self._cancel_event.is_set() or (thread and thread.isInterruptionRequested())
 
+    def _load_repair_chain(self):
+        chain = get_version_inheritance_chain(self.game_dir, self.version_id)
+        if not chain:
+            raise RuntimeError(f"未找到版本清单：{self.version_id}")
+
+        while chain[-1].get("inheritsFrom"):
+            base_version = chain[-1].get("inheritsFrom")
+            self.status.emit(f"正在补齐基础版本清单：{base_version}")
+            base_json, _resolved_source = get_version_metadata_with_fallback(
+                base_version,
+                self.mirror_source,
+                status_callback=self.status.emit,
+            )
+            version_dir = os.path.join(self.game_dir, "versions", base_version)
+            os.makedirs(version_dir, exist_ok=True)
+            with open(os.path.join(version_dir, f"{base_version}.json"), "w", encoding="utf-8") as file_handle:
+                json.dump(base_json, file_handle, ensure_ascii=False, indent=4)
+            chain.append(base_json)
+        return chain
+
     def run(self):
         try:
             logger.info(
@@ -212,9 +232,7 @@ class RepairWorker(QObject):
                 self.mirror_source,
                 self.game_dir,
             )
-            chain = get_version_inheritance_chain(self.game_dir, self.version_id)
-            if not chain:
-                raise RuntimeError(f"未找到版本清单：{self.version_id}")
+            chain = self._load_repair_chain()
 
             def on_progress(snapshot):
                 self.progress.emit(_progress_percent(snapshot))
