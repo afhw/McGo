@@ -80,6 +80,9 @@ def launch_options_for_version(game_dir, settings, version_id, global_isolation=
     raw_game_args = (entry.get("game_args") or "").strip()
     extra_jvm_args = shlex.split(raw_jvm_args, posix=False) if raw_jvm_args else []
     extra_game_args = shlex.split(raw_game_args, posix=False) if raw_game_args else []
+    quick_play_singleplayer = (entry.get("quick_play_singleplayer") or "").strip()
+    if quick_play_singleplayer:
+        extra_game_args.extend(["--quickPlaySingleplayer", quick_play_singleplayer])
     return {
         "runtime_directory": runtime_directory,
         "extra_jvm_args": extra_jvm_args,

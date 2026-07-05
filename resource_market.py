@@ -3,6 +3,7 @@ import os
 import re
 import tempfile
 import time
+from urllib.parse import urlparse
 
 import http_client
 from file_utils import sanitize_filename, sha1_file, sha1_text
@@ -58,12 +59,65 @@ RESOURCE_EXTENSIONS = {
 
 logger = get_logger(__name__)
 
+MODRINTH_API_BASE = "https://api.modrinth.com/v2"
+MODRINTH_CDN_BASE = "https://cdn.modrinth.com"
+
+
+def _modrinth_config_value(key, env_name=""):
+    value = os.environ.get(env_name or f"MCGO_{key.upper()}", "").strip()
+    if value:
+        return value
+    try:
+        from app_settings import config
+
+        return config.get("DOWNLOAD", key, fallback="").strip()
+    except Exception:
+        logger.debug("Failed to read Modrinth config value: %s", key, exc_info=True)
+        return ""
+
+
+def _normalized_base_url(value, fallback):
+    normalized = (value or "").strip().rstrip("/")
+    if not normalized:
+        return fallback
+    return normalized
+
+
+def modrinth_api_base():
+    return _normalized_base_url(
+        _modrinth_config_value("modrinth_api_base", "MCGO_MODRINTH_API_BASE"),
+        MODRINTH_API_BASE,
+    )
+
+
+def modrinth_api_url(path):
+    return f"{modrinth_api_base()}/{str(path).lstrip('/')}"
+
+
+def modrinth_cdn_base():
+    return _normalized_base_url(
+        _modrinth_config_value("modrinth_cdn_base", "MCGO_MODRINTH_CDN_BASE"),
+        "",
+    )
+
+
+def rewrite_modrinth_download_url(url):
+    custom_base = modrinth_cdn_base()
+    if not custom_base:
+        return url
+    parsed = urlparse(url)
+    official = urlparse(MODRINTH_CDN_BASE)
+    if parsed.scheme not in {"http", "https"} or parsed.netloc.lower() != official.netloc:
+        return url
+    return f"{custom_base}{parsed.path}" + (f"?{parsed.query}" if parsed.query else "")
+
 
 def _stream_download(url, file_path, progress_callback=None, status_label="下载中"):
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
     start_time = time.monotonic()
     downloaded = 0
-    with http_client.get(url, stream=True, timeout=60) as response:
+    download_url = rewrite_modrinth_download_url(url)
+    with http_client.get(download_url, stream=True, timeout=60) as response:
         http_client.raise_for_status(response, status_label)
         total = int(response.headers.get("content-length", 0) or 0)
         with open(file_path, "wb") as file_handle:
@@ -133,7 +187,7 @@ def search_modrinth_resources(query, resource_type, game_version="", loader="", 
         if resource_type == "mod" and current_loader:
             facets.append([f"categories:{current_loader}"])
         response = http_client.get(
-            "https://api.modrinth.com/v2/search",
+            modrinth_api_url("search"),
             params={
                 "query": query,
                 "limit": limit,
@@ -207,7 +261,7 @@ def strict_modrinth_search(query, resource_type, game_version="", loader="", lim
     if resource_type == "mod" and loader:
         facets.append([f"categories:{loader}"])
     response = http_client.get(
-        "https://api.modrinth.com/v2/search",
+        modrinth_api_url("search"),
         params={
             "query": query,
             "limit": limit,
@@ -236,7 +290,7 @@ def get_modrinth_versions(project_id, resource_type, game_version, loader, timeo
         loader or "<any>",
     )
     response = http_client.get(
-        f"https://api.modrinth.com/v2/project/{project_id}/version",
+        modrinth_api_url(f"project/{project_id}/version"),
         params=params,
         headers={"User-Agent": "McGo/1.0"},
         timeout=timeout,
@@ -419,9 +473,136 @@ def install_modrinth_resource(project_id, resource_type, game_version, loader, t
     }
 
 
+def get_modrinth_versions_by_hashes(hashes, algorithm="sha1"):
+    normalized = [item for item in hashes if item]
+    if not normalized:
+        return {}
+    response = http_client.post(
+        modrinth_api_url("version_files"),
+        json={"hashes": normalized, "algorithm": algorithm},
+        headers={"User-Agent": "McGo/1.0"},
+        timeout=30,
+        retries=1,
+    )
+    http_client.raise_for_status(response, "识别 Modrinth 本地 Mod")
+    payload = response.json()
+    return payload if isinstance(payload, dict) else {}
+
+
+def resolve_modrinth_dependency_plan(mods_dir):
+    mod_files = []
+    if os.path.isdir(mods_dir):
+        for filename in sorted(os.listdir(mods_dir), key=str.lower):
+            lowered = filename.lower()
+            if lowered.endswith(".jar") and not lowered.endswith(".jar.disabled"):
+                mod_files.append(os.path.join(mods_dir, filename))
+
+    hashes_by_path = {}
+    for path in mod_files:
+        try:
+            hashes_by_path[path] = sha1_file(path).lower()
+        except OSError:
+            logger.debug("Skipping unreadable mod file during dependency scan: %s", os.path.abspath(path), exc_info=True)
+
+    versions_by_hash = get_modrinth_versions_by_hashes(list(hashes_by_path.values()))
+    installed_project_ids = set()
+    recognized = []
+    unknown_files = []
+    for path, file_hash in hashes_by_path.items():
+        version = versions_by_hash.get(file_hash)
+        if not isinstance(version, dict):
+            unknown_files.append(os.path.basename(path))
+            continue
+        project_id = version.get("project_id")
+        if project_id:
+            installed_project_ids.add(project_id)
+        recognized.append({
+            "path": path,
+            "filename": os.path.basename(path),
+            "hash": file_hash,
+            "version": version,
+        })
+
+    missing_by_project = {}
+    for item in recognized:
+        parent_version = item.get("version", {})
+        parent_project = parent_version.get("project_id", "")
+        parent_label = (
+            parent_version.get("name")
+            or parent_version.get("version_number")
+            or parent_project
+            or item.get("filename", "")
+        )
+        for dependency in parent_version.get("dependencies", []):
+            if dependency.get("dependency_type") != "required":
+                continue
+            dep_project_id = dependency.get("project_id")
+            if not dep_project_id or dep_project_id in installed_project_ids:
+                continue
+            entry = missing_by_project.setdefault(dep_project_id, {
+                "project_id": dep_project_id,
+                "version_id": dependency.get("version_id", ""),
+                "required_by": [],
+            })
+            if parent_label and parent_label not in entry["required_by"]:
+                entry["required_by"].append(parent_label)
+
+    return {
+        "recognized": recognized,
+        "unknown_files": unknown_files,
+        "installed_project_ids": sorted(installed_project_ids),
+        "missing_dependencies": list(missing_by_project.values()),
+    }
+
+
+def install_missing_modrinth_dependencies(game_version, loader, target_dir, status_callback=None, progress_callback=None):
+    plan = resolve_modrinth_dependency_plan(target_dir)
+    missing = plan.get("missing_dependencies", [])
+    installed_projects = {f"modrinth:{project_id}" for project_id in plan.get("installed_project_ids", [])}
+    installed_files = []
+    total = len(missing)
+    if not total:
+        if progress_callback:
+            progress_callback({"progress": 1.0, "phase": "检查 Mod 前置", "current_file": ""})
+        return {**plan, "dependencies_installed": installed_files}
+
+    for index, dependency in enumerate(missing):
+        project_id = dependency.get("project_id", "")
+        if status_callback:
+            status_callback(f"正在安装缺失前置 {index + 1}/{total}：{project_id}")
+
+        def on_progress(snapshot, base=index):
+            if not progress_callback:
+                return
+            progress = snapshot.get("progress", 0.0)
+            snapshot = dict(snapshot)
+            snapshot["progress"] = (base + progress) / total
+            snapshot["phase"] = snapshot.get("phase") or "下载 Mod 前置"
+            progress_callback(snapshot)
+
+        payload = install_modrinth_resource(
+            project_id,
+            "mod",
+            game_version,
+            loader,
+            target_dir,
+            install_dependencies=True,
+            installed=installed_projects,
+            status_callback=status_callback,
+            progress_callback=on_progress,
+        )
+        if payload.get("filename"):
+            installed_files.append(payload["filename"])
+        installed_files.extend(payload.get("dependencies_installed", []))
+
+    if progress_callback:
+        progress_callback({"progress": 1.0, "phase": "Mod 前置补齐完成", "current_file": ""})
+    return {**plan, "dependencies_installed": installed_files}
+
+
 def get_modrinth_resource_detail(project_id, resource_type, game_version, loader):
     project_response = http_client.get(
-        f"https://api.modrinth.com/v2/project/{project_id}",
+        modrinth_api_url(f"project/{project_id}"),
         headers={"User-Agent": "McGo/1.0"},
         timeout=10,
         retries=0,

@@ -9,7 +9,7 @@
 3. 选择安装目标版本。
 4. 输入关键词并搜索。
 
-Modrinth 支持兼容性验证和一键安装必需依赖。CurseForge 需要 `CURSEFORGE_API_KEY` 环境变量，当前主要用于搜索和查看详情。本地来源会扫描目标版本对应资源目录。
+Modrinth 支持兼容性验证和一键安装必需依赖。安装选中资源时默认勾选“安装 Modrinth 必需依赖”，会递归下载该资源声明的 required 前置。CurseForge 需要 `CURSEFORGE_API_KEY` 环境变量，当前主要用于搜索和查看详情。本地来源会扫描目标版本对应资源目录。
 
 ## 资源详情
 
@@ -21,5 +21,5 @@ Modrinth 支持兼容性验证和一键安装必需依赖。CurseForge 需要 `C
 
 - 双击或点击“启用/禁用所选 Mod”会切换 `.jar` 与 `.jar.disabled`。
 - “删除所选 Mod”会删除文件。
+- “补齐 Mod 前置”会扫描当前版本已启用的 `.jar`，通过 Modrinth 文件 hash 识别项目并自动安装缺失的 required 前置。
 - 列表会显示启用/禁用状态，并给出基础依赖提示。
-

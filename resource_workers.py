@@ -8,6 +8,7 @@ from resource_market import (
     get_local_resource_detail,
     get_modrinth_resource_detail,
     hit_has_modrinth_compatibility,
+    install_missing_modrinth_dependencies,
     install_modrinth_resource,
     list_local_resources,
     search_curseforge_resources,
@@ -326,4 +327,53 @@ class ResourceInstallWorker(QObject):
             self.finished.emit(payload)
         except Exception as exc:
             logger.exception("ResourceInstallWorker failed: source=%s project=%s", self.source, self.project_id)
+            self.failed.emit(str(exc))
+
+
+class ResourceDependencyRepairWorker(QObject):
+    progress = Signal(int)
+    metrics = Signal(dict)
+    status = Signal(str)
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, game_version, loader, target_dir):
+        super().__init__()
+        self.game_version = game_version
+        self.loader = loader
+        self.target_dir = target_dir
+
+    def run(self):
+        try:
+            logger.info(
+                "ResourceDependencyRepairWorker started: game=%s loader=%s target=%s",
+                self.game_version or "<any>",
+                self.loader or "<none>",
+                self.target_dir,
+            )
+            self.status.emit("正在扫描 Modrinth Mod 依赖...")
+            self.progress.emit(8)
+
+            def on_progress(snapshot):
+                value = snapshot.get("progress", 0.0)
+                self.progress.emit(max(8, min(100, int(8 + value * 92))))
+                self.metrics.emit(snapshot)
+
+            payload = install_missing_modrinth_dependencies(
+                self.game_version,
+                self.loader,
+                self.target_dir,
+                status_callback=self.status.emit,
+                progress_callback=on_progress,
+            )
+            self.progress.emit(100)
+            logger.info(
+                "ResourceDependencyRepairWorker finished: recognized=%d missing=%d installed=%d",
+                len(payload.get("recognized", [])),
+                len(payload.get("missing_dependencies", [])),
+                len(payload.get("dependencies_installed", [])),
+            )
+            self.finished.emit(payload)
+        except Exception as exc:
+            logger.exception("ResourceDependencyRepairWorker failed: target=%s", self.target_dir)
             self.failed.emit(str(exc))

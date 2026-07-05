@@ -99,6 +99,8 @@ def load_config():
             "max_asset_threads": "24",
             "speed_limit_kbps": "0",
             "cache_strategy": "reuse",
+            "modrinth_api_base": "",
+            "modrinth_cdn_base": "",
         },
         "AUTH": {
             "use_microsoft_login": "False",

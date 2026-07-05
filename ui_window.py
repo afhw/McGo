@@ -8,6 +8,7 @@ import uuid as uuidlib
 import webbrowser
 import html
 from collections import deque
+from urllib.parse import urlparse
 
 import http_client
 from qt_compat import (
@@ -156,6 +157,8 @@ class LauncherWindow(FluentWindow):
         self.resource_detail_canceling_generations = set()
         self.resource_install_thread = None
         self.resource_install_worker = None
+        self.resource_dependency_thread = None
+        self.resource_dependency_worker = None
         self.resource_search_hits = []
         self.authlib_download_thread = None
         self.authlib_download_worker = None
@@ -331,6 +334,12 @@ class LauncherWindow(FluentWindow):
         self.download_cache_combo.addItems(["reuse", "network_only"])
         self.download_cache_combo.setCurrentText(config.get("DOWNLOAD", "cache_strategy", fallback="reuse"))
         self.download_preset_combo.setCurrentText(config.get("DOWNLOAD", "download_preset", fallback="均衡"))
+        self.modrinth_api_base_input = LineEdit()
+        self.modrinth_api_base_input.setText(config.get("DOWNLOAD", "modrinth_api_base", fallback=""))
+        self.modrinth_api_base_input.setPlaceholderText("留空使用 https://api.modrinth.com/v2")
+        self.modrinth_cdn_base_input = LineEdit()
+        self.modrinth_cdn_base_input.setText(config.get("DOWNLOAD", "modrinth_cdn_base", fallback=""))
+        self.modrinth_cdn_base_input.setPlaceholderText("留空使用 https://cdn.modrinth.com")
         self.login_mode_combo = NativeComboBox()
         self.login_mode_combo.addItems(["offline", "microsoft", "external"])
         self.login_mode_combo.setCurrentText("microsoft" if config.getboolean("AUTH", "use_microsoft_login", fallback=False) else "offline")
@@ -448,7 +457,10 @@ class LauncherWindow(FluentWindow):
         self.version_jvm_args_input = LineEdit()
         self.version_jvm_args_input.setPlaceholderText("-XX:-OmitStackTraceInFastThrow -Djdk.lang.Process.allowAmbiguousCommands=True -Dfml.ignoreInvalidMinecraftCertificates=True -Dfml.ignorePatchDiscrepancies=True")
         self.version_game_args_input = LineEdit()
-        self.version_game_args_input.setPlaceholderText("--fullscreen --quickPlaySingleplayer WorldName")
+        self.version_game_args_input.setPlaceholderText("--fullscreen")
+        self.version_quick_play_combo = NativeComboBox()
+        self.version_quick_play_combo.addItem("不快速进入存档")
+        self.version_quick_play_world_ids = [""]
         self.version_pre_launch_input = LineEdit()
         self.version_pre_launch_input.setPlaceholderText("启动前命令，例如备份存档或同步配置")
         self.version_manual_memory_check = CheckBox("手动分配最大内存")
@@ -1001,6 +1013,7 @@ class LauncherWindow(FluentWindow):
         launch_settings_layout.addWidget(self.version_window_row)
         self.version_gc_row = self.add_labeled_control(launch_settings_layout, "GC 策略", self.version_gc_combo)
         self.version_jvm_args_row = self.add_labeled_control(launch_settings_layout, "额外 JVM 参数", self.version_jvm_args_input)
+        self.version_quick_play_row = self.add_labeled_control(launch_settings_layout, "快速进入存档", self.version_quick_play_combo)
         self.version_game_args_row = self.add_labeled_control(launch_settings_layout, "额外游戏参数", self.version_game_args_input)
         self.version_pre_launch_row = self.add_labeled_control(launch_settings_layout, "启动前命令", self.version_pre_launch_input)
         launch_settings_layout.addWidget(self.version_isolation_check)
@@ -1071,10 +1084,13 @@ class LauncherWindow(FluentWindow):
         settings_row = QHBoxLayout()
         self.toggle_mod_button = PushButton("启用/禁用所选 Mod")
         self.delete_mod_button = PushButton("删除所选 Mod")
+        self.repair_mod_dependencies_button = PushButton("补齐 Mod 前置")
         self.toggle_mod_button.clicked.connect(self.toggle_selected_mod)
         self.delete_mod_button.clicked.connect(self.delete_selected_mod)
+        self.repair_mod_dependencies_button.clicked.connect(self.repair_current_mod_dependencies)
         settings_row.addWidget(self.toggle_mod_button)
         settings_row.addWidget(self.delete_mod_button)
+        settings_row.addWidget(self.repair_mod_dependencies_button)
         settings_row.addStretch()
         mod_layout.addLayout(settings_row)
         mod_card_layout.addWidget(self.mod_section)
@@ -1201,6 +1217,8 @@ class LauncherWindow(FluentWindow):
             self.download_tuning_rows[key] = container
         download_layout.addLayout(download_tuning_row)
         self.download_cache_row = self.add_labeled_control(download_layout, "缓存策略", self.download_cache_combo)
+        self.modrinth_api_base_row = self.add_labeled_control(download_layout, "Modrinth API", self.modrinth_api_base_input)
+        self.modrinth_cdn_base_row = self.add_labeled_control(download_layout, "Modrinth CDN", self.modrinth_cdn_base_input)
         download_layout.addWidget(self.download_addon_hint_label)
         download_layout.addWidget(self.download_warning_label)
         row = QHBoxLayout()
@@ -2346,6 +2364,9 @@ class LauncherWindow(FluentWindow):
                 self.download_tuning_rows[key].setVisible(advanced)
         if hasattr(self, "download_cache_row"):
             self.download_cache_row.setVisible(advanced)
+        for name in ("modrinth_api_base_row", "modrinth_cdn_base_row"):
+            if hasattr(self, name):
+                getattr(self, name).setVisible(advanced)
 
     def update_memory_controls(self):
         if not hasattr(self, "version_memory_slider"):
@@ -2519,14 +2540,17 @@ class LauncherWindow(FluentWindow):
         self.update_version_advanced_visibility()
 
         runtime_directory = self.runtime_directory_for_version(version_id)
+        self.refresh_quick_play_worlds(entry.get("quick_play_singleplayer", ""))
         self.version_mods_list.clear()
         supports_mod_management = self.version_supports_mod_management(version_id)
         self.open_mods_button.setEnabled(supports_mod_management)
         self.toggle_mod_button.setEnabled(supports_mod_management)
         self.delete_mod_button.setEnabled(supports_mod_management)
+        self.repair_mod_dependencies_button.setEnabled(supports_mod_management and not self.is_download_task_running())
         has_version = bool(version_id)
         self.open_version_folder_button.setEnabled(has_version)
         self.open_saves_button.setEnabled(has_version)
+        self.version_quick_play_combo.setEnabled(has_version)
         self.open_resourcepacks_button.setEnabled(has_version)
         self.open_shaderpacks_button.setEnabled(has_version)
         self.open_screenshots_button.setEnabled(has_version)
@@ -2585,6 +2609,12 @@ class LauncherWindow(FluentWindow):
         entry["alias_auto"] = False
         entry["jvm_args"] = self.version_jvm_args_input.text().strip()
         entry["game_args"] = self.version_game_args_input.text().strip()
+        quick_play_index = self.version_quick_play_combo.currentIndex()
+        entry["quick_play_singleplayer"] = (
+            self.version_quick_play_world_ids[quick_play_index]
+            if 0 <= quick_play_index < len(self.version_quick_play_world_ids)
+            else ""
+        )
         entry["pre_launch_command"] = self.version_pre_launch_input.text().strip()
         entry["min_memory_mb"] = self.version_min_memory_input.value()
         entry["manual_memory"] = self.version_manual_memory_check.isChecked()
@@ -2653,6 +2683,30 @@ class LauncherWindow(FluentWindow):
     def current_saves_directory(self):
         version_id = self.current_selected_version()
         return os.path.join(self.runtime_directory_for_version(version_id), "saves") if version_id else ""
+
+    def refresh_quick_play_worlds(self, selected_world=""):
+        if not hasattr(self, "version_quick_play_combo"):
+            return
+        selected_world = (selected_world or "").strip()
+        saves_dir = self.current_saves_directory()
+        world_names = []
+        if saves_dir and os.path.isdir(saves_dir):
+            for name in sorted(os.listdir(saves_dir), key=str.lower):
+                world_dir = os.path.join(saves_dir, name)
+                if os.path.isdir(world_dir) and os.path.exists(os.path.join(world_dir, "level.dat")):
+                    world_names.append(name)
+
+        texts = ["不快速进入存档"]
+        world_ids = [""]
+        texts.extend(world_names)
+        world_ids.extend(world_names)
+        if selected_world and selected_world not in world_ids:
+            texts.append(f"{selected_world}（未找到）")
+            world_ids.append(selected_world)
+
+        current_index = world_ids.index(selected_world) if selected_world in world_ids else 0
+        self.version_quick_play_world_ids = world_ids
+        self.version_quick_play_combo.reset_items(texts, current_index=current_index)
 
     def current_resourcepack_directory(self):
         version_id = self.current_selected_version()
@@ -3169,6 +3223,7 @@ class LauncherWindow(FluentWindow):
             self.install_thread,
             self.modpack_thread,
             self.resource_install_thread,
+            self.resource_dependency_thread,
             self.repair_thread,
             self.capsule_pull_thread,
         )
@@ -3269,7 +3324,7 @@ class LauncherWindow(FluentWindow):
             len(self.download_task_queue),
         )
         stopped = []
-        for name in ("download", "install", "modpack", "resource_install", "repair", "capsule_pull"):
+        for name in ("download", "install", "modpack", "resource_install", "resource_dependency", "repair", "capsule_pull"):
             worker = getattr(self, f"{name}_worker", None)
             if worker and hasattr(worker, "request_stop"):
                 worker.request_stop()
@@ -3317,6 +3372,8 @@ class LauncherWindow(FluentWindow):
             self.resource_version_combo.setEnabled(not running)
         if hasattr(self, "repair_version_button"):
             self.repair_version_button.setEnabled(not running)
+        if hasattr(self, "repair_mod_dependencies_button"):
+            self.repair_mod_dependencies_button.setEnabled(not running and self.version_supports_mod_management(self.current_selected_version()))
         if hasattr(self, "export_modpack_button"):
             self.export_modpack_button.setEnabled(not running)
         if hasattr(self, "analyze_crash_button"):
@@ -3338,6 +3395,8 @@ class LauncherWindow(FluentWindow):
             "download_asset_threads_input",
             "download_speed_limit_input",
             "download_cache_combo",
+            "modrinth_api_base_input",
+            "modrinth_cdn_base_input",
         ):
             if hasattr(self, name):
                 getattr(self, name).setEnabled(not running)
@@ -4502,6 +4561,17 @@ class LauncherWindow(FluentWindow):
         config["DOWNLOAD"]["max_asset_threads"] = str(self.download_asset_threads_input.value())
         config["DOWNLOAD"]["speed_limit_kbps"] = str(self.download_speed_limit_input.value())
         config["DOWNLOAD"]["cache_strategy"] = self.download_cache_combo.currentText()
+        modrinth_api_base = self.modrinth_api_base_input.text().strip().rstrip("/")
+        modrinth_cdn_base = self.modrinth_cdn_base_input.text().strip().rstrip("/")
+        for label, value in (("Modrinth API", modrinth_api_base), ("Modrinth CDN", modrinth_cdn_base)):
+            if not value:
+                continue
+            parsed = urlparse(value)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                self.show_warning("Modrinth 代理地址无效", f"{label} 需要填写 http/https URL。")
+                return False
+        config["DOWNLOAD"]["modrinth_api_base"] = modrinth_api_base
+        config["DOWNLOAD"]["modrinth_cdn_base"] = modrinth_cdn_base
         config["AUTH"]["auto_open_browser"] = str(self.auto_open_browser_check.isChecked())
         config["GAME"]["directory"] = self.current_game_dir()
         config["GAME"]["enable_resource_isolation"] = str(self.resource_isolation_check.isChecked())
@@ -5088,6 +5158,60 @@ class LauncherWindow(FluentWindow):
         )
         self.queue_download_task(task)
 
+    def repair_current_mod_dependencies(self):
+        version_id = self.current_selected_version()
+        if not version_id:
+            self.show_warning("缺少版本", "请先选择一个本地版本。")
+            return
+        if not self.version_supports_mod_management(version_id):
+            self.show_warning("版本不支持 Mod", "请切换到 Fabric / Forge / NeoForge / OptiFine 版本。")
+            return
+        mods_dir = self.current_mods_directory()
+        game_version = self.base_version_for(version_id)
+        loader = modrinth_loader_for_version(self.current_game_dir(), version_id)
+        task = DownloadTask(
+            "mod_dependency_repair",
+            f"补齐 Mod 前置 {self.version_display_name(version_id)}",
+            lambda version_id=version_id,
+            game_version=game_version,
+            loader=loader,
+            mods_dir=mods_dir: self._start_mod_dependency_repair_task(
+                version_id,
+                game_version,
+                loader,
+                mods_dir,
+            ),
+        )
+        self.queue_download_task(task)
+
+    def _start_mod_dependency_repair_task(self, version_id, game_version, loader, mods_dir):
+        logger.info(
+            "Mod dependency repair task starting from UI queue: version=%s game=%s loader=%s target=%s",
+            version_id,
+            game_version,
+            loader or "<none>",
+            mods_dir,
+        )
+        self.progress_bar.setValue(0)
+        self.set_download_running(True)
+        self.download_metrics_label.setText("正在扫描 Mod 前置依赖")
+        if hasattr(self, "resource_status_label"):
+            self.resource_status_label.setText("正在扫描 Mod 前置依赖...")
+        from resource_workers import ResourceDependencyRepairWorker
+
+        self.resource_dependency_thread = QThread()
+        self.resource_dependency_worker = ResourceDependencyRepairWorker(game_version, loader, mods_dir)
+        self.resource_dependency_worker.moveToThread(self.resource_dependency_thread)
+        self.resource_dependency_thread.started.connect(self.resource_dependency_worker.run)
+        self.resource_dependency_worker.progress.connect(self.progress_bar.setValue)
+        self.resource_dependency_worker.status.connect(self.on_mod_dependency_repair_status)
+        self.resource_dependency_worker.metrics.connect(self.update_resource_install_metrics)
+        self.resource_dependency_worker.finished.connect(self.on_mod_dependency_repair_finished)
+        self.resource_dependency_worker.failed.connect(self.on_mod_dependency_repair_failed)
+        self.resource_dependency_worker.finished.connect(self.resource_dependency_thread.quit)
+        self.resource_dependency_worker.failed.connect(self.resource_dependency_thread.quit)
+        self.resource_dependency_thread.start()
+
     def _start_resource_install_task(self, hit, resource_type, game_version, loader, target_dir, install_dependencies):
         logger.info(
             "Resource install task starting from UI queue: source=%s project=%s title=%s type=%s game=%s loader=%s target=%s dependencies=%s",
@@ -5548,6 +5672,51 @@ class LauncherWindow(FluentWindow):
         target_version = self.current_resource_version()
         if target_version == self.current_selected_version():
             self.populate_version_settings_panel(target_version)
+
+    def on_mod_dependency_repair_status(self, message):
+        if hasattr(self, "resource_status_label"):
+            self.resource_status_label.setText(message)
+        self.download_metrics_label.setText(message)
+        self.log(message)
+
+    def on_mod_dependency_repair_finished(self, payload):
+        self.set_download_running(False)
+        self.finish_download_task(failed=False)
+        installed = payload.get("dependencies_installed", [])
+        missing = payload.get("missing_dependencies", [])
+        recognized = payload.get("recognized", [])
+        unknown = payload.get("unknown_files", [])
+        if installed:
+            message = f"已补齐 {len(installed)} 个 Mod 前置"
+            detail = "、".join(installed[:5])
+            if len(installed) > 5:
+                detail += f" 等 {len(installed)} 个"
+            self.show_success(message, detail)
+            self.download_metrics_label.setText(f"{message}：{detail}")
+            for dependency in installed:
+                self.log(f"Mod 前置已安装：{dependency}")
+        elif missing:
+            message = "未安装新的前置"
+            self.download_metrics_label.setText(f"{message}，请查看日志中的失败原因")
+            self.show_info(message, "可能已有文件或部分依赖无法匹配当前版本。")
+        else:
+            message = f"未发现缺失 required 前置，已识别 {len(recognized)} 个 Mod"
+            if unknown:
+                message += f"，{len(unknown)} 个非 Modrinth 文件未参与判断"
+            self.download_metrics_label.setText(message)
+            self.show_success("Mod 前置已完整", message)
+        version_id = self.current_selected_version()
+        if version_id:
+            self.populate_version_settings_panel(version_id)
+
+    def on_mod_dependency_repair_failed(self, message):
+        self.set_download_running(False)
+        self.finish_download_task(failed=True)
+        if hasattr(self, "resource_status_label"):
+            self.resource_status_label.setText(f"Mod 前置补齐失败：{message}")
+        self.download_metrics_label.setText(f"Mod 前置补齐失败：{message}")
+        self.show_warning("Mod 前置补齐失败", message)
+        self.log(f"Mod 前置补齐失败：{message}")
 
     def on_resource_install_failed(self, message):
         self.set_download_running(False)

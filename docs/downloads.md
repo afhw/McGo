@@ -17,6 +17,8 @@
 - 资源线程：控制 assets 下载并发。
 - 速度限制：`0 KB/s` 表示不限速。
 - 缓存策略：`reuse` 会尝试复用其他 `.minecraft` 缓存，`network_only` 只走网络下载。
+- Modrinth API：高级模式下显示。留空使用官方 `https://api.modrinth.com/v2`；访问慢时可填写自建或可信代理的 API 前缀。
+- Modrinth CDN：高级模式下显示。留空使用官方 `https://cdn.modrinth.com`；会把 Modrinth 文件下载链接改写到这个前缀。
 
 单文件下载失败时会在 official 与 BMCLAPI 之间自动切换。
 
@@ -27,4 +29,3 @@
 ## 任务队列
 
 下载、安装扩展、导入整合包、安装资源和补全任务共用队列。可以取消当前任务、清空等待队列或重试最近失败任务。
-
