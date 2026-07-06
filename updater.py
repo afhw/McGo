@@ -1,10 +1,12 @@
 import hashlib
+import base64
 import contextlib
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import uuid
 from urllib.parse import urljoin, urlparse
 
 import http_client
@@ -111,6 +113,15 @@ def _validate_download_url(download_url):
     return download_url
 
 
+def _manifest_sha256(value):
+    digest = str(value or "").strip().lower()
+    if not digest:
+        raise RuntimeError("更新清单缺少 sha256。")
+    if not SHA256_RE.match(digest):
+        raise RuntimeError("更新清单 sha256 格式无效。")
+    return digest
+
+
 def fetch_update_manifest(manifest_url):
     response = http_client.get(manifest_url, timeout=15, retries=1)
     http_client.raise_for_status(response, "检查更新")
@@ -128,9 +139,7 @@ def fetch_update_manifest(manifest_url):
         raise RuntimeError("更新清单缺少 url。")
     data["version"] = version
     data["url"] = _validate_download_url(urljoin(manifest_url, download_url))
-    data["sha256"] = str(data.get("sha256") or "").strip().lower()
-    if data["sha256"] and not SHA256_RE.match(data["sha256"]):
-        raise RuntimeError("更新清单 sha256 格式无效。")
+    data["sha256"] = _manifest_sha256(data.get("sha256"))
     data["size"] = _manifest_size(data.get("size", 0))
     data["notes"] = str(data.get("notes") or data.get("changelog") or "").strip()
     return data
@@ -184,6 +193,7 @@ def download_update(manifest, target_dir=None, progress_callback=None, status_ca
     target_dir = target_dir or tempfile.gettempdir()
     os.makedirs(target_dir, exist_ok=True)
     download_url = _validate_download_url(str(manifest.get("url", "")).strip())
+    expected_sha256 = _manifest_sha256(manifest.get("sha256"))
     filename = os.path.basename(urlparse(download_url).path) or "McGo-update.exe"
     filename = sanitize_filename_component(filename, "McGo-update.exe")
     if not filename.lower().endswith(".exe"):
@@ -220,9 +230,8 @@ def download_update(manifest, target_dir=None, progress_callback=None, status_ca
             raise RuntimeError("更新文件大小与清单不一致。")
         if not looks_like_windows_executable(temp_path):
             raise RuntimeError("更新文件不是有效的 Windows 可执行文件。")
-        expected_sha256 = manifest.get("sha256", "")
         actual_sha256 = file_sha256(temp_path)
-        if expected_sha256 and actual_sha256.lower() != expected_sha256.lower():
+        if actual_sha256.lower() != expected_sha256:
             raise RuntimeError("更新文件 SHA256 校验失败。")
         os.replace(temp_path, target_path)
     except Exception:
@@ -252,102 +261,95 @@ def can_replace_current_executable(path=None):
     return os.name == "nt" and os.path.basename(path).lower().endswith(".exe") and "python" not in os.path.basename(path).lower()
 
 
-def schedule_windows_replace_and_restart(download_path, executable_path=None):
-    executable_path = os.path.abspath(executable_path or current_executable_path())
-    download_path = os.path.abspath(download_path)
-    if not can_replace_current_executable(executable_path):
-        raise RuntimeError("当前不是打包后的 McGo.exe，无法执行自更新替换。")
-    script_path = os.path.join(tempfile.gettempdir(), "mcgo-apply-update.ps1")
-    log_path = os.path.join(tempfile.gettempdir(), "mcgo-update.log")
-    pid = os.getpid()
-    script = r"""param(
-  [Parameter(Mandatory=$true)][string]$Source,
-  [Parameter(Mandatory=$true)][string]$Destination,
-  [Parameter(Mandatory=$true)][int]$ParentPid,
-  [Parameter(Mandatory=$true)][string]$LogPath,
-  [switch]$Elevated
-)
+def _powershell_quote(value):
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _powershell_encoded_command(command):
+    return base64.b64encode(command.encode("utf-16le")).decode("ascii")
+
+
+def _target_directory_writable(destination):
+    directory = os.path.dirname(os.path.abspath(destination))
+    probe = os.path.join(directory, f".mcgo-update-write-test-{uuid.uuid4().hex}.tmp")
+    try:
+        with open(probe, "w", encoding="ascii") as handle:
+            handle.write("test")
+        return True
+    except OSError:
+        return False
+    finally:
+        with contextlib.suppress(OSError):
+            os.remove(probe)
+
+
+def _build_update_apply_command(download_path, executable_path, parent_pid, log_path, elevated=False):
+    return f"""
+$Source = {_powershell_quote(download_path)}
+$Destination = {_powershell_quote(executable_path)}
+$ParentPid = {int(parent_pid)}
+$LogPath = {_powershell_quote(log_path)}
+$Elevated = ${str(bool(elevated)).lower()}
 $ErrorActionPreference = 'Stop'
-$SpawnedElevated = $false
-function Write-UpdateLog([string]$message) {
+function Write-UpdateLog([string]$message) {{
   Add-Content -LiteralPath $LogPath -Value ((Get-Date -Format o) + ' ' + $message) -Encoding UTF8
-}
-function Quote-Argument([string]$value) {
-  '"' + ($value -replace '"', '\"') + '"'
-}
-function Test-TargetWritable {
-  try {
-    $directory = Split-Path -Parent $Destination
-    $probe = Join-Path $directory ('.mcgo-update-write-test-' + [guid]::NewGuid().ToString('N') + '.tmp')
-    Set-Content -LiteralPath $probe -Value 'test' -Encoding ASCII
-    Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
-    return $true
-  } catch {
-    Write-UpdateLog ("write probe failed: " + $_.Exception.Message)
-    return $false
-  }
-}
+}}
 Write-UpdateLog "update started pid=$ParentPid source=$Source destination=$Destination elevated=$Elevated"
-try {
-  if (-not $Elevated -and -not (Test-TargetWritable)) {
-    $args = @(
-      '-NoProfile',
-      '-ExecutionPolicy', 'Bypass',
-      '-File', $PSCommandPath,
-      '-Source', $Source,
-      '-Destination', $Destination,
-      '-ParentPid', $ParentPid,
-      '-LogPath', $LogPath,
-      '-Elevated'
-    )
-    Write-UpdateLog "requesting UAC elevation"
-    Start-Process -FilePath 'powershell.exe' -ArgumentList (($args | ForEach-Object { Quote-Argument $_ }) -join ' ') -Verb RunAs -WindowStyle Hidden
-    $script:SpawnedElevated = $true
-    return
-  }
+try {{
   Wait-Process -Id $ParentPid -Timeout 120 -ErrorAction SilentlyContinue
   Start-Sleep -Milliseconds 800
-  for ($i = 0; $i -lt 120; $i++) {
-    try {
+  for ($i = 0; $i -lt 120; $i++) {{
+    try {{
       Copy-Item -LiteralPath $Source -Destination $Destination -Force
       Write-UpdateLog "copy succeeded"
       Start-Process -FilePath $Destination
       Remove-Item -LiteralPath $Source -Force -ErrorAction SilentlyContinue
       Write-UpdateLog "restart succeeded"
       break
-    } catch {
+    }} catch {{
       Write-UpdateLog ("copy attempt " + ($i + 1) + " failed: " + $_.Exception.Message)
       Start-Sleep -Seconds 1
-      if ($i -eq 119) { throw }
-    }
-  }
-} catch {
+      if ($i -eq 119) {{ throw }}
+    }}
+  }}
+}} catch {{
   Write-UpdateLog ("update failed: " + $_.Exception.Message)
   throw
-} finally {
-  if (-not $SpawnedElevated) {
-    Start-Sleep -Milliseconds 300
-    Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
-  }
-}
+}}
 """
-    with open(script_path, "w", encoding="utf-8") as handle:
-        handle.write(script)
+
+
+def _build_elevation_command(encoded_apply_command):
+    return f"""
+$ErrorActionPreference = 'Stop'
+$args = @(
+  '-NoProfile',
+  '-ExecutionPolicy', 'Bypass',
+  '-EncodedCommand', {_powershell_quote(encoded_apply_command)}
+)
+Start-Process -FilePath 'powershell.exe' -ArgumentList $args -Verb RunAs -WindowStyle Hidden
+"""
+
+
+def schedule_windows_replace_and_restart(download_path, executable_path=None):
+    executable_path = os.path.abspath(executable_path or current_executable_path())
+    download_path = os.path.abspath(download_path)
+    if not can_replace_current_executable(executable_path):
+        raise RuntimeError("当前不是打包后的 McGo.exe，无法执行自更新替换。")
+    log_path = os.path.join(tempfile.gettempdir(), "mcgo-update.log")
+    pid = os.getpid()
+    needs_elevation = not _target_directory_writable(executable_path)
+    apply_command = _build_update_apply_command(download_path, executable_path, pid, log_path, elevated=needs_elevation)
+    encoded_command = _powershell_encoded_command(apply_command)
+    if needs_elevation:
+        encoded_command = _powershell_encoded_command(_build_elevation_command(encoded_command))
     powershell_args = [
         "powershell.exe",
         "-NoProfile",
         "-ExecutionPolicy",
         "Bypass",
-        "-File",
-        script_path,
-        "-Source",
-        download_path,
-        "-Destination",
-        executable_path,
-        "-ParentPid",
-        str(pid),
-        "-LogPath",
-        log_path,
+        "-EncodedCommand",
+        encoded_command,
     ]
     popen_kwargs = {"close_fds": True}
     if os.name == "nt":
@@ -362,4 +364,4 @@ try {
             startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
             popen_kwargs["startupinfo"] = startupinfo
     subprocess.Popen(powershell_args, **popen_kwargs)
-    return script_path
+    return {"elevated": needs_elevation, "log_path": log_path}

@@ -1,7 +1,17 @@
 $ErrorActionPreference = "Stop"
 
-python -m pip install -r requirements.txt nuitka ordered-set zstandard
-python -m nuitka `
+$ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$VenvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+$Python = if ($env:MCGO_PYTHON) {
+  $env:MCGO_PYTHON
+} elseif (Test-Path $VenvPython) {
+  $VenvPython
+} else {
+  "python"
+}
+
+& $Python -m pip install -r requirements.txt nuitka ordered-set zstandard
+& $Python -m nuitka `
   --standalone `
   --onefile `
   --windows-console-mode=disable `
