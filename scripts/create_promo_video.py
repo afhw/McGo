@@ -25,7 +25,7 @@ VOICEOVER_TEXT = OUT_DIR / "mcgo-bilibili-voiceover.txt"
 WIDTH = 1920
 HEIGHT = 1080
 FPS = 30
-DURATION = 74.0
+DURATION = 67.0
 
 FONT_REGULAR = Path("C:/Windows/Fonts/msyh.ttc")
 FONT_BOLD = Path("C:/Windows/Fonts/msyhbd.ttc")
@@ -46,20 +46,23 @@ F_BODY = font(34)
 F_SMALL = font(27)
 F_TINY = font(22)
 
-VIDEO_TITLE = "McGo：把下载、账号、资源和联机放进一个 Minecraft 启动器"
+VIDEO_TITLE = "McGo 更新：统一下载、自更新、开黑胶囊与依赖管理"
 VIDEO_DESC = (
-    "McGo 是基于 PySide6 和 QFluentWidgets 的 Minecraft 启动器，支持账号管理、游戏下载、"
-    "加载器安装、资源市场、整合包导入导出、版本独立设置和 P2P 联机入口。"
+    "本次更新汇总 2026-06-04 之后的改动：统一下载任务、下载后自动安装加载器、自更新、"
+    "开黑胶囊与 P2P 补包、Modrinth 依赖管理、快速进入存档，以及 Modrinth API / CDN 代理。"
 )
 VOICE_SCRIPT = (
-    "如果你经常为了启动 Minecraft 来回切工具，McGo 想把这些流程集中起来。"
-    "它是一个 Fluent 风格的 Minecraft 启动器，首页会汇总账号、Java、版本和游戏目录。"
-    "在启动页，你可以选择账号、本地版本，并管理当前版本的独立设置。"
-    "下载页支持原版版本、镜像源和下载预设，也可以在下载后继续安装 Fabric、Forge、NeoForge、OptiFine 或 Fabric API。"
-    "资源市场用于搜索 Mod、资源包、光影和数据包，并配合整合包导入导出，让本地实例更容易整理。"
-    "账号方面，McGo 支持离线账号、Microsoft 登录和外置登录，同时管理 Java 路径、游戏目录和界面偏好。"
-    "需要和朋友联机时，McGo 提供 P2P 隧道入口，通过轻量中继连接局域网联机流量。"
-    "如果你想要一个更顺手、更集中的 Minecraft 启动体验，可以试试 McGo。"
+    "这期只看 McGo 在六月四日之后的更新。"
+    "新的统一下载入口会在有任务时出现在右下角，点击就能进入任务管理。"
+    "游戏下载、加载器安装、资源安装、Java 运行时、外置登录组件、更新包和开黑胶囊补包都会集中显示。"
+    "下载页现在可以在下载原版后，继续安装 Fabric、Forge、NeoForge、OptiFine 或 Fabric API。"
+    "启动器新增自更新流程，可以检查更新、下载新版本，并在 Windows 上安排替换重启。"
+    "联机和整合包也补了一块：开黑胶囊可以导出可共享清单，加入者再通过 P2P 补齐缺失文件。"
+    "资源市场修复了查看详情导致退出的问题，并增强了 Modrinth 依赖管理。"
+    "安装 Modrinth 资源会递归安装 required 前置，Mod 管理也能按文件哈希识别已装项目，自动补齐缺失前置。"
+    "启动设置新增快速进入存档，选择 saves 里的世界后，启动游戏会直接进入单人存档。"
+    "如果 Modrinth 访问慢，高级下载设置里还可以填写 API 和 CDN 代理前缀。"
+    "这些改动一起让下载、更新、开黑和模组整理更省步骤。"
 )
 
 
@@ -128,9 +131,14 @@ def load_assets() -> tuple[Image.Image, Image.Image, Image.Image]:
     icon = Image.open(ROOT / "assets" / "mcgo-icon.png").convert("RGBA")
 
     screenshot_path = ROOT / "屏幕截图 2026-05-30 185207.png"
-    full = Image.open(screenshot_path).convert("RGB")
-    # Crop the visible McGo application window out of the desktop screenshot.
-    window = full.crop((468, 92, 2148, 1235))
+    if screenshot_path.exists():
+        full = Image.open(screenshot_path).convert("RGB")
+        # Crop the visible McGo application window out of the desktop screenshot.
+        window = full.crop((468, 92, 2148, 1235))
+    else:
+        fallback = OUT_DIR / "screenshots" / "03-download.png"
+        full = Image.open(fallback).convert("RGB")
+        window = full
     return icon, full, window
 
 
@@ -146,6 +154,7 @@ def load_promo_screenshots() -> dict[str, Image.Image]:
         "resources": "04-resources.png",
         "accounts": "05-accounts.png",
         "online": "06-online.png",
+        "tasks": "07-tasks.png",
     }
     shots: dict[str, Image.Image] = {}
     for key, filename in mapping.items():
@@ -333,25 +342,25 @@ def render_title(base: Image.Image, local_t: float):
     y = 310
     base.alpha_composite(icon, (x, y))
     draw_text(d, (x + 230, y + 8), "McGo", F_TITLE, (245, 249, 246, int(255 * fade)))
-    draw_text(d, (x + 236, y + 130), "Minecraft 启动，从下载到联机一次完成", F_SUBTITLE, (196, 231, 224, int(230 * fade)))
-    draw_motion_chip(d, x + 236, y + 226, "账号管理", local_t, 0.18)
-    draw_motion_chip(d, x + 430, y + 226, "游戏下载", local_t, 0.28)
-    draw_motion_chip(d, x + 632, y + 226, "资源与整合包", local_t, 0.38)
-    draw_motion_chip(d, x + 902, y + 226, "P2P 联机", local_t, 0.48)
+    draw_text(d, (x + 236, y + 130), "6 月 4 日之后更新内容", F_SUBTITLE, (196, 231, 224, int(230 * fade)))
+    draw_motion_chip(d, x + 236, y + 226, "自动装加载器", local_t, 0.18)
+    draw_motion_chip(d, x + 500, y + 226, "统一下载", local_t, 0.28)
+    draw_motion_chip(d, x + 724, y + 226, "自更新", local_t, 0.38)
+    draw_motion_chip(d, x + 900, y + 226, "开黑胶囊", local_t, 0.48)
 
 
 def render_home_scene(base: Image.Image, local_t: float):
     d = ImageDraw.Draw(base)
-    card = make_image_card("home", (1120, 760), 100)
+    card = make_image_card("tasks", (1120, 760), 100)
     box = paste_motion_card(base, card, (690, 185), local_t, dx=260, dy=0)
     draw_scan(base, box, local_t)
     draw_kicker(d, local_t)
     tx = 120 + int(-160 * (1 - out_back(local_t / 0.62)))
-    draw_text(d, (tx, 150), "先看清当前状态", F_H1, (248, 250, 248, 255))
-    draw_text(d, (tx + 4, 248), "首页汇总账号、Java、版本与游戏目录。", F_BODY, (205, 222, 218, 235))
-    for i, line in enumerate(["账号", "Java", "本地版本", "远程版本", "游戏目录"]):
+    draw_text(d, (tx, 150), "统一下载入口", F_H1, (248, 250, 248, 255))
+    draw_text(d, (tx + 4, 248), "右下角浮动按钮，只在有任务时出现。", F_BODY, (205, 222, 218, 235))
+    for i, line in enumerate(["运行中", "排队中", "失败重试", "清空队列", "跳转任务管理"]):
         draw_motion_chip(d, 128, 365 + i * 74, line, local_t, 0.12 + i * 0.07)
-    draw_text(d, (128, 790), "把启动前的准备信息放在第一屏。", F_BODY, (204, 222, 218, 235))
+    draw_text(d, (128, 790), "所有下载任务都有一个看得见的位置。", F_BODY, (204, 222, 218, 235))
 
 
 def render_launch_scene(base: Image.Image, local_t: float):
@@ -361,9 +370,9 @@ def render_launch_scene(base: Image.Image, local_t: float):
     draw_scan(base, box, local_t)
     draw_kicker(d, local_t)
     tx = 120 + int(-160 * (1 - out_back(local_t / 0.62)))
-    draw_text(d, (tx, 150), "启动与版本设置", F_H1, (248, 250, 248, 255))
-    draw_text(d, (tx + 4, 248), "选择账号和本地版本，再按需调整当前实例。", F_BODY, (205, 222, 218, 235))
-    lines = ["启动 Minecraft", "版本分类", "内存与窗口", "JVM / 游戏参数", "补全与校验"]
+    draw_text(d, (tx, 150), "快速进入存档", F_H1, (248, 250, 248, 255))
+    draw_text(d, (tx + 4, 248), "在版本设置中选择 saves 里的世界。", F_BODY, (205, 222, 218, 235))
+    lines = ["快速进入存档", "--quickPlaySingleplayer", "读取 level.dat", "保留额外游戏参数", "导出脚本同步生效"]
     for i, line in enumerate(lines):
         draw_motion_chip(d, 128, 365 + i * 74, line, local_t, 0.12 + i * 0.07)
 
@@ -377,12 +386,12 @@ def render_screenshot_scene(base: Image.Image, local_t: float):
     draw_scan(base, box, local_t)
     draw_kicker(d, local_t, 120)
     tx = 120 + int(-170 * (1 - out_back(local_t / 0.62)))
-    draw_text(d, (tx, 168), "游戏下载更省心", F_H1, (248, 250, 248, 255))
-    lines = ["原版下载", "Fabric / Forge / NeoForge", "OptiFine 与 Fabric API", "校验、补全、重试队列"]
+    draw_text(d, (tx, 168), "下载与更新流程", F_H1, (248, 250, 248, 255))
+    lines = ["下载后自动安装", "Fabric / Forge / NeoForge", "OptiFine / Fabric API", "Modrinth 代理前缀"]
     yy = 292
     for i, line in enumerate(lines):
         draw_motion_chip(d, 128, yy + i * 76, line, local_t, 0.12 + i * 0.08)
-    for i, line in enumerate(wrap(d, "选择版本、镜像源和安装项，减少重复配置。", F_BODY, 410)):
+    for i, line in enumerate(wrap(d, "游戏下载和扩展安装现在进入同一个队列。", F_BODY, 410)):
         draw_text(d, (128, 650 + i * 48), line, F_BODY, (201, 219, 214, 235))
 
 
@@ -393,12 +402,12 @@ def render_accounts_scene(base: Image.Image, local_t: float):
     draw_scan(base, box, local_t)
     draw_kicker(d, local_t)
     tx = 125 + int(-170 * (1 - out_back(local_t / 0.62)))
-    draw_text(d, (tx, 140), "账号与环境，一处管理", F_H1, (248, 250, 248, 255))
-    draw_text(d, (tx + 3, 238), "离线、Microsoft、外置登录，自动刷新状态并注入所需参数。", F_BODY, (205, 222, 218, 235))
+    draw_text(d, (tx, 140), "自更新更稳", F_H1, (248, 250, 248, 255))
+    draw_text(d, (tx + 3, 238), "检查、下载、校验、替换重启都放进启动器。", F_BODY, (205, 222, 218, 235))
     labels = [
-        ("离线账号", "快速添加本地用户名，适合测试与单机。"),
-        ("Microsoft 登录", "启动前刷新登录状态，账号信息本地保存。"),
-        ("外置登录", "支持 Yggdrasil / authlib-injector 服务。"),
+        ("更新清单", "支持配置 manifest 地址并自动检查。"),
+        ("下载校验", "校验大小与 SHA256，避免坏包替换。"),
+        ("替换重启", "Windows 下安排退出后替换当前程序。"),
     ]
     for i, (title, desc) in enumerate(labels):
         x = 130
@@ -409,9 +418,9 @@ def render_accounts_scene(base: Image.Image, local_t: float):
         d.ellipse((x + 34, y + 38, x + 94, y + 98), fill=(52, 223, 208, 255))
         draw_text(d, (x + 124, y + 34), title, F_H2, (246, 250, 247, 255))
         draw_text(d, (x + 124, y + 88), desc, F_TINY, (205, 220, 216, 235))
-    draw_chip(d, 132, 790, "Java 路径")
-    draw_chip(d, 340, 790, "游戏目录")
-    draw_chip(d, 548, 790, "版本独立设置")
+    draw_chip(d, 132, 790, "自动检查")
+    draw_chip(d, 340, 790, "下载进度")
+    draw_chip(d, 548, 790, "发布脚本")
 
 
 def render_resources_scene(base: Image.Image, local_t: float):
@@ -421,18 +430,18 @@ def render_resources_scene(base: Image.Image, local_t: float):
     draw_scan(base, box, local_t)
     draw_kicker(d, local_t, 140)
     tx = 1140 + int(190 * (1 - out_back(local_t / 0.62)))
-    draw_text(d, (tx, 190), "资源市场与整合包", F_H1, (248, 250, 248, 255))
+    draw_text(d, (tx, 190), "Modrinth 依赖管理", F_H1, (248, 250, 248, 255))
     copy = [
-        "Modrinth / CurseForge / 本地资源",
-        "Mod、资源包、光影、数据包",
-        "整合包导入与导出",
-        "启用、禁用、删除 Mod",
+        "安装时自动管理 required 前置",
+        "按文件 Hash 识别已装 Mod",
+        "扫描并补齐缺失依赖",
+        "API / CDN 代理前缀",
     ]
     yy = 320
     for i, line in enumerate(copy):
         draw_motion_chip(d, 1145, yy, line, local_t, 0.12 + i * 0.08)
         yy += 82
-    draw_text(d, (1148, 705), "从找资源到整理实例，尽量留在一个启动器里完成。", F_BODY, (204, 222, 218, 235))
+    draw_text(d, (1148, 705), "安装、扫描、补齐依赖都少走几步。", F_BODY, (204, 222, 218, 235))
 
 
 def render_p2p_scene(base: Image.Image, local_t: float):
@@ -442,9 +451,9 @@ def render_p2p_scene(base: Image.Image, local_t: float):
     draw_scan(base, box, local_t)
     draw_kicker(d, local_t)
     tx = 126 + int(-170 * (1 - out_back(local_t / 0.62)))
-    draw_text(d, (tx, 150), "好友联机，不止局域网", F_H1, (248, 250, 248, 255))
-    draw_text(d, (tx + 4, 248), "轻量 TCP 中继打通 Minecraft Java 版 LAN 流量。", F_BODY, (206, 223, 218, 238))
-    nodes = [("房主", 245, 458), ("中继", 485, 458), ("加入者", 245, 645), ("本地端口", 485, 645)]
+    draw_text(d, (tx, 150), "开黑胶囊与补包", F_H1, (248, 250, 248, 255))
+    draw_text(d, (tx + 4, 248), "导出共享清单，加入者通过 P2P 补齐缺失文件。", F_BODY, (206, 223, 218, 238))
+    nodes = [("房主实例", 245, 458), ("胶囊清单", 485, 458), ("加入者", 245, 645), ("P2P 补包", 485, 645)]
     for a, b in ((0, 1), (1, 2), (1, 3)):
         _, x1, y1 = nodes[a]
         _, x2, y2 = nodes[b]
@@ -453,9 +462,9 @@ def render_p2p_scene(base: Image.Image, local_t: float):
     for name, x, y in nodes:
         draw_round(d, (x - 96, y - 48, x + 96, y + 48), 22, (31, 38, 40, 245), (72, 229, 213, 120), 2)
         draw_text(d, (x, y), name, F_SMALL, (245, 250, 247, 255), anchor="mm")
-    draw_chip(d, 128, 830, "房间号")
-    draw_chip(d, 330, 830, "可选口令")
-    draw_chip(d, 558, 830, "本地端口")
+    draw_chip(d, 128, 830, "mods")
+    draw_chip(d, 330, 830, "config")
+    draw_chip(d, 558, 830, "resourcepacks")
 
 
 def render_final(base: Image.Image, local_t: float):
@@ -466,42 +475,34 @@ def render_final(base: Image.Image, local_t: float):
     base.alpha_composite(icon, (302 + int(-140 * (1 - p)), 308))
     draw_kicker(d, local_t, 250)
     draw_text(d, (492 + int(-160 * (1 - p)), 292), "McGo", F_TITLE, (248, 250, 248, 255))
-    draw_text(d, (498 + int(-160 * (1 - p)), 422), "更顺手的 Minecraft 启动器", F_SUBTITLE, (196, 232, 225, 255))
-    draw_text(d, (310, 585), "账号、下载、资源、整合包、联机", F_H2, (244, 249, 246, 255))
-    draw_text(d, (314, 660), "把常用流程集中起来，少折腾，多开玩。", F_BODY, (206, 223, 218, 235))
+    draw_text(d, (498 + int(-160 * (1 - p)), 422), "这次更新只讲新增内容", F_SUBTITLE, (196, 232, 225, 255))
+    draw_text(d, (310, 585), "加载器 / 自更新 / 胶囊 / 依赖管理 / 快速进存档", F_H2, (244, 249, 246, 255))
+    draw_text(d, (314, 660), "来自 2026-06-04 之后的代码 diff。", F_BODY, (206, 223, 218, 235))
     draw_round(d, (314, 765, 742, 840), 20, (48, 231, 214, 255))
-    draw_text(d, (528, 802), "立即体验 McGo", F_BODY, (7, 28, 28, 255), anchor="mm")
+    draw_text(d, (528, 802), "更新内容汇总", F_BODY, (7, 28, 28, 255), anchor="mm")
 
 
 SCENES = [
-    (0.0, 6.0, render_title),
-    (6.0, 15.0, render_home_scene),
-    (15.0, 25.0, render_launch_scene),
-    (25.0, 38.0, render_screenshot_scene),
-    (38.0, 50.0, render_resources_scene),
-    (50.0, 61.0, render_accounts_scene),
-    (61.0, 70.0, render_p2p_scene),
-    (70.0, 74.0, render_final),
+    (0.0, 5.2, render_title),
+    (5.2, 15.0, render_home_scene),
+    (15.0, 24.6, render_screenshot_scene),
+    (24.6, 35.8, render_p2p_scene),
+    (35.8, 48.7, render_resources_scene),
+    (48.7, 57.0, render_launch_scene),
+    (57.0, 67.0, render_final),
 ]
 
 
 SUBTITLES = [
-    (0.0, 3.8, "如果你经常为了启动 Minecraft 来回切工具，"),
-    (3.8, 6.4, "McGo 想把这些流程集中起来。"),
-    (6.4, 9.9, "它是一个 Fluent 风格的 Minecraft 启动器，"),
-    (9.9, 13.7, "首页会汇总账号、Java、版本和游戏目录。"),
-    (13.7, 17.3, "在启动页，你可以选择账号、本地版本，"),
-    (17.3, 20.1, "并管理当前版本的独立设置。"),
-    (20.1, 24.2, "下载页支持原版版本、镜像源和下载预设，"),
-    (24.2, 30.1, "也可以在下载后继续安装 Fabric、Forge、NeoForge、OptiFine 或 Fabric API。"),
-    (30.1, 34.5, "资源市场用于搜索 Mod、资源包、光影和数据包，"),
-    (34.5, 39.1, "并配合整合包导入导出，让本地实例更容易整理。"),
-    (39.1, 44.2, "账号方面，McGo 支持离线账号、Microsoft 登录和外置登录，"),
-    (44.2, 48.1, "同时管理 Java 路径、游戏目录和界面偏好。"),
-    (48.1, 52.0, "需要和朋友联机时，McGo 提供 P2P 隧道入口，"),
-    (52.0, 55.4, "通过轻量中继连接局域网联机流量。"),
-    (55.4, 59.0, "如果你想要一个更顺手、更集中的 Minecraft 启动体验，"),
-    (59.0, 60.384, "可以试试 McGo。"),
+    (0.0, 4.8, "这期只看 McGo 在 2026-06-04 之后的更新。"),
+    (4.8, 13.0, "新的统一下载入口会在有任务时出现在右下角，点击就能进入任务管理。"),
+    (13.0, 20.6, "游戏下载、资源安装、Java 运行时、更新包和开黑胶囊补包都会集中显示。"),
+    (20.6, 28.2, "下载原版后，可以继续安装 Fabric、Forge、NeoForge、OptiFine 或 Fabric API。"),
+    (28.2, 36.0, "启动器新增自更新流程，支持检查更新、下载新版本，并安排替换重启。"),
+    (36.0, 43.6, "开黑胶囊可以导出可共享清单，加入者再通过 P2P 补齐缺失文件。"),
+    (43.6, 52.6, "安装 Modrinth 资源会递归安装 required 前置，也能按文件哈希补齐已装 Mod 的缺失前置。"),
+    (52.6, 60.4, "启动设置新增快速进入存档，选择 saves 里的世界后，启动游戏会直接进入单人存档。"),
+    (60.4, 65.4, "这些改动让下载、更新、开黑和模组整理更省步骤。"),
 ]
 
 
@@ -669,17 +670,17 @@ def make_cover() -> Image.Image:
     icon = ICON.resize((150, 150), Image.Resampling.LANCZOS)
     base.alpha_composite(icon, (150, 154))
     draw_text(d, (330, 150), "McGo", F_TITLE, (248, 250, 248, 255))
-    draw_text(d, (335, 285), "更顺手的 Minecraft 启动器", F_SUBTITLE, (194, 235, 226, 255))
-    draw_text(d, (155, 450), "下载 / 账号 / 资源 / 整合包 / 联机", F_H2, (246, 250, 247, 255))
-    draw_text(d, (160, 535), "把 Minecraft 常用流程集中起来", F_BODY, (207, 224, 219, 245))
+    draw_text(d, (335, 285), "6 月 4 日之后更新内容", F_SUBTITLE, (194, 235, 226, 255))
+    draw_text(d, (155, 450), "统一下载 / 自更新 / 开黑胶囊", F_H2, (246, 250, 247, 255))
+    draw_text(d, (160, 535), "Modrinth 依赖管理、代理加速、快速进入存档", F_BODY, (207, 224, 219, 245))
     if "download" in PROMO_SCREENSHOTS:
         card_a = make_image_card("download", (760, 520), 100)
         paste_shadow(base, card_a, (1040, 155), radius=24, offset=(0, 18), alpha=110)
-    if "online" in PROMO_SCREENSHOTS:
-        card_b = make_image_card("online", (660, 430), 100)
+    if "tasks" in PROMO_SCREENSHOTS:
+        card_b = make_image_card("tasks", (660, 430), 100)
         paste_shadow(base, card_b, (880, 510), radius=22, offset=(0, 16), alpha=105)
     draw_round(d, (160, 710, 700, 790), 22, (49, 232, 215, 255))
-    draw_text(d, (430, 750), "立即体验 McGo", F_BODY, (5, 29, 28, 255), anchor="mm")
+    draw_text(d, (430, 750), "更新内容汇总", F_BODY, (5, 29, 28, 255), anchor="mm")
     return base.convert("RGB")
 
 
@@ -697,7 +698,7 @@ def write_copy():
 单机游戏 / Minecraft / 工具分享 / 软件推荐
 
 标签建议：
-Minecraft, 我的世界, 启动器, McGo, Mod, 整合包, P2P联机, PySide6
+Minecraft, 我的世界, 启动器, McGo, 统一下载, Modrinth, Mod前置, P2P联机, 自更新
 
 置顶评论建议：
 视频画面使用项目自动化截图生成，账号与服务器信息均为演示数据。
@@ -709,7 +710,7 @@ mcgo-bilibili-subtitles.srt
 {VOICE_SCRIPT}
 
 视频规格：
-1920x1080 / 30fps / H.264 MP4 / AAC / 约 74 秒
+1920x1080 / 30fps / H.264 MP4 / AAC / 约 67 秒
 """,
         encoding="utf-8",
     )

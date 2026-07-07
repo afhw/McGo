@@ -195,6 +195,10 @@ class LauncherWindow(FluentWindow):
         self.active_download_task = None
         self.last_failed_download_task = None
         self.canceling_download_task = False
+        self.download_task_records = []
+        self.download_task_record_by_id = {}
+        self.completed_download_task_limit = 24
+        self.floating_download_button = None
         self.scan_threads = {}
         self.scan_workers = {}
         self.scan_feedback_tasks = set()
@@ -227,8 +231,10 @@ class LauncherWindow(FluentWindow):
         self.build_pages()
         self.apply_theme_image()
         self.init_navigation()
+        self.create_floating_download_button()
         self.update_download_advanced_visibility()
         self.apply_feature_visibility()
+        self.update_download_task_widgets()
         self.apply_music_settings(show_feedback=False)
         self.refresh_account_selector()
         self.remote_version_combo.addItem("点击刷新远程版本")
@@ -244,6 +250,33 @@ class LauncherWindow(FluentWindow):
 
     def animate_initial_views(self):
         self.animate_card_group(getattr(self, "home_cards", []))
+
+    def create_floating_download_button(self):
+        self.floating_download_button = PrimaryPushButton("下载任务")
+        self.floating_download_button.setParent(self)
+        self.floating_download_button.setFixedHeight(42)
+        self.floating_download_button.setMinimumWidth(150)
+        self.floating_download_button.clicked.connect(self.open_download_task_center)
+        self.floating_download_button.setVisible(False)
+        self.floating_download_button.raise_()
+        self.position_floating_download_button()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.position_floating_download_button()
+
+    def position_floating_download_button(self):
+        button = getattr(self, "floating_download_button", None)
+        if button is None:
+            return
+        margin = 28
+        width = max(150, min(260, button.sizeHint().width() + 22))
+        button.setFixedWidth(width)
+        button.move(
+            max(margin, self.width() - button.width() - margin),
+            max(margin, self.height() - button.height() - margin),
+        )
+        button.raise_()
 
     def closeEvent(self, event):
         if self.p2p_tunnel:
@@ -448,6 +481,12 @@ class LauncherWindow(FluentWindow):
         self.progress_bar.setRange(0, 100)
         self.download_metrics_label = BodyLabel("等待下载")
         self.download_queue_label = BodyLabel("任务队列：空")
+        self.download_task_summary_label = BodyLabel("没有下载任务")
+        self.download_task_detail_label = CaptionLabel("下载、安装、补包和更新任务会汇总到这里")
+        self.download_task_list = ListWidget()
+        self.download_task_list.setMinimumHeight(260)
+        self.download_task_list.setWordWrap(True)
+        self.download_task_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.install_status_label = BodyLabel("等待安装任务")
         self.install_metrics_label = BodyLabel("尚未开始安装")
         self.launch_status_label = BodyLabel("将根据游戏版本自动选择合适的 Java")
@@ -583,6 +622,7 @@ class LauncherWindow(FluentWindow):
             "addons": "安装扩展",
             "modpack": "导入整合包",
             "resources": "资源市场",
+            "tasks": "任务管理",
         }
         self.manage_section_labels = {
             "accounts": "账号",
@@ -1178,6 +1218,7 @@ class LauncherWindow(FluentWindow):
             [
                 ("获取游戏", "下载原版 Minecraft，或在已有原版上安装加载器", lambda: self.open_download_category("获取游戏")),
                 ("导入内容", "导入整合包，或从资源市场安装 Mod、资源包和光影", lambda: self.open_download_category("导入内容")),
+                ("任务管理", "查看运行、排队和失败的下载任务", lambda: self.open_download_section("tasks", "任务管理")),
             ],
         )
         self.download_category_card = self.make_choice_card(
@@ -1193,6 +1234,7 @@ class LauncherWindow(FluentWindow):
         self.download_install_view = QWidget()
         self.download_modpack_view = QWidget()
         self.download_resource_view = QWidget()
+        self.download_tasks_view = QWidget()
 
         download_card, download_layout = self.make_card("下载原版 + 模组适配", "选择原版后可一并安装 Fabric、Forge、NeoForge、OptiFine 和 Fabric API")
         self.add_labeled_control(download_layout, "版本类型", self.version_type_combo)
@@ -1284,6 +1326,23 @@ class LauncherWindow(FluentWindow):
         resource_layout.addLayout(detail_header)
         resource_layout.addWidget(self.resource_detail_view)
 
+        task_center_card, task_center_layout = self.make_card("统一下载任务", "运行中的下载、安装、更新和补包任务会集中显示")
+        task_center_layout.addWidget(self.download_task_summary_label)
+        task_center_layout.addWidget(self.download_task_detail_label)
+        task_center_layout.addWidget(self.download_task_list)
+        task_center_row = QHBoxLayout()
+        self.task_center_cancel_button = PushButton("取消当前任务")
+        self.task_center_retry_button = PushButton("重试失败任务")
+        self.task_center_clear_button = PushButton("清空等待队列")
+        self.task_center_cancel_button.clicked.connect(self.cancel_current_download_task)
+        self.task_center_retry_button.clicked.connect(self.retry_last_failed_download_task)
+        self.task_center_clear_button.clicked.connect(self.clear_download_queue)
+        task_center_row.addWidget(self.task_center_cancel_button)
+        task_center_row.addWidget(self.task_center_retry_button)
+        task_center_row.addWidget(self.task_center_clear_button)
+        task_center_row.addStretch()
+        task_center_layout.addLayout(task_center_row)
+
         vanilla_layout = QVBoxLayout(self.download_vanilla_view)
         vanilla_layout.setContentsMargins(0, 0, 0, 0)
         vanilla_layout.addWidget(download_card)
@@ -1304,14 +1363,21 @@ class LauncherWindow(FluentWindow):
         resource_view_layout.addWidget(resource_card)
         resource_view_layout.addStretch()
 
+        tasks_view_layout = QVBoxLayout(self.download_tasks_view)
+        tasks_view_layout.setContentsMargins(0, 0, 0, 0)
+        tasks_view_layout.addWidget(task_center_card)
+        tasks_view_layout.addStretch()
+
         self.download_stack.addWidget(self.download_vanilla_view)
         self.download_stack.addWidget(self.download_install_view)
         self.download_stack.addWidget(self.download_modpack_view)
         self.download_stack.addWidget(self.download_resource_view)
+        self.download_stack.addWidget(self.download_tasks_view)
         self.download_segment.addItem("vanilla", "下载原版", lambda: self.switch_download_section("vanilla", "获取游戏"))
         self.download_segment.addItem("addons", "安装扩展", lambda: self.switch_download_section("addons", "获取游戏"))
         self.download_segment.addItem("modpack", "导入整合包", lambda: self.switch_download_section("modpack", "导入内容"))
         self.download_segment.addItem("resources", "资源市场", lambda: self.switch_download_section("resources", "导入内容"))
+        self.download_segment.addItem("tasks", "任务管理", lambda: self.switch_download_section("tasks", "任务管理"))
         self.download_segment.setCurrentItem("vanilla")
 
         self.update_install_button_text(self.install_type_combo.currentText())
@@ -1741,6 +1807,10 @@ class LauncherWindow(FluentWindow):
         if section_key == "resources":
             self.refresh_resource_target_versions()
 
+    def open_download_task_center(self):
+        self.open_download_section("tasks", "任务管理")
+        self.update_download_task_widgets()
+
     def open_online_page(self):
         self.switch_main_page(self.online_page, self.online_cards)
 
@@ -2068,6 +2138,16 @@ class LauncherWindow(FluentWindow):
             return
 
         self.save_p2p_settings()
+        task = DownloadTask(
+            "capsule_pull",
+            f"补齐胶囊文件 {version_id}",
+            lambda runtime_dir=runtime_dir,
+            files=list(files),
+            version_id=version_id: self._start_capsule_pull_task(runtime_dir, files, version_id),
+        )
+        self.queue_download_task(task)
+
+    def _start_capsule_pull_task(self, runtime_dir, files, version_id):
         self.progress_bar.setValue(0)
         self.download_metrics_label.setText("准备补齐胶囊文件...")
         self.install_status_label.setText(f"正在连接房主补包服务：{version_id}")
@@ -2078,7 +2158,9 @@ class LauncherWindow(FluentWindow):
         self.capsule_pull_worker.moveToThread(self.capsule_pull_thread)
         self.capsule_pull_thread.started.connect(self.capsule_pull_worker.run)
         self.capsule_pull_worker.progress.connect(self.progress_bar.setValue)
+        self.capsule_pull_worker.progress.connect(self.on_download_task_progress)
         self.capsule_pull_worker.status.connect(self.on_capsule_pull_status)
+        self.capsule_pull_worker.status.connect(self.on_download_task_status)
         self.capsule_pull_worker.finished.connect(self.on_capsule_pull_finished)
         self.capsule_pull_worker.failed.connect(self.on_capsule_pull_failed)
         self.capsule_pull_worker.finished.connect(self.capsule_pull_thread.quit)
@@ -2094,6 +2176,7 @@ class LauncherWindow(FluentWindow):
 
     def on_capsule_pull_finished(self, payload):
         self.set_download_running(False)
+        self.finish_download_task(failed=False)
         downloaded = payload.get("downloaded", 0)
         total = payload.get("total", 0)
         byte_count = payload.get("bytes", 0)
@@ -2110,6 +2193,7 @@ class LauncherWindow(FluentWindow):
 
     def on_capsule_pull_failed(self, message):
         self.set_download_running(False)
+        self.finish_download_task(failed=True)
         self.download_metrics_label.setText(f"胶囊补包失败：{message}")
         self.install_status_label.setText("胶囊补包失败")
         self.install_metrics_label.setText(message)
@@ -3056,8 +3140,10 @@ class LauncherWindow(FluentWindow):
         self.repair_worker.moveToThread(self.repair_thread)
         self.repair_thread.started.connect(self.repair_worker.run)
         self.repair_worker.progress.connect(self.repair_progress_bar.setValue)
+        self.repair_worker.progress.connect(self.on_download_task_progress)
         self.repair_worker.metrics.connect(self.update_repair_metrics)
         self.repair_worker.status.connect(lambda message: self.repair_status_label.setText(message))
+        self.repair_worker.status.connect(self.on_download_task_status)
         self.repair_worker.finished.connect(lambda payload, capsule=auto_capsule: self.on_repair_finished(payload, capsule))
         self.repair_worker.failed.connect(self.on_repair_failed)
         self.repair_worker.finished.connect(self.repair_thread.quit)
@@ -3149,6 +3235,7 @@ class LauncherWindow(FluentWindow):
         if current_file:
             details += f" | 当前: {current_file}"
         self.download_metrics_label.setText(details)
+        self.update_active_download_task_detail(details)
         self.motion.pulse_widget(self.download_metrics_label, duration=210, start_opacity=0.5, throttle_key="download_metrics", min_interval=0.18)
 
     def update_repair_metrics(self, snapshot):
@@ -3173,6 +3260,7 @@ class LauncherWindow(FluentWindow):
         if current_file:
             details += f" | 当前: {current_file}"
         self.repair_metrics_label.setText(details)
+        self.update_active_download_task_detail(details)
         self.motion.pulse_widget(self.repair_status_label, duration=210, start_opacity=0.5, throttle_key="repair_status", min_interval=0.18)
 
     def update_install_metrics(self, snapshot):
@@ -3197,6 +3285,7 @@ class LauncherWindow(FluentWindow):
         if current_file:
             details += f" | 当前: {current_file}"
         self.install_metrics_label.setText(details)
+        self.update_active_download_task_detail(details)
         self.motion.pulse_widget(self.install_metrics_label, duration=210, start_opacity=0.5, throttle_key="install_metrics", min_interval=0.14)
 
     def update_resource_install_metrics(self, snapshot):
@@ -3215,7 +3304,152 @@ class LauncherWindow(FluentWindow):
             details += f" | 当前: {current_file}"
         self.resource_status_label.setText(details)
         self.download_metrics_label.setText(details)
+        self.update_active_download_task_detail(details)
         self.motion.pulse_widget(self.resource_status_label, duration=210, start_opacity=0.5, throttle_key="resource_install_metrics", min_interval=0.16)
+
+    def download_task_record(self, task):
+        if task is None:
+            return None
+        task_key = id(task)
+        record = self.download_task_record_by_id.get(task_key)
+        if record is None:
+            record = {
+                "key": task_key,
+                "task": task,
+                "type": task.task_type,
+                "title": task.title,
+                "status": "queued",
+                "progress": 0,
+                "detail": "",
+            }
+            self.download_task_record_by_id[task_key] = record
+            self.download_task_records.append(record)
+        else:
+            record["task"] = task
+            record["type"] = task.task_type
+            record["title"] = task.title
+        return record
+
+    def set_download_task_record(self, task, status=None, progress=None, detail=None):
+        record = self.download_task_record(task)
+        if record is None:
+            return
+        if status is not None:
+            record["status"] = status
+        if progress is not None:
+            record["progress"] = max(0, min(100, int(progress)))
+        if detail is not None:
+            record["detail"] = str(detail or "")
+        self.prune_download_task_records()
+        self.update_download_task_widgets()
+
+    def prune_download_task_records(self):
+        keep_statuses = {"running", "queued", "failed"}
+        completed = [record for record in self.download_task_records if record.get("status") not in keep_statuses]
+        removable = max(0, len(completed) - self.completed_download_task_limit)
+        if removable <= 0:
+            return
+        for record in completed[:removable]:
+            self.download_task_records.remove(record)
+            self.download_task_record_by_id.pop(record.get("key"), None)
+
+    def on_download_task_progress(self, value):
+        if self.active_download_task:
+            self.set_download_task_record(self.active_download_task, status="running", progress=value)
+
+    def on_download_task_status(self, message):
+        if self.active_download_task:
+            self.set_download_task_record(self.active_download_task, status="running", detail=message)
+
+    def update_active_download_task_detail(self, detail):
+        if self.active_download_task:
+            self.set_download_task_record(self.active_download_task, status="running", detail=detail)
+
+    def download_task_status_text(self, status):
+        return {
+            "queued": "等待中",
+            "running": "进行中",
+            "completed": "已完成",
+            "failed": "失败",
+            "canceled": "已取消",
+        }.get(status, status or "未知")
+
+    def sorted_download_task_records(self):
+        order = {"running": 0, "queued": 1, "failed": 2, "canceled": 3, "completed": 4}
+        indexed = list(enumerate(self.download_task_records))
+        indexed.sort(key=lambda item: (order.get(item[1].get("status"), 9), item[0] if item[1].get("status") in {"running", "queued"} else -item[0]))
+        return [record for _index, record in indexed]
+
+    def update_download_task_widgets(self):
+        records = self.sorted_download_task_records()
+        active_records = [record for record in records if record.get("status") == "running"]
+        queued_records = [record for record in records if record.get("status") == "queued"]
+        failed_records = [record for record in records if record.get("status") == "failed"]
+        visible_records = records[:50]
+
+        if hasattr(self, "download_task_summary_label"):
+            if active_records:
+                active = active_records[0]
+                self.download_task_summary_label.setText(
+                    f"正在执行：{active.get('title', '')}（{active.get('progress', 0)}%）"
+                )
+            elif queued_records:
+                self.download_task_summary_label.setText(f"等待执行：{len(queued_records)} 个任务")
+            elif failed_records:
+                self.download_task_summary_label.setText(f"有 {len(failed_records)} 个失败任务可处理")
+            else:
+                self.download_task_summary_label.setText("没有下载任务")
+
+        if hasattr(self, "download_task_detail_label"):
+            parts = []
+            if queued_records:
+                parts.append(f"排队 {len(queued_records)}")
+            if failed_records:
+                parts.append(f"失败 {len(failed_records)}")
+            if not parts and records:
+                parts.append("最近任务已完成")
+            self.download_task_detail_label.setText(" | ".join(parts) if parts else "下载、安装、补包和更新任务会汇总到这里")
+
+        if hasattr(self, "download_task_list"):
+            self.download_task_list.clear()
+            if not visible_records:
+                item = QListWidgetItem("暂无下载任务")
+                item.setFlags(Qt.ItemFlag.NoItemFlags)
+                self.download_task_list.addItem(item)
+            for record in visible_records:
+                status = self.download_task_status_text(record.get("status"))
+                progress = record.get("progress", 0)
+                detail = record.get("detail", "").strip()
+                line = f"[{status}] {record.get('title', '')}\n{progress}%"
+                if detail:
+                    line += f" | {detail}"
+                item = QListWidgetItem(line)
+                item.setData(Qt.ItemDataRole.UserRole, record.get("key"))
+                self.download_task_list.addItem(item)
+
+        if hasattr(self, "task_center_cancel_button"):
+            self.task_center_cancel_button.setEnabled(self.is_download_task_running())
+        if hasattr(self, "task_center_retry_button"):
+            self.task_center_retry_button.setEnabled(self.last_failed_download_task is not None and not self.is_download_task_running())
+        if hasattr(self, "task_center_clear_button"):
+            self.task_center_clear_button.setEnabled(bool(self.download_task_queue))
+
+        button = getattr(self, "floating_download_button", None)
+        if button is None:
+            return
+        should_show = bool(active_records or queued_records or failed_records)
+        if active_records:
+            active = active_records[0]
+            text = f"下载任务 {active.get('progress', 0)}%"
+        elif queued_records:
+            text = f"下载队列 {len(queued_records)}"
+        elif failed_records:
+            text = f"下载失败 {len(failed_records)}"
+        else:
+            text = "下载任务"
+        button.setText(text)
+        button.setVisible(should_show)
+        self.position_floating_download_button()
 
     def is_download_task_running(self):
         threads = (
@@ -3226,12 +3460,24 @@ class LauncherWindow(FluentWindow):
             self.resource_dependency_thread,
             self.repair_thread,
             self.capsule_pull_thread,
+            self.authlib_download_thread,
+            self.java_download_thread,
         )
-        return any(thread and thread.isRunning() for thread in threads)
+        if any(thread and thread.isRunning() for thread in threads):
+            return True
+        if (
+            self.active_download_task
+            and self.active_download_task.task_type == "launcher_update"
+            and self.update_thread
+            and self.update_thread.isRunning()
+        ):
+            return True
+        return False
 
     def queue_download_task(self, task):
         if self.is_download_task_running() or self.active_download_task:
             self.download_task_queue.append(task)
+            self.set_download_task_record(task, status="queued", progress=0, detail="等待前面的任务完成")
             logger.info(
                 "Download task queued: type=%s title=%s queue_size=%d active=%s",
                 task.task_type,
@@ -3243,12 +3489,14 @@ class LauncherWindow(FluentWindow):
             self.show_info("已加入队列", task.title)
             return
         logger.info("Download task starting immediately: type=%s title=%s", task.task_type, task.title)
+        self.set_download_task_record(task, status="queued", progress=0, detail="准备开始")
         self.start_download_task(task)
 
     def start_download_task(self, task):
         self.active_download_task = task
         self.canceling_download_task = False
         logger.info("Download task started: type=%s title=%s", task.task_type, task.title)
+        self.set_download_task_record(task, status="running", progress=0, detail="任务已开始")
         self.update_download_queue_label()
         task.start()
 
@@ -3256,6 +3504,13 @@ class LauncherWindow(FluentWindow):
         task = self.active_download_task
         if failed and self.active_download_task and not self.canceling_download_task:
             self.last_failed_download_task = self.active_download_task
+        if task:
+            if self.canceling_download_task:
+                self.set_download_task_record(task, status="canceled", detail="任务已取消")
+            elif failed:
+                self.set_download_task_record(task, status="failed", detail="任务失败")
+            else:
+                self.set_download_task_record(task, status="completed", progress=100, detail="任务完成")
         logger.info(
             "Download task finished: type=%s title=%s failed=%s canceled=%s remaining_queue=%d",
             task.task_type if task else "<none>",
@@ -3295,9 +3550,11 @@ class LauncherWindow(FluentWindow):
             self.retry_task_button.setEnabled(self.last_failed_download_task is not None and not self.is_download_task_running())
         if hasattr(self, "clear_queue_button"):
             self.clear_queue_button.setEnabled(bool(self.download_task_queue))
-
+        self.update_download_task_widgets()
     def clear_download_queue(self):
         count = len(self.download_task_queue)
+        for task in list(self.download_task_queue):
+            self.set_download_task_record(task, status="canceled", detail="已从等待队列移除")
         self.download_task_queue.clear()
         logger.info("Download task queue cleared: removed=%d", count)
         self.update_download_queue_label()
@@ -3310,6 +3567,7 @@ class LauncherWindow(FluentWindow):
         task = self.last_failed_download_task
         self.last_failed_download_task = None
         logger.info("Retrying failed download task: type=%s title=%s", task.task_type, task.title)
+        self.set_download_task_record(task, status="queued", progress=0, detail="准备重试")
         self.queue_download_task(task)
         self.update_download_queue_label()
 
@@ -3324,7 +3582,7 @@ class LauncherWindow(FluentWindow):
             len(self.download_task_queue),
         )
         stopped = []
-        for name in ("download", "install", "modpack", "resource_install", "resource_dependency", "repair", "capsule_pull"):
+        for name in ("download", "install", "modpack", "resource_install", "resource_dependency", "repair", "capsule_pull", "authlib_download", "java_download", "update"):
             worker = getattr(self, f"{name}_worker", None)
             if worker and hasattr(worker, "request_stop"):
                 worker.request_stop()
@@ -3575,12 +3833,18 @@ class LauncherWindow(FluentWindow):
             "addons": 1,
             "modpack": 2,
             "resources": 3,
+            "tasks": 4,
         }
         section_key = section_key if section_key in mapping else "vanilla"
         if category is not None:
             self.current_download_category = category
         elif not getattr(self, "current_download_category", ""):
-            self.current_download_category = "获取游戏" if section_key in {"vanilla", "addons"} else "导入内容"
+            if section_key in {"vanilla", "addons"}:
+                self.current_download_category = "获取游戏"
+            elif section_key == "tasks":
+                self.current_download_category = "任务管理"
+            else:
+                self.current_download_category = "导入内容"
         self.current_download_section = section_key
         if hasattr(self, "download_overview_card"):
             self.download_overview_card.setVisible(False)
@@ -3726,15 +3990,30 @@ class LauncherWindow(FluentWindow):
         if self.authlib_download_thread and self.authlib_download_thread.isRunning():
             self.show_warning("下载进行中", "authlib-injector 正在下载。")
             return
-        from install_workers import AuthlibInjectorDownloadWorker
 
         install_dir = os.path.join(self.current_game_dir(), "authlib-injector")
+        task = DownloadTask(
+            "authlib_injector",
+            "下载 authlib-injector",
+            lambda install_dir=install_dir: self._start_authlib_injector_download_task(install_dir),
+        )
+        self.queue_download_task(task)
+
+    def _start_authlib_injector_download_task(self, install_dir):
+        from install_workers import AuthlibInjectorDownloadWorker
+
+        self.progress_bar.setValue(0)
+        self.download_metrics_label.setText("准备下载 authlib-injector...")
+        self.install_status_label.setText("正在准备外置登录组件")
+        self.set_download_running(True)
         self.authlib_download_thread = QThread()
         self.authlib_download_worker = AuthlibInjectorDownloadWorker(install_dir)
         self.authlib_download_worker.moveToThread(self.authlib_download_thread)
         self.authlib_download_thread.started.connect(self.authlib_download_worker.run)
         self.authlib_download_worker.progress.connect(self.progress_bar.setValue)
+        self.authlib_download_worker.progress.connect(self.on_download_task_progress)
         self.authlib_download_worker.status.connect(self.log)
+        self.authlib_download_worker.status.connect(self.on_download_task_status)
         self.authlib_download_worker.finished.connect(self.on_authlib_injector_download_finished)
         self.authlib_download_worker.failed.connect(self.on_authlib_injector_download_failed)
         self.authlib_download_worker.finished.connect(self.authlib_download_thread.quit)
@@ -3742,12 +4021,16 @@ class LauncherWindow(FluentWindow):
         self.authlib_download_thread.start()
 
     def on_authlib_injector_download_finished(self, payload):
+        self.set_download_running(False)
+        self.finish_download_task(failed=False)
         path = payload.get("path", "")
         self.authlib_injector_input.setText(path)
         self.show_success("下载完成", f"authlib-injector 已保存：{path}")
         self.log(f"authlib-injector 已下载：{path}")
 
     def on_authlib_injector_download_failed(self, message):
+        self.set_download_running(False)
+        self.finish_download_task(failed=True)
         self.show_warning("下载失败", message)
         self.log(f"authlib-injector 下载失败：{message}")
 
@@ -4141,7 +4424,21 @@ class LauncherWindow(FluentWindow):
         if not manifest:
             self.start_update_check(silent=False)
             return
+        version = manifest.get("version", "")
+        task = DownloadTask(
+            "launcher_update",
+            f"下载 McGo 更新 {version}",
+            lambda manifest=dict(manifest),
+            apply_after_download=apply_after_download: self._start_update_download_task(manifest, apply_after_download),
+        )
+        self.queue_download_task(task)
+
+    def _start_update_download_task(self, manifest, apply_after_download=False):
         self.update_apply_after_download = apply_after_download
+        self.progress_bar.setValue(0)
+        self.download_metrics_label.setText(f"准备下载 McGo {manifest.get('version', '')} 更新...")
+        self.install_status_label.setText("正在准备启动器更新")
+        self.set_download_running(True)
         self.start_update_task("download", manifest=manifest, silent=False)
 
     def start_update_task(self, action, manifest=None, silent=False):
@@ -4151,8 +4448,11 @@ class LauncherWindow(FluentWindow):
         self.update_thread.started.connect(self.update_worker.run)
         self.update_worker.status.connect(self.on_update_status)
         self.update_worker.progress.connect(self.progress_bar.setValue)
+        if action == "download":
+            self.update_worker.status.connect(self.on_download_task_status)
+            self.update_worker.progress.connect(self.on_download_task_progress)
         self.update_worker.finished.connect(lambda payload, quiet=silent: self.defer_update_finished(payload, quiet))
-        self.update_worker.failed.connect(lambda message, quiet=silent: self.on_update_failed(message, quiet))
+        self.update_worker.failed.connect(lambda message, quiet=silent, current_action=action: self.on_update_failed(message, quiet, current_action))
         self.update_worker.finished.connect(self.update_thread.quit)
         self.update_worker.failed.connect(self.update_thread.quit)
         self.update_worker.finished.connect(self.update_worker.deleteLater)
@@ -4219,6 +4519,8 @@ class LauncherWindow(FluentWindow):
             return
 
         if action == "download":
+            self.set_download_running(False)
+            self.finish_download_task(failed=False)
             self.pending_update_manifest = payload
             version = payload.get("version", "")
             self.update_status_label.setText(f"McGo {version} 已下载")
@@ -4245,8 +4547,11 @@ class LauncherWindow(FluentWindow):
                 schedule_windows_replace_and_restart(payload["path"])
                 self.quit_for_update()
 
-    def on_update_failed(self, message, silent=False):
+    def on_update_failed(self, message, silent=False, action=""):
         self.update_apply_after_download = False
+        if action == "download":
+            self.set_download_running(False)
+            self.finish_download_task(failed=True)
         if silent:
             self.update_status_label.setText(f"当前 McGo 版本：{APP_VERSION}")
         else:
@@ -4375,6 +4680,8 @@ class LauncherWindow(FluentWindow):
         self.motion.pulse_widget(self.java_download_status_label, duration=210, start_opacity=0.5, throttle_key="java_download_status", min_interval=0.2)
 
     def on_java_download_finished(self, payload):
+        self.set_download_running(False)
+        self.finish_download_task(failed=False)
         java_path = payload.get("java_path", "")
         major = payload.get("major", "")
         if java_path:
@@ -4389,6 +4696,8 @@ class LauncherWindow(FluentWindow):
         self.update_home_summary()
 
     def on_java_download_failed(self, message):
+        self.set_download_running(False)
+        self.finish_download_task(failed=True)
         self.java_download_status_label.setText(f"Java 下载失败：{message}")
         self.show_warning("Java 下载失败", message)
         self.log(f"Java 下载失败：{message}")
@@ -4400,8 +4709,6 @@ class LauncherWindow(FluentWindow):
         if self.java_download_thread and self.java_download_thread.isRunning():
             self.show_warning("下载进行中", "当前已有 Java 下载任务在运行。")
             return
-        from install_workers import JavaDownloadWorker
-
 
         version_id = self.current_selected_version()
         required = self.get_required_java_version(version_id)
@@ -4413,14 +4720,32 @@ class LauncherWindow(FluentWindow):
             return
 
         install_root = os.path.join(self.current_game_dir(), "java_runtimes")
+        task = DownloadTask(
+            "java_runtime",
+            f"下载 Java {required} 运行时",
+            lambda required=required,
+            install_root=install_root: self._start_java_download_task(required, install_root),
+        )
+        self.queue_download_task(task)
+
+    def _start_java_download_task(self, required, install_root):
+        from install_workers import JavaDownloadWorker
+
         self.java_download_progress_bar.setValue(0)
         self.java_download_status_label.setText(f"准备下载 Java {required}...")
+        self.progress_bar.setValue(0)
+        self.download_metrics_label.setText(f"准备下载 Java {required}...")
+        self.install_status_label.setText("正在准备 Java 运行时")
+        self.set_download_running(True)
         self.java_download_thread = QThread()
         self.java_download_worker = JavaDownloadWorker(required, install_root)
         self.java_download_worker.moveToThread(self.java_download_thread)
         self.java_download_thread.started.connect(self.java_download_worker.run)
         self.java_download_worker.progress.connect(self.java_download_progress_bar.setValue)
+        self.java_download_worker.progress.connect(self.progress_bar.setValue)
+        self.java_download_worker.progress.connect(self.on_download_task_progress)
         self.java_download_worker.status.connect(self.on_java_download_status)
+        self.java_download_worker.status.connect(self.on_download_task_status)
         self.java_download_worker.finished.connect(self.on_java_download_finished)
         self.java_download_worker.failed.connect(self.on_java_download_failed)
         self.java_download_worker.finished.connect(self.java_download_thread.quit)
@@ -4908,10 +5233,13 @@ class LauncherWindow(FluentWindow):
         self.download_worker.moveToThread(self.download_thread)
         self.download_thread.started.connect(self.download_worker.run)
         self.download_worker.progress.connect(self.progress_bar.setValue)
+        self.download_worker.progress.connect(self.on_download_task_progress)
         self.download_worker.metrics.connect(self.update_download_metrics)
         self.download_worker.status.connect(self.log)
+        self.download_worker.status.connect(self.on_download_task_status)
         self.download_worker.install_metrics.connect(self.update_install_metrics)
         self.download_worker.install_status.connect(self.on_install_status_from_download)
+        self.download_worker.install_status.connect(self.on_download_task_status)
         self.download_worker.finished.connect(self.on_download_finished)
         self.download_worker.failed.connect(self.on_download_failed)
         self.download_worker.finished.connect(self.download_thread.quit)
@@ -4980,8 +5308,10 @@ class LauncherWindow(FluentWindow):
         self.install_worker.moveToThread(self.install_thread)
         self.install_thread.started.connect(self.install_worker.run)
         self.install_worker.progress.connect(self.progress_bar.setValue)
+        self.install_worker.progress.connect(self.on_download_task_progress)
         self.install_worker.metrics.connect(self.update_install_metrics)
         self.install_worker.status.connect(self.on_install_status)
+        self.install_worker.status.connect(self.on_download_task_status)
         self.install_worker.finished.connect(self.on_install_finished)
         self.install_worker.failed.connect(self.on_install_failed)
         self.install_worker.finished.connect(self.install_thread.quit)
@@ -5038,7 +5368,9 @@ class LauncherWindow(FluentWindow):
         self.modpack_worker.moveToThread(self.modpack_thread)
         self.modpack_thread.started.connect(self.modpack_worker.run)
         self.modpack_worker.progress.connect(self.progress_bar.setValue)
+        self.modpack_worker.progress.connect(self.on_download_task_progress)
         self.modpack_worker.status.connect(self.on_install_status)
+        self.modpack_worker.status.connect(self.on_download_task_status)
         self.modpack_worker.finished.connect(self.on_modpack_import_finished)
         self.modpack_worker.failed.connect(self.on_modpack_import_failed)
         self.modpack_worker.finished.connect(self.modpack_thread.quit)
@@ -5204,7 +5536,9 @@ class LauncherWindow(FluentWindow):
         self.resource_dependency_worker.moveToThread(self.resource_dependency_thread)
         self.resource_dependency_thread.started.connect(self.resource_dependency_worker.run)
         self.resource_dependency_worker.progress.connect(self.progress_bar.setValue)
+        self.resource_dependency_worker.progress.connect(self.on_download_task_progress)
         self.resource_dependency_worker.status.connect(self.on_mod_dependency_repair_status)
+        self.resource_dependency_worker.status.connect(self.on_download_task_status)
         self.resource_dependency_worker.metrics.connect(self.update_resource_install_metrics)
         self.resource_dependency_worker.finished.connect(self.on_mod_dependency_repair_finished)
         self.resource_dependency_worker.failed.connect(self.on_mod_dependency_repair_failed)
@@ -5243,7 +5577,9 @@ class LauncherWindow(FluentWindow):
         self.resource_install_worker.moveToThread(self.resource_install_thread)
         self.resource_install_thread.started.connect(self.resource_install_worker.run)
         self.resource_install_worker.progress.connect(self.progress_bar.setValue)
+        self.resource_install_worker.progress.connect(self.on_download_task_progress)
         self.resource_install_worker.status.connect(lambda message: self.resource_status_label.setText(message))
+        self.resource_install_worker.status.connect(self.on_download_task_status)
         self.resource_install_worker.metrics.connect(self.update_resource_install_metrics)
         self.resource_install_worker.finished.connect(self.on_resource_install_finished)
         self.resource_install_worker.failed.connect(self.on_resource_install_failed)
