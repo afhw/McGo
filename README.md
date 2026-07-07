@@ -1,18 +1,26 @@
 # McGo
 
-McGo 是一个基于 PySide6 和 QFluentWidgets 的 Minecraft 启动器，支持账号管理、游戏下载、加载器安装、资源市场、整合包导入导出、版本独立设置和本地实例管理。
+McGo 是一个 C# / .NET 8 Minecraft 启动器，支持账号配置、版本扫描、启动命令构建、游戏下载工具、资源市场、整合包/开黑胶囊、自更新和 P2P 联机相关核心服务。
 
 ## 快速开始
 
 ```bash
-python -m pip install -r requirements.txt
-python main.py
+dotnet build McGo.slnx
+dotnet run --project src/McGo.WinUI/McGo.WinUI.csproj
 ```
 
-轻量校验：
+核心服务校验：
 
 ```bash
-python -m py_compile main.py qt_compat.py ui_window.py app_settings.py app_media.py app_format.py launcher.py downloader.py app_workers.py auth.py auth_server.py external_auth.py file_utils.py install_services.py installer_engine.py java_runtime.py java_utils.py version_utils.py log_utils.py modpack_utils.py nat_utils.py process_utils.py resource_market.py resource_workers.py ui_base.py p2p_tunnel.py p2p_server.py
+dotnet run --project tests/McGo.Core.Tests/McGo.Core.Tests.csproj
+```
+
+项目主体正在迁移到 `src/McGo.Core` 和 WinUI 3 客户端 `src/McGo.WinUI`。旧实现已移动到 `legacy/`，仅作为迁移参照和行为对照，不再作为默认入口、CI 或发布路径。
+
+发布 Windows 桌面版：
+
+```powershell
+.\scripts\build_release.ps1
 ```
 
 ## 文档导航
@@ -26,6 +34,7 @@ python -m py_compile main.py qt_compat.py ui_window.py app_settings.py app_media
 - [个性化、主页、音乐与联机入口](docs/personalization.md)
 - [P2P 联机与中继部署](docs/p2p.md)
 - [故障排查](docs/troubleshooting.md)
+- [WinUI 3 功能迁移清单](docs/winui-migration.md)
 
 ## 数据与安全
 

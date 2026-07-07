@@ -17,25 +17,21 @@ flyliq.cn:10721
 3. 进入“联机”页面。
 4. 填写中继地址 `flyliq.cn`、端口 `10721`、房间号和可选口令。
 5. 将“房主 Minecraft LAN 端口”改成第 2 步的端口。
-6. 点击“作为房主启动”，再把邀请信息发给加入者。
+6. 保持“UDP 打洞优先”开启，点击“作为房主启动”，再把邀请信息发给加入者。
 
 加入者：
 
 1. 填写相同的中继地址、端口、房间号和口令。
 2. 选择一个本地监听端口，默认 `25565`。
-3. 点击“作为加入者启动”。
+3. 保持“UDP 打洞优先”开启，点击“作为加入者启动”。
 4. 在 Minecraft 多人游戏里添加服务器 `127.0.0.1:25565`，端口按实际填写为准。
 
 ## 部署服务端
 
-服务器只需要 Python 3.10+。以下示例假设部署到 `/opt/mcgo-p2p`：
+客户端入口正在迁移到 C# WinUI 3 的“联机”页面。C# 中继服务端入口位于 `src/McGo.Relay`：
 
 ```bash
-sudo mkdir -p /opt/mcgo-p2p
-sudo cp p2p_tunnel.py p2p_server.py /opt/mcgo-p2p/
-cd /opt/mcgo-p2p
-python3 -m venv .venv
-.venv/bin/python p2p_server.py --host 0.0.0.0 --port 10721
+dotnet run --project src/McGo.Relay/McGo.Relay.csproj -- --host 0.0.0.0 --port 10721
 ```
 
 如果使用防火墙，需要同时放行 TCP 和 UDP 端口。TCP 用于房间控制和中继回退，UDP 用于打洞协调：
@@ -47,74 +43,7 @@ sudo ufw allow 10721/udp
 
 云服务器还需要在安全组里同时放行 `10721/tcp` 和 `10721/udp`。
 
-默认 TCP 中继回退会按每个方向 `8192 KiB/s` 限速，避免中继被单个房间打满。可以调整或关闭：
-
-```bash
-.venv/bin/python p2p_server.py --host 0.0.0.0 --port 10721 --relay-rate-limit-kbps 4096
-.venv/bin/python p2p_server.py --host 0.0.0.0 --port 10721 --relay-rate-limit-kbps 0
-```
-
-## systemd 示例
-
-创建 `/etc/systemd/system/mcgo-p2p.service`：
-
-```ini
-[Unit]
-Description=McGo P2P Relay
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory=/opt/mcgo-p2p
-ExecStart=/opt/mcgo-p2p/.venv/bin/python /opt/mcgo-p2p/p2p_server.py --host 0.0.0.0 --port 10721 --relay-rate-limit-kbps 8192
-Restart=always
-RestartSec=3
-User=mcgo
-
-[Install]
-WantedBy=multi-user.target
-```
-
-启用并查看状态：
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now mcgo-p2p
-sudo systemctl status mcgo-p2p
-```
-
-## Nuitka 单文件打包
-
-Windows：
-
-```powershell
-.\scripts\build_nuitka_p2p_server.ps1
-```
-
-产物在：
-
-```text
-dist\mcgo-p2p-server.exe
-```
-
-Linux 需要在目标 Linux 机器上打包：
-
-```bash
-python3 -m pip install nuitka ordered-set zstandard
-python3 -m nuitka \
-  --standalone \
-  --onefile \
-  --assume-yes-for-downloads \
-  --output-dir=dist \
-  --output-filename=mcgo-p2p-server \
-  p2p_server.py
-```
-
-启动单文件服务端：
-
-```bash
-./dist/mcgo-p2p-server --host 0.0.0.0 --port 10721
-```
+当前 C# Core 已提供 UDP 优先隧道：房主侧会注册 UDP 端点并同时保留 TCP 回退，加入者侧本地 TCP 监听收到 Minecraft 连接后会先尝试 UDP 可靠流，失败再自动走 TCP 中继。WinUI 3 联机页正在承接这些入口。C# 中继提供 TCP stream 配对转发和 UDP 房间端点交换；旧 Python 隧道实现保留在 `legacy/python/p2p_tunnel.py` 和 `legacy/python/p2p_server.py` 作为历史参照。
 
 ## 说明
 

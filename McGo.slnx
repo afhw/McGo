@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/McGo.Core/McGo.Core.csproj" />
+    <Project Path="src/McGo.Relay/McGo.Relay.csproj" />
+    <Project Path="src/McGo.WinUI/McGo.WinUI.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/McGo.Core.Tests/McGo.Core.Tests.csproj" />
+  </Folder>
+</Solution>

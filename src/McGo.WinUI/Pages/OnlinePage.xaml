@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="McGo.WinUI.Pages.OnlinePage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+    <ScrollViewer>
+        <StackPanel Padding="24,16,24,16" Spacing="14">
+            <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="联机" />
+            <Grid ColumnSpacing="14">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Spacing="12">
+                    <TextBlock Text="常用服务器" FontSize="18" FontWeight="SemiBold" />
+                    <TextBox x:Name="ServerListBox" MinHeight="96" TextWrapping="Wrap" AcceptsReturn="True" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="保存服务器" Click="SaveServers" />
+                        <Button Content="复制首个服务器" Click="CopyFirstServer" />
+                    </StackPanel>
+                    <TextBlock Text="NAT 检测" FontSize="18" FontWeight="SemiBold" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="检测 NAT" Click="DetectNat" />
+                        <Button Content="复制检测结果" Click="CopyNatResult" />
+                    </StackPanel>
+                    <TextBox x:Name="NatOutputBox" MinHeight="120" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Spacing="12">
+                    <TextBlock Text="P2P 隧道" FontSize="18" FontWeight="SemiBold" />
+                    <Grid ColumnSpacing="10" RowSpacing="10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <StackPanel Spacing="6">
+                            <TextBlock Text="中继主机" />
+                            <TextBox x:Name="RelayHostBox" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Spacing="6">
+                            <TextBlock Text="中继端口" />
+                            <TextBox x:Name="RelayPortBox" />
+                        </StackPanel>
+                        <StackPanel Grid.Row="1" Spacing="6">
+                            <TextBlock Text="房间号" />
+                            <TextBox x:Name="RoomBox" />
+                        </StackPanel>
+                        <StackPanel Grid.Row="1" Grid.Column="1" Spacing="6">
+                            <TextBlock Text="口令" />
+                            <TextBox x:Name="SecretBox" />
+                        </StackPanel>
+                        <StackPanel Grid.Row="2" Spacing="6">
+                            <TextBlock Text="房主 Minecraft 端口" />
+                            <TextBox x:Name="HostPortBox" />
+                        </StackPanel>
+                        <StackPanel Grid.Row="2" Grid.Column="1" Spacing="6">
+                            <TextBlock Text="加入者本地端口" />
+                            <TextBox x:Name="JoinPortBox" />
+                        </StackPanel>
+                    </Grid>
+                    <CheckBox x:Name="UdpEnabledBox" Content="UDP 打洞优先，失败后自动回退 TCP 中继" />
+                    <ProgressBar x:Name="P2PStatusBar" Minimum="0" Maximum="100" Height="8" />
+                    <TextBlock x:Name="P2PStatusText" Text="状态：未启动" TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="生成房间号" Click="GenerateRoom" Margin="0,0,8,8" />
+                        <Button Content="挑选本地端口" Click="PickJoinPort" Margin="0,0,8,8" />
+                        <Button Content="保存联机设置" Click="SaveOnlineSettings" Margin="0,0,8,8" />
+                        <Button Content="生成邀请信息" Click="BuildInviteText" Margin="0,0,8,8" />
+                        <Button Content="复制邀请信息" Click="CopyInviteText" Margin="0,0,8,8" />
+                        <Button Content="作为房主启动" Click="StartP2PHost" Margin="0,0,8,8" />
+                        <Button Content="作为加入者启动" Click="StartP2PGuest" Margin="0,0,8,8" />
+                        <Button Content="停止隧道" Click="StopP2P" Margin="0,0,8,8" />
+                    </StackPanel>
+                    <TextBlock Text="胶囊文件补齐" FontSize="18" FontWeight="SemiBold" />
+                    <TextBox x:Name="CapsuleRuntimeDirBox" PlaceholderText="胶囊运行目录" />
+                    <TextBox x:Name="CapsuleManifestPathBox" PlaceholderText="胶囊文件或 mcgo-capsule.json" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="选择胶囊" Click="ChooseCapsuleManifest" />
+                        <Button Content="启动胶囊补包服务" Click="StartCapsuleFileHost" />
+                        <Button Content="补齐胶囊文件" Click="PullCapsuleFiles" />
+                        <Button Content="停止胶囊补包服务" Click="StopCapsuleFileHost" />
+                    </StackPanel>
+                    <ProgressBar x:Name="CapsulePullProgressBar" Minimum="0" Maximum="100" Height="8" />
+                    <TextBox x:Name="OnlineOutputBox" MinHeight="230" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
+                </StackPanel>
+            </Grid>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

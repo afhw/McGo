@@ -1,61 +1,32 @@
 # TODO
 
-## P0 - 安全与可靠性
+## C# 重构完成清单
 
-- [x] 账号令牌安全存储：`accounts.json` 保存时迁移到 DPAPI / 加密字段，内存中仍保持原账号结构。
-- [x] 配置与账号文件原子写入：`launcher_config.ini`、`accounts.json`、`version_settings.json` 写入时先写临时文件再替换。
-- [x] 统一网络错误处理：新增统一 HTTP 客户端，为 Microsoft 登录、版本元数据、下载源和外置登录补齐 timeout、重试和用户可读错误。
-- [x] 下载任务取消语义：`DownloadWorker` / aiohttp 下载链路感知 Qt 线程中断，取消时停止新任务并关闭连接。
-- [x] 移除线程强制终止路径：取消下载任务时改成 worker 协作式停止，不再调用 `QThread.terminate()`。
+- [x] 主应用切换到 C# / .NET 8 WinUI 3：入口位于 `src/McGo.WinUI`。
+- [x] 核心业务迁移到 `src/McGo.Core`：配置、账号、启动、下载、安装、资源、整合包、胶囊、自更新和 P2P 均已拆分为服务。
+- [x] 联机中继迁移到 `src/McGo.Relay`：提供 TCP stream 配对转发和 UDP 端点交换。
+- [x] 旧实现移动到 `legacy/`：仅保留为历史行为参照，不再作为默认入口、CI 或发布路径。
+- [x] 根目录旧入口、依赖文件和旧发布脚本已移除。
+- [x] CI 改为 `dotnet build McGo.slnx` 和 C# 核心测试运行器。
+- [x] 发布脚本改为 `scripts/build_release.ps1`，输出 WinUI 3 `dist/app` 和中继 `dist/relay`。
+- [x] 文档入口更新为 C# / .NET / WinUI 3 使用方式。
 
-## P1 - 架构与可维护性
+## 已覆盖能力
 
-- [x] 拆分 `main.py`：先拆出 `http_client.py`、`storage_utils.py`、`secure_store.py`，把网络、原子写入和账号令牌保护移出窗口文件。
-- [x] 合并 OAuth 回调服务：`auth_server.py` 复用 `main.py` 的 Flask app 和回调渲染，不再维护重复路由实现。
-- [x] 抽出统一 HTTP 客户端：集中处理 User-Agent、timeout、重试、状态码解析和用户可读错误。
-- [x] 抽出通用 Qt 线程启动器：下载/修复 worker 至少统一了协作式停止入口，后续 UI 线程绑定可继续收敛。
-- [x] 去重平台工具函数：平台 natives 选择和原子写入已收敛到专用工具函数。
+- [x] 账号：离线、Microsoft OAuth、外置登录、令牌安全存储和刷新。
+- [x] 启动：版本扫描、继承解析、classpath、JVM/游戏参数、版本独立设置、启动脚本导出和启动前检查。
+- [x] 下载与修复：版本 JSON、客户端 jar、libraries、assets、natives、校验、并发、限速、缓存策略和镜像重写。
+- [x] 安装：Fabric、Fabric API、Forge、NeoForge、OptiFine 和 Java 运行时检测/下载。
+- [x] 资源：Modrinth 搜索安装、依赖解析、本地资源启用/禁用/删除和兼容性提示。
+- [x] 整合包与胶囊：Modrinth `.mrpack`、CurseForge manifest、普通 zip、胶囊导入导出和缺失文件报告。
+- [x] 联机：服务器列表、NAT 检测、UDP 优先 P2P 隧道和 TCP 回退。
+- [x] 个性化：主题、自定义主页、联网纯文本主页和背景音乐。
+- [x] 更新：清单检查、启动时自动检查、下载校验和打包 exe 自动替换。
+- [x] 测试：C# package-free 测试运行器覆盖核心服务行为。
 
-## P1 - 功能完整性
+## 后续维护建议
 
-- [x] 支持非 Windows natives：按当前系统选择 Windows / macOS / Linux native classifier。
-- [x] 完善 Java 自动选择：启动器按版本推荐 Java 8 / 17 / 21，并在启动前拦截不兼容 Java。
-- [x] 启动前完整性检查：启动按钮前校验 jar、libraries、assets、natives，并提示先补全/修复。
-- [x] 资源安装依赖策略：详情页区分 required / optional / hint，安装时只递归 required，兼容性线程标记 incompatible。
-- [x] 整合包导入冲突处理：整合包导入已有安全路径检查和缺失报告；覆盖行为保留在导入流程中集中处理。
-
-## P2 - 性能与体验
-
-- [x] 下载调度限流：下载器改为有界队列，不再为全部资源一次性创建任务。
-- [x] 资源市场缓存：截图已有本地缓存，资源详情和兼容性检查复用当前搜索批次结果。
-- [x] 扫描任务增量化：扫描任务已移入后台线程，避免大目录扫描阻塞 UI。
-- [x] 日志查看器：故障排查页可展示最新日志和崩溃分析结果。
-- [x] 后台任务队列可视化：下载、安装、修复、导入、资源安装统一进入任务队列，展示当前任务、队列、失败重试和取消入口。
-
-## P2 - 测试与发布
-
-- [x] 建立 pytest 基础测试：覆盖启动参数构建、Java 推断、下载 URL 重写、natives 选择、账号令牌保护和原子 JSON 写入。
-- [x] 加入最小 CI 校验：新增 GitHub Actions，运行 `py_compile` 和 pytest。
-- [x] 增加打包脚本：新增 PyInstaller Windows 打包脚本并包含 assets。
-- [x] 文档同步检查：新增 `docs/testing.md` 记录校验、打包和敏感文件注意事项。
-- [x] 示例测试数据：pytest 使用临时 mock `.minecraft` 版本目录和 manifest 离线验证核心逻辑。
-
-## Completed Work
-
-当前待办已一次性落地到应用中：
-
-- 下载源自动切换：版本元数据和单文件下载会在 official / BMCLAPI 之间自动重试。
-- 下载任务控制：保留取消当前任务、队列、失败重试，并补充线程数、速度限制、缓存策略设置。
-- 版本独立启动设置：支持内存、窗口大小、游戏参数、启动前命令、GC 策略、JVM 参数和独立运行目录。
-- 资源市场详情：展示截图、版本文件、依赖、兼容性提示，支持 Modrinth、CurseForge 和本地资源。
-- Mod 管理：显示启用/禁用状态、基础依赖提示，支持启用、禁用、删除和打开 mods 目录。
-- 实例管理：提供版本概览、收藏/隐藏/图标、自定义名称，以及版本、存档、资源包、光影、截图快捷入口。
-- 崩溃分析：按常见原因分类，展示关键日志行和最新日志路径。
-- 账号展示：账号中心展示当前账号状态，支持离线、Microsoft、外置登录和外置账号刷新。
-- 整合包导入/导出：支持 Modrinth、CurseForge manifest 和普通 zip 覆写包，导出时写入基础依赖信息。
-- 帮助与关于：管理中心内置常见问题、启动失败排查、目录说明、版本信息和鸣谢。
-- UI 个性化：支持主题、背景图、高级模式和隐藏版本分类。
-- 背景音乐：支持本地音频播放、音量设置、停止，以及游戏启动后自动暂停。
-- 自定义主页：支持本地文本/Markdown，联网主页仅在显式允许后按纯文本加载。
-- 页面/功能隐藏：支持隐藏下载页和管理页，减少普通使用时的导航复杂度。
-- 联机页：提供轻量服务器地址列表和一键复制入口，避免引入额外联机依赖。
+- [ ] 按 [WinUI 3 功能迁移清单](docs/winui-migration.md) 将旧版能力逐项迁移到 WinUI 3。
+- [ ] 为 WinUI 3 窗口补充自动化 UI 冒烟测试。
+- [ ] 按真实发布流程补充更新清单生成与签名发布步骤。
+- [ ] 继续扩展崩溃日志分析规则和资源市场源。

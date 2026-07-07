@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="McGo.WinUI.Pages.LogsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+    <StackPanel Padding="24,16,24,16" Spacing="14">
+        <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="日志" />
+        <Button Content="读取最新日志" Click="LoadLatestLog" HorizontalAlignment="Left" />
+        <TextBox x:Name="LogOutputBox" MinHeight="420" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
+    </StackPanel>
+</Page>

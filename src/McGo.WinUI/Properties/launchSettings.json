@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "McGo.WinUI (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "McGo.WinUI (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

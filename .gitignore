@@ -10,6 +10,10 @@
 /.idea
 # Byte-compiled / optimized / DLL files
 __pycache__/
+bin/
+obj/
+**/bin/
+**/obj/
 *.py[cod]
 *$py.class
 

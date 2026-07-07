@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="McGo.WinUI.Pages.ManagePage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+    <ScrollViewer>
+        <StackPanel Padding="24,18,24,24" Spacing="16">
+            <StackPanel Spacing="4">
+                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="管理中心" />
+                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="将账号、环境和诊断入口集中在一起，和旧版 McGo 的管理页保持同一条动线。" TextWrapping="Wrap" />
+            </StackPanel>
+
+            <Grid ColumnSpacing="12" RowSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Border Padding="16" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                    <StackPanel Spacing="10">
+                        <SymbolIcon Symbol="Contact" />
+                        <TextBlock Text="账号与登录" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="管理当前账号，或新增离线 / Microsoft / 外置账号。" TextWrapping="Wrap" />
+                        <Button Content="进入账号" Click="OpenAccounts" HorizontalAlignment="Left" />
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Column="1" Padding="16" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                    <StackPanel Spacing="10">
+                        <SymbolIcon Symbol="Setting" />
+                        <TextBlock Text="环境与界面" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="游戏目录、Java、下载参数、主题、主页、音乐和更新。" TextWrapping="Wrap" />
+                        <Button Content="进入设置" Click="OpenSettings" HorizontalAlignment="Left" />
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Column="2" Padding="16" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                    <StackPanel Spacing="10">
+                        <SymbolIcon Symbol="Document" />
+                        <TextBlock Text="诊断日志" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="查看启动、下载、登录和联机日志，定位失败原因。" TextWrapping="Wrap" />
+                        <Button Content="查看日志" Click="OpenLogs" HorizontalAlignment="Left" />
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Row="1" Grid.ColumnSpan="2" Padding="16" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                    <StackPanel Spacing="10">
+                        <SymbolIcon Symbol="Library" />
+                        <TextBlock Text="内容管理" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="资源市场和整合包仍放在下载任务线里，适合导入 Mod、资源包、光影和胶囊。" TextWrapping="Wrap" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="资源市场" Click="OpenResources" />
+                            <Button Content="整合包" Click="OpenModpacks" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Row="1" Grid.Column="2" Padding="16" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                    <StackPanel Spacing="10">
+                        <SymbolIcon Symbol="Help" />
+                        <TextBlock Text="帮助与关于" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="常见问题、目录说明、版本信息和鸣谢。" TextWrapping="Wrap" />
+                        <Button Content="打开关于" Click="OpenAbout" HorizontalAlignment="Left" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="McGo.WinUI.Pages.AccountsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+    <ScrollViewer>
+        <StackPanel Padding="24,18,24,24" Spacing="16">
+            <StackPanel Spacing="4">
+                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="账号操作" />
+                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="先选择账号目的，再进入对应账号方式。" TextWrapping="Wrap" />
+            </StackPanel>
+
+            <Border Padding="16" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="选择账号任务" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="从账号管理目的开始，逐级缩小范围。" TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="管理当前账号" />
+                        <Button Content="离线账号" />
+                        <Button Content="Microsoft" />
+                        <Button Content="外置登录" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <Grid ColumnSpacing="14" RowSpacing="14">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="340" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <Border Padding="16" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="当前账号" FontSize="18" FontWeight="SemiBold" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="刷新账号列表" Click="RefreshAccounts" />
+                            <Button Content="刷新选中账号" Click="RefreshSelectedAccount" />
+                        </StackPanel>
+                        <ListView x:Name="AccountsList" MinHeight="360" SelectionChanged="AccountsList_SelectionChanged" />
+                        <Button Content="删除选中账号" Click="DeleteSelectedAccount" HorizontalAlignment="Left" />
+                    </StackPanel>
+                </Border>
+
+                <StackPanel Grid.Column="1" Spacing="14">
+                    <Border Padding="16" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                        <StackPanel Spacing="10">
+                            <TextBlock Text="离线账号" FontSize="18" FontWeight="SemiBold" />
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="OfflineNameBox" Header="用户名" />
+                                <TextBox x:Name="OfflineUuidBox" Grid.Column="1" Header="UUID（可留空）" />
+                                <Button Grid.Column="2" Content="添加/更新离线账号" Click="AddOfflineAccount" VerticalAlignment="Bottom" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Padding="16" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                        <StackPanel Spacing="10">
+                            <TextBlock Text="Microsoft 登录" FontSize="18" FontWeight="SemiBold" />
+                            <CheckBox x:Name="AutoOpenBrowserCheckBox" Content="生成登录链接后自动打开浏览器" />
+                            <StackPanel Spacing="8">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button Content="添加 Microsoft 账号" Click="StartMicrosoftLogin" />
+                                    <Button Content="生成登录链接" Click="GenerateMicrosoftLogin" />
+                                    <Button Content="复制登录链接" Click="CopyMicrosoftLogin" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button Content="打开浏览器" Click="OpenMicrosoftLogin" />
+                                    <Button Content="等待回调并登录" Click="WaitMicrosoftCallback" />
+                                </StackPanel>
+                            </StackPanel>
+                            <TextBox x:Name="MicrosoftOutputBox" MinHeight="82" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Padding="16" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                        <StackPanel Spacing="10">
+                            <TextBlock Text="外置登录" FontSize="18" FontWeight="SemiBold" />
+                            <Grid ColumnSpacing="12" RowSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <TextBox x:Name="ExternalServerBox" Header="认证服务器" />
+                                <TextBox x:Name="ExternalUsernameBox" Grid.Column="1" Header="用户名" />
+                                <PasswordBox x:Name="ExternalPasswordBox" Grid.Row="1" Header="密码" />
+                                <TextBox x:Name="AuthlibPathBox" Grid.Row="1" Grid.Column="1" Header="authlib-injector.jar 路径" />
+                            </Grid>
+                            <StackPanel Spacing="8">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button Content="规范化地址" Click="NormalizeExternalServer" />
+                                    <Button Content="测试服务器" Click="ProbeExternalServer" />
+                                    <Button Content="选择 Jar" Click="ChooseAuthlibInjector" />
+                                    <Button Content="自动下载" Click="DownloadAuthlibInjector" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button Content="刷新/验证当前外置账号" Click="RefreshSelectedAccount" />
+                                    <Button Content="登录并添加外置账号" Click="LoginExternalAccount" />
+                                    <Button Content="生成 JVM 参数" Click="PreviewAuthlibArgs" />
+                                </StackPanel>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Padding="16" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                        <StackPanel Spacing="10">
+                            <TextBlock Text="账号状态" FontSize="18" FontWeight="SemiBold" />
+                            <TextBox x:Name="OutputBox" MinHeight="120" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Grid>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

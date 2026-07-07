@@ -1,0 +1,457 @@
+using System.Diagnostics;
+using System.Text.Json.Nodes;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using McGo.Core.App;
+using McGo.Core.Authentication;
+using McGo.Core.Configuration;
+using Windows.ApplicationModel.DataTransfer;
+using Windows.Storage.Pickers;
+using WinRT.Interop;
+
+namespace McGo.WinUI.Pages;
+
+public sealed partial class AccountsPage : Page
+{
+    private readonly AppSettings _settings = new();
+    private readonly MicrosoftAuthenticator _microsoftAuthenticator = new(AppConstants.ClientId, AppConstants.RedirectUri);
+    private readonly OAuthCallbackServer _oauthCallbackServer = new();
+    private List<JsonObject> _accounts = [];
+    private readonly Dictionary<string, JsonObject> _accountsByLabel = [];
+    private string _lastMicrosoftLoginUrl = "";
+
+    public AccountsPage()
+    {
+        InitializeComponent();
+        Refresh();
+    }
+
+    private void RefreshAccounts(object sender, RoutedEventArgs e) => Refresh();
+
+    private void Refresh(string? selectedAccountId = null)
+    {
+        _settings.LoadConfig();
+        _accounts = _settings.LoadAccounts();
+        AutoOpenBrowserCheckBox.IsChecked = _settings.Config.GetBool("AUTH", "auto_open_browser", true);
+        _accountsByLabel.Clear();
+        var labels = new List<string>();
+        foreach (var account in _accounts)
+        {
+            var label = AccountLabel(account);
+            labels.Add(label);
+            _accountsByLabel[label] = account;
+        }
+
+        AccountsList.ItemsSource = labels;
+        if (!string.IsNullOrWhiteSpace(selectedAccountId))
+        {
+            AccountsList.SelectedItem = labels.FirstOrDefault(label => _accountsByLabel[label]["id"]?.GetValue<string>() == selectedAccountId);
+        }
+        else if (labels.Count > 0)
+        {
+            AccountsList.SelectedIndex = 0;
+        }
+
+        OutputBox.Text = labels.Count == 0 ? "当前没有账号。" : $"已加载 {labels.Count} 个账号。";
+    }
+
+    private void AccountsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (SelectedAccount() is not { } account)
+        {
+            return;
+        }
+
+        var type = account["type"]?.GetValue<string>() ?? "offline";
+        if (type == "offline")
+        {
+            OfflineNameBox.Text = account["username"]?.GetValue<string>() ?? account["display_name"]?.GetValue<string>() ?? "";
+            OfflineUuidBox.Text = account["uuid"]?.GetValue<string>() ?? "";
+        }
+        else if (type == "external")
+        {
+            ExternalServerBox.Text = account["auth_server"]?.GetValue<string>() ?? account["server"]?.GetValue<string>() ?? "";
+            ExternalUsernameBox.Text = account["username"]?.GetValue<string>() ?? account["display_name"]?.GetValue<string>() ?? "";
+            AuthlibPathBox.Text = account["authlib_injector_path"]?.GetValue<string>() ?? "";
+        }
+    }
+
+    private async void RefreshSelectedAccount(object sender, RoutedEventArgs e)
+    {
+        var account = SelectedAccount();
+        if (account is null)
+        {
+            OutputBox.Text = "请先选择账号。";
+            return;
+        }
+
+        try
+        {
+            var type = account["type"]?.GetValue<string>() ?? "offline";
+            if (type == "microsoft")
+            {
+                OutputBox.Text = "正在刷新 Microsoft 账号...";
+                var refreshToken = account["refresh_token"]?.GetValue<string>() ?? "";
+                var authenticator = new MicrosoftAuthenticator(AppConstants.ClientId, AppConstants.RedirectUri);
+                await authenticator.RefreshAccessTokenAsync(refreshToken);
+                var profile = await authenticator.GetMinecraftProfileAsync();
+                account["display_name"] = profile.Name;
+                account["username"] = profile.Name;
+                account["uuid"] = profile.Id;
+                account["access_token"] = authenticator.MinecraftAccessToken ?? "";
+                account["refresh_token"] = authenticator.RefreshToken ?? refreshToken;
+                UpsertAccount(account);
+                OutputBox.Text = $"Microsoft 账号已刷新：{profile.Name}";
+                return;
+            }
+
+            if (type == "external")
+            {
+                OutputBox.Text = "正在刷新外置账号...";
+                account["auth_server"] = ExternalAuthService.NormalizeAuthServer(ExternalServerBox.Text.Trim().Length > 0 ? ExternalServerBox.Text : account["auth_server"]?.GetValue<string>() ?? "");
+                account["authlib_injector_path"] = AuthlibPathBox.Text.Trim().Length > 0 ? AuthlibPathBox.Text.Trim() : account["authlib_injector_path"]?.GetValue<string>() ?? "";
+                var service = new ExternalAuthService();
+                var refreshed = await service.RefreshExternalAccountAsync(account);
+                refreshed["id"] = account["id"]?.GetValue<string>() ?? Guid.NewGuid().ToString();
+                refreshed["type"] = "external";
+                refreshed["auth_server"] = account["auth_server"]?.GetValue<string>() ?? refreshed["auth_server"]?.GetValue<string>() ?? "";
+                refreshed["authlib_injector_path"] = account["authlib_injector_path"]?.GetValue<string>() ?? "";
+                UpsertAccount(refreshed);
+                OutputBox.Text = "外置账号已刷新/验证。";
+                return;
+            }
+
+            OutputBox.Text = "离线账号无需刷新。";
+        }
+        catch (Exception exc)
+        {
+            OutputBox.Text = "刷新账号失败：" + exc.Message;
+        }
+    }
+
+    private void AddOfflineAccount(object sender, RoutedEventArgs e)
+    {
+        var username = OfflineNameBox.Text.Trim();
+        if (username.Length == 0)
+        {
+            OutputBox.Text = "离线账号需要用户名。";
+            return;
+        }
+
+        var existing = _accounts.FirstOrDefault(account => account["type"]?.GetValue<string>() == "offline" && account["username"]?.GetValue<string>() == username);
+        var account = existing ?? new JsonObject { ["id"] = Guid.NewGuid().ToString(), ["type"] = "offline" };
+        account["display_name"] = username;
+        account["username"] = username;
+        account["uuid"] = OfflineUuidBox.Text.Trim();
+        account["access_token"] = "";
+        account["refresh_token"] = "";
+        if (existing is null)
+        {
+            _accounts.Add(account);
+        }
+
+        _settings.SaveAccounts(_accounts);
+        Refresh(account["id"]?.GetValue<string>());
+        OutputBox.Text = "离线账号已保存。";
+    }
+
+    private async void DeleteSelectedAccount(object sender, RoutedEventArgs e)
+    {
+        var account = SelectedAccount();
+        if (account is null)
+        {
+            OutputBox.Text = "请先选择账号。";
+            return;
+        }
+
+        var dialog = new ContentDialog
+        {
+            Title = "删除账号",
+            Content = $"确定要删除 {AccountLabel(account)} 吗？",
+            PrimaryButtonText = "删除",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = XamlRoot,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return;
+        }
+
+        var id = account["id"]?.GetValue<string>() ?? "";
+        _accounts = _accounts.Where(item => item["id"]?.GetValue<string>() != id).ToList();
+        _settings.SaveAccounts(_accounts);
+        Refresh();
+        OutputBox.Text = "账号已删除。";
+    }
+
+    private void NormalizeExternalServer(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            ExternalServerBox.Text = ExternalAuthService.NormalizeAuthServer(ExternalServerBox.Text);
+            OutputBox.Text = "认证服务器地址已规范化。";
+        }
+        catch (Exception exc)
+        {
+            OutputBox.Text = exc.Message;
+        }
+    }
+
+    private async void ProbeExternalServer(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            OutputBox.Text = "正在探测认证服务器...";
+            var service = new ExternalAuthService();
+            var result = await service.ProbeExternalAuthServerAsync(ExternalServerBox.Text);
+            ExternalServerBox.Text = result.Server;
+            OutputBox.Text = result.Message;
+        }
+        catch (Exception exc)
+        {
+            OutputBox.Text = "认证服务器探测失败：" + exc.Message;
+        }
+    }
+
+    private async void DownloadAuthlibInjector(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            OutputBox.Text = "正在下载 authlib-injector...";
+            _settings.LoadConfig();
+            var gameDir = _settings.Config.Get("GAME", "directory", AppConstants.DefaultGameDirectory);
+            var targetDir = Path.Combine(gameDir, "authlib-injector");
+            var service = new ExternalAuthService();
+            var result = await service.DownloadAuthlibInjectorAsync(targetDir);
+            AuthlibPathBox.Text = result.Path;
+            OutputBox.Text = "authlib-injector 已下载：" + result.Path;
+        }
+        catch (Exception exc)
+        {
+            OutputBox.Text = "authlib-injector 下载失败：" + exc.Message;
+        }
+    }
+
+    private async void ChooseAuthlibInjector(object sender, RoutedEventArgs e)
+    {
+        var picker = new FileOpenPicker();
+        if (App.MainWindow is not null)
+        {
+            InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(App.MainWindow));
+        }
+
+        picker.FileTypeFilter.Add(".jar");
+        var file = await picker.PickSingleFileAsync();
+        if (file is not null)
+        {
+            AuthlibPathBox.Text = file.Path;
+            OutputBox.Text = "已选择 authlib-injector.jar：" + file.Path;
+        }
+    }
+
+    private async void StartMicrosoftLogin(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            GenerateMicrosoftLogin(sender, e);
+            SaveMicrosoftLoginSettings();
+            if (AutoOpenBrowserCheckBox.IsChecked == true)
+            {
+                Process.Start(new ProcessStartInfo(_lastMicrosoftLoginUrl) { UseShellExecute = true });
+                MicrosoftOutputBox.Text = LoginHelpText(_lastMicrosoftLoginUrl, "已打开浏览器。完成授权后保持此窗口等待回调。");
+            }
+            else
+            {
+                MicrosoftOutputBox.Text = LoginHelpText(_lastMicrosoftLoginUrl, "浏览器自动打开已关闭。请复制链接到外部浏览器完成授权。");
+            }
+
+            await WaitMicrosoftCallbackAsync();
+        }
+        catch (Exception exc)
+        {
+            MicrosoftOutputBox.Text = exc.Message;
+            OutputBox.Text = "Microsoft 登录失败。";
+        }
+    }
+
+    private void GenerateMicrosoftLogin(object sender, RoutedEventArgs e)
+    {
+        _lastMicrosoftLoginUrl = _microsoftAuthenticator.GetLoginUrl();
+        SaveMicrosoftLoginSettings();
+        MicrosoftOutputBox.Text = LoginHelpText(_lastMicrosoftLoginUrl, AutoOpenBrowserCheckBox.IsChecked == true
+            ? "可点击“开始登录”自动打开浏览器，也可以手动复制链接。"
+            : "自动打开浏览器已关闭，请复制或手动打开下面的链接。");
+        OutputBox.Text = "Microsoft 登录链接已生成。";
+    }
+
+    private void CopyMicrosoftLogin(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(_lastMicrosoftLoginUrl))
+        {
+            GenerateMicrosoftLogin(sender, e);
+        }
+
+        var package = new DataPackage();
+        package.SetText(_lastMicrosoftLoginUrl);
+        Clipboard.SetContent(package);
+        MicrosoftOutputBox.Text = LoginHelpText(_lastMicrosoftLoginUrl, "登录链接已复制到剪贴板。请在浏览器中打开并完成授权。");
+        OutputBox.Text = "登录链接已复制。";
+    }
+
+    private void OpenMicrosoftLogin(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(_lastMicrosoftLoginUrl))
+        {
+            GenerateMicrosoftLogin(sender, e);
+        }
+
+        Process.Start(new ProcessStartInfo(_lastMicrosoftLoginUrl) { UseShellExecute = true });
+        MicrosoftOutputBox.Text = LoginHelpText(_lastMicrosoftLoginUrl, "已打开浏览器。完成授权后点击“等待回调并登录”。");
+        OutputBox.Text = "已打开浏览器。";
+    }
+
+    private async void WaitMicrosoftCallback(object sender, RoutedEventArgs e)
+    {
+        await WaitMicrosoftCallbackAsync();
+    }
+
+    private async Task WaitMicrosoftCallbackAsync()
+    {
+        try
+        {
+            MicrosoftOutputBox.Text = "正在等待浏览器回调...";
+            var callback = await _oauthCallbackServer.WaitForCodeAsync(AppConstants.RedirectUri, TimeSpan.FromMinutes(5));
+            _microsoftAuthenticator.AuthorizationCode = callback.Code;
+            await _microsoftAuthenticator.AuthenticateAsync();
+            var profile = await _microsoftAuthenticator.GetMinecraftProfileAsync();
+            var account = new JsonObject
+            {
+                ["id"] = Guid.NewGuid().ToString(),
+                ["type"] = "microsoft",
+                ["display_name"] = profile.Name,
+                ["username"] = profile.Name,
+                ["uuid"] = profile.Id,
+                ["access_token"] = _microsoftAuthenticator.MinecraftAccessToken ?? "",
+                ["refresh_token"] = _microsoftAuthenticator.RefreshToken ?? "",
+            };
+            UpsertAccount(account, findDuplicate: true);
+            Refresh(account["id"]?.GetValue<string>());
+            MicrosoftOutputBox.Text = $"Microsoft 账号已添加：{profile.Name}";
+            OutputBox.Text = "Microsoft 登录完成。";
+        }
+        catch (Exception exc)
+        {
+            MicrosoftOutputBox.Text = exc.Message;
+            OutputBox.Text = "Microsoft 登录失败。";
+        }
+    }
+
+    private async void LoginExternalAccount(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            OutputBox.Text = "正在登录外置账号...";
+            var injectorPath = AuthlibPathBox.Text.Trim();
+            if (injectorPath.Length == 0 || !File.Exists(injectorPath))
+            {
+                OutputBox.Text = "请选择有效的 authlib-injector.jar。";
+                return;
+            }
+
+            var service = new ExternalAuthService();
+            var account = await service.AuthenticateExternalAccountAsync(ExternalServerBox.Text, ExternalUsernameBox.Text, ExternalPasswordBox.Password);
+            account["id"] = Guid.NewGuid().ToString();
+            account["type"] = "external";
+            account["auth_server"] = ExternalAuthService.NormalizeAuthServer(ExternalServerBox.Text);
+            account["authlib_injector_path"] = injectorPath;
+            UpsertAccount(account, findDuplicate: true);
+            Refresh(account["id"]?.GetValue<string>());
+            OutputBox.Text = "外置账号已添加。";
+        }
+        catch (Exception exc)
+        {
+            OutputBox.Text = "外置登录失败：" + exc.Message;
+        }
+    }
+
+    private void PreviewAuthlibArgs(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var args = ExternalAuthService.AuthlibInjectorArgs(new JsonObject
+            {
+                ["type"] = "external",
+                ["auth_server"] = ExternalServerBox.Text.Trim(),
+                ["authlib_injector_path"] = AuthlibPathBox.Text.Trim(),
+            });
+            OutputBox.Text = string.Join(" ", args);
+        }
+        catch (Exception exc)
+        {
+            OutputBox.Text = exc.Message;
+        }
+    }
+
+    private JsonObject? SelectedAccount()
+        => AccountsList.SelectedItem is string label && _accountsByLabel.TryGetValue(label, out var account) ? account : null;
+
+    private void UpsertAccount(JsonObject account, bool findDuplicate = false)
+    {
+        var id = account["id"]?.GetValue<string>() ?? "";
+        var index = id.Length > 0 ? _accounts.FindIndex(item => item["id"]?.GetValue<string>() == id) : -1;
+        if (index < 0 && findDuplicate)
+        {
+            var type = account["type"]?.GetValue<string>() ?? "";
+            var username = account["username"]?.GetValue<string>() ?? "";
+            var uuid = account["uuid"]?.GetValue<string>() ?? "";
+            index = _accounts.FindIndex(item =>
+                item["type"]?.GetValue<string>() == type &&
+                ((uuid.Length > 0 && item["uuid"]?.GetValue<string>() == uuid) ||
+                 (username.Length > 0 && item["username"]?.GetValue<string>() == username)));
+            if (index >= 0)
+            {
+                account["id"] = _accounts[index]["id"]?.GetValue<string>() ?? id;
+            }
+        }
+
+        if (index >= 0)
+        {
+            _accounts[index] = account;
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                account["id"] = Guid.NewGuid().ToString();
+            }
+
+            _accounts.Add(account);
+        }
+
+        _settings.SaveAccounts(_accounts);
+    }
+
+    private void SaveMicrosoftLoginSettings()
+    {
+        _settings.LoadConfig();
+        _settings.Config.Set("AUTH", "auto_open_browser", (AutoOpenBrowserCheckBox.IsChecked == true).ToString());
+        _settings.SaveConfig();
+    }
+
+    private static string LoginHelpText(string loginUrl, string hint)
+        => string.Join(Environment.NewLine, [
+            hint,
+            "回调地址：http://localhost:5000/login/callback",
+            "如果浏览器无法跳回启动器，请确认本机端口 5000 未被占用，然后重新生成链接。",
+            "",
+            loginUrl,
+        ]);
+
+    private static string AccountLabel(JsonObject account)
+    {
+        var type = account["type"]?.GetValue<string>() ?? "offline";
+        var name = account["display_name"]?.GetValue<string>() ?? account["username"]?.GetValue<string>() ?? "(未命名)";
+        return $"{name} ({type})";
+    }
+}

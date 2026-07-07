@@ -1,0 +1,591 @@
+<Window x:Class="McGo.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="McGo" Height="760" Width="1180" MinHeight="640" MinWidth="980"
+        Background="#111827" Foreground="#E5E7EB">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="224"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <Border Grid.Column="0" Background="#0B1220" Padding="18">
+            <DockPanel LastChildFill="True">
+                <StackPanel DockPanel.Dock="Top">
+                    <TextBlock Text="McGo" FontSize="28" FontWeight="SemiBold"/>
+                    <TextBlock Text=".NET Launcher" Foreground="#9CA3AF" Margin="0,4,0,24"/>
+                    <Button Content="首页" Tag="HomePanel" Style="{StaticResource NavButtonStyle}" Click="Navigate"/>
+                    <Button Content="启动" Tag="LaunchPanel" Style="{StaticResource NavButtonStyle}" Click="Navigate"/>
+                    <Button Content="下载" Tag="DownloadPanel" Style="{StaticResource NavButtonStyle}" Click="Navigate"/>
+                    <Button Content="账号" Tag="AccountsPanel" Style="{StaticResource NavButtonStyle}" Click="Navigate"/>
+                    <Button Content="资源" Tag="ResourcesPanel" Style="{StaticResource NavButtonStyle}" Click="Navigate"/>
+                    <Button Content="整合包" Tag="ModpacksPanel" Style="{StaticResource NavButtonStyle}" Click="Navigate"/>
+                    <Button Content="联机" Tag="OnlinePanel" Style="{StaticResource NavButtonStyle}" Click="Navigate"/>
+                    <Button Content="设置" Tag="SettingsPanel" Style="{StaticResource NavButtonStyle}" Click="Navigate"/>
+                    <Button Content="日志" Tag="LogsPanel" Style="{StaticResource NavButtonStyle}" Click="Navigate"/>
+                </StackPanel>
+                <TextBlock DockPanel.Dock="Bottom" x:Name="StatusText" Foreground="#9CA3AF" TextWrapping="Wrap"/>
+            </DockPanel>
+        </Border>
+
+        <Grid Grid.Column="1" Margin="28">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <DockPanel Grid.Row="0" Margin="0,0,0,18">
+                <StackPanel DockPanel.Dock="Left">
+                    <TextBlock x:Name="PageTitle" Text="首页" FontSize="30" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="PageSubtitle" Foreground="#9CA3AF" Margin="0,5,0,0"/>
+                </StackPanel>
+                <Button DockPanel.Dock="Right" Width="132" Height="38" Content="刷新状态" Click="RefreshAll"/>
+            </DockPanel>
+
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                <Grid>
+                    <StackPanel x:Name="HomePanel">
+                        <UniformGrid Columns="4" Margin="0,0,0,16">
+                            <Border Style="{StaticResource CardStyle}" Margin="0,0,12,0">
+                                <StackPanel>
+                                    <TextBlock Text="本地版本" Foreground="#9CA3AF"/>
+                                    <TextBlock x:Name="HomeVersionCountText" Text="0" FontSize="28" FontWeight="SemiBold"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource CardStyle}" Margin="0,0,12,0">
+                                <StackPanel>
+                                    <TextBlock Text="账号" Foreground="#9CA3AF"/>
+                                    <TextBlock x:Name="HomeAccountCountText" Text="0" FontSize="28" FontWeight="SemiBold"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource CardStyle}" Margin="0,0,12,0">
+                                <StackPanel>
+                                    <TextBlock Text="推荐内存" Foreground="#9CA3AF"/>
+                                    <TextBlock x:Name="HomeMemoryText" Text="4096 MB" FontSize="28" FontWeight="SemiBold"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource CardStyle}">
+                                <StackPanel>
+                                    <TextBlock Text="P2P 房间" Foreground="#9CA3AF"/>
+                                    <TextBlock x:Name="HomeRoomText" Text="未设置" FontSize="24" FontWeight="SemiBold"/>
+                                </StackPanel>
+                            </Border>
+                        </UniformGrid>
+                        <Border Style="{StaticResource CardStyle}" Margin="0,0,0,16">
+                            <StackPanel>
+                                <TextBlock Text="启动器状态" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                                <TextBlock x:Name="HomeSummaryText" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel>
+                                <TextBlock Text="自定义主页" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                                <TextBox x:Name="HomeCustomText" MinHeight="180" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <StackPanel x:Name="LaunchPanel" Visibility="Collapsed">
+                        <Border Style="{StaticResource CardStyle}" Margin="0,0,0,16">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="2*"/>
+                                    <ColumnDefinition Width="1.2*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="游戏目录" Foreground="#9CA3AF"/>
+                                    <TextBox x:Name="GameDirectoryBox" Margin="0,6,14,0"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="账号" Foreground="#9CA3AF"/>
+                                    <ComboBox x:Name="AccountComboBox" Margin="0,6,14,0"/>
+                                </StackPanel>
+                                <Button Grid.Column="2" Width="132" Height="36" VerticalAlignment="Bottom" Content="保存设置" Click="SaveSettings"/>
+                            </Grid>
+                        </Border>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="1.05*"/>
+                                <ColumnDefinition Width="1*"/>
+                            </Grid.ColumnDefinitions>
+                            <Border Style="{StaticResource CardStyle}" Margin="0,0,16,0">
+                                <DockPanel>
+                                    <Button DockPanel.Dock="Bottom" Content="刷新本地版本" Height="36" Margin="0,12,0,0" Click="RefreshVersions"/>
+                                    <TextBlock DockPanel.Dock="Top" Text="本地版本" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12"/>
+                                    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+                                        <TextBlock Text="分类" Foreground="#9CA3AF"/>
+                                        <ComboBox x:Name="VersionCategoryBox" Margin="0,6,0,0" SelectionChanged="VersionCategoryChanged">
+                                            <ComboBoxItem Content="全部版本"/>
+                                            <ComboBoxItem Content="收藏"/>
+                                            <ComboBoxItem Content="原版"/>
+                                            <ComboBoxItem Content="仅 OptiFine"/>
+                                            <ComboBoxItem Content="可安装 Mod"/>
+                                            <ComboBoxItem Content="隐藏"/>
+                                        </ComboBox>
+                                    </StackPanel>
+                                    <ListBox x:Name="VersionsList" Style="{StaticResource DarkListBoxStyle}" SelectionChanged="VersionsList_SelectionChanged"/>
+                                </DockPanel>
+                            </Border>
+                            <Border Grid.Column="1" Style="{StaticResource CardStyle}">
+                                <StackPanel>
+                                    <TextBlock Text="启动参数" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition/>
+                                            <ColumnDefinition/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                            <TextBlock Text="Java 路径" Foreground="#9CA3AF"/>
+                                            <TextBox x:Name="JavaPathBox" Margin="0,6,0,8" Text="java"/>
+                                            <WrapPanel Margin="0,0,0,12">
+                                                <Button Content="检测 Java" Width="88" Margin="0,0,8,0" Click="CheckJavaRuntime"/>
+                                                <Button Content="下载推荐 Java" Width="120" Click="DownloadRecommendedJava"/>
+                                            </WrapPanel>
+                                            <TextBlock Text="别名" Foreground="#9CA3AF"/>
+                                            <TextBox x:Name="VersionAliasBox" Margin="0,6,0,12"/>
+                                            <TextBlock Text="Quick Play 世界" Foreground="#9CA3AF"/>
+                                            <TextBox x:Name="QuickPlayBox" Margin="0,6,0,12"/>
+                                            <TextBlock Text="额外 JVM 参数" Foreground="#9CA3AF"/>
+                                            <TextBox x:Name="ExtraJvmArgsBox" Margin="0,6,0,12"/>
+                                            <TextBlock Text="额外游戏参数" Foreground="#9CA3AF"/>
+                                            <TextBox x:Name="ExtraGameArgsBox" Margin="0,6,0,12"/>
+                                            <TextBlock Text="启动前命令" Foreground="#9CA3AF"/>
+                                            <TextBox x:Name="PreLaunchCommandBox" Margin="0,6,0,12"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                                            <TextBlock Text="最大内存 MB" Foreground="#9CA3AF"/>
+                                            <TextBox x:Name="MemoryBox" Margin="0,6,0,12"/>
+                                            <TextBlock Text="最小内存 MB" Foreground="#9CA3AF"/>
+                                            <TextBox x:Name="MinMemoryBox" Margin="0,6,0,12"/>
+                                            <TextBlock Text="窗口宽度 / 高度" Foreground="#9CA3AF"/>
+                                            <UniformGrid Columns="2" Margin="0,6,0,12">
+                                                <TextBox x:Name="WindowWidthBox" Margin="0,0,4,0"/>
+                                                <TextBox x:Name="WindowHeightBox" Margin="4,0,0,0"/>
+                                            </UniformGrid>
+                                            <TextBlock Text="GC 策略" Foreground="#9CA3AF"/>
+                                            <ComboBox x:Name="GcStrategyBox" Margin="0,6,0,12">
+                                                <ComboBoxItem Content="G1GC"/>
+                                                <ComboBoxItem Content="ZGC"/>
+                                                <ComboBoxItem Content="Shenandoah"/>
+                                                <ComboBoxItem Content="默认"/>
+                                            </ComboBox>
+                                            <TextBlock Text="自定义运行目录" Foreground="#9CA3AF"/>
+                                            <TextBox x:Name="RuntimeDirectoryBox" Margin="0,6,0,12"/>
+                                            <TextBlock Text="自定义 Mods 目录" Foreground="#9CA3AF"/>
+                                            <TextBox x:Name="CustomModsDirectoryBox" Margin="0,6,0,12"/>
+                                            <CheckBox x:Name="UseIsolationCheckBox" Content="版本独立目录" Margin="0,8,0,12"/>
+                                            <CheckBox x:Name="VersionFavoriteCheckBox" Content="收藏当前版本" Margin="0,0,0,8"/>
+                                            <CheckBox x:Name="VersionHiddenCheckBox" Content="隐藏当前版本" Margin="0,0,0,12"/>
+                                        </StackPanel>
+                                    </Grid>
+                                    <UniformGrid Columns="4" Margin="0,0,0,12">
+                                        <Button Content="保存版本设置" Margin="0,0,8,0" Click="SaveVersionSettings"/>
+                                        <Button Content="生成命令" Margin="4,0,4,0" Click="PreviewCommand"/>
+                                        <Button Content="补全/校验文件" Margin="4,0,4,0" Click="RepairSelectedVersion"/>
+                                        <Button Content="启动游戏" Margin="8,0,0,0" Click="LaunchGame"/>
+                                    </UniformGrid>
+                                    <WrapPanel Margin="0,0,0,12">
+                                        <Button Content="版本文件夹" Width="92" Margin="0,0,8,8" Click="OpenVersionFolder"/>
+                                        <Button Content="存档" Width="64" Margin="0,0,8,8" Click="OpenSavesFolder"/>
+                                        <Button Content="Mods" Width="64" Margin="0,0,8,8" Click="OpenModsFolder"/>
+                                        <Button Content="资源包" Width="72" Margin="0,0,8,8" Click="OpenResourcepacksFolder"/>
+                                        <Button Content="光影" Width="64" Margin="0,0,8,8" Click="OpenShaderpacksFolder"/>
+                                        <Button Content="截图" Width="64" Margin="0,0,8,8" Click="OpenScreenshotsFolder"/>
+                                        <Button Content="导出启动脚本" Width="116" Margin="0,0,8,8" Click="ExportLaunchScript"/>
+                                        <Button Content="删除版本" Width="88" Margin="0,0,8,8" Click="DeleteSelectedVersion"/>
+                                    </WrapPanel>
+                                    <TextBox x:Name="CommandPreviewBox" MinHeight="180" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True"/>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                    </StackPanel>
+
+                    <StackPanel x:Name="DownloadPanel" Visibility="Collapsed">
+                        <Border Style="{StaticResource CardStyle}" Margin="0,0,0,16">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition/>
+                                    <ColumnDefinition/>
+                                    <ColumnDefinition/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,10,0">
+                                    <TextBlock Text="版本类型" Foreground="#9CA3AF"/>
+                                    <ComboBox x:Name="VersionTypeBox" Margin="0,6,0,0">
+                                        <ComboBoxItem Content="release"/>
+                                        <ComboBoxItem Content="snapshot"/>
+                                        <ComboBoxItem Content="old_beta"/>
+                                        <ComboBoxItem Content="old_alpha"/>
+                                    </ComboBox>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Margin="0,0,10,0">
+                                    <TextBlock Text="镜像源" Foreground="#9CA3AF"/>
+                                    <ComboBox x:Name="MirrorBox" Margin="0,6,0,0">
+                                        <ComboBoxItem Content="official"/>
+                                        <ComboBoxItem Content="bmclapi"/>
+                                    </ComboBox>
+                                </StackPanel>
+                                <StackPanel Grid.Column="2" Margin="0,0,10,0">
+                                    <TextBlock Text="远程版本" Foreground="#9CA3AF"/>
+                                    <ComboBox x:Name="RemoteVersionsBox" Margin="0,6,0,0"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="3" VerticalAlignment="Bottom">
+                                    <Button Width="132" Content="刷新远程" Click="RefreshRemoteVersions"/>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel>
+                                <WrapPanel Margin="0,0,0,12">
+                                    <CheckBox x:Name="IncludeAssetsCheckBox" Content="包含 assets" IsChecked="True" Margin="0,0,18,0"/>
+                                    <CheckBox x:Name="InstallFabricCheckBox" Content="下载后安装 Fabric" Margin="0,0,18,0"/>
+                                    <CheckBox x:Name="InstallForgeCheckBox" Content="安装 Forge" Margin="0,0,18,0"/>
+                                    <CheckBox x:Name="InstallNeoForgeCheckBox" Content="安装 NeoForge" Margin="0,0,18,0"/>
+                                    <CheckBox x:Name="InstallFabricApiCheckBox" Content="安装 Fabric API" Margin="0,0,18,0"/>
+                                    <CheckBox x:Name="InstallOptifineCheckBox" Content="安装 OptiFine"/>
+                                </WrapPanel>
+                                <Button Width="160" HorizontalAlignment="Left" Content="下载所选版本" Click="DownloadSelectedVersion"/>
+                                <TextBox x:Name="DownloadLogBox" Margin="0,12,0,0" MinHeight="260" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <StackPanel x:Name="AccountsPanel" Visibility="Collapsed">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="1*"/>
+                                <ColumnDefinition Width="1.15*"/>
+                            </Grid.ColumnDefinitions>
+                            <Border Style="{StaticResource CardStyle}" Margin="0,0,16,0">
+                                <DockPanel>
+                                    <Button DockPanel.Dock="Bottom" Content="刷新账号" Height="36" Margin="0,12,0,0" Click="RefreshAccounts"/>
+                                    <TextBlock DockPanel.Dock="Top" Text="账号列表" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12"/>
+                                    <ListBox x:Name="AccountsList" Style="{StaticResource DarkListBoxStyle}"/>
+                                </DockPanel>
+                            </Border>
+                            <StackPanel Grid.Column="1">
+                                <Border Style="{StaticResource CardStyle}" Margin="0,0,0,16">
+                                    <StackPanel>
+                                        <TextBlock Text="离线账号" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12"/>
+                                        <TextBlock Text="用户名" Foreground="#9CA3AF"/>
+                                        <TextBox x:Name="OfflineNameBox" Margin="0,6,0,10"/>
+                                        <TextBlock Text="UUID（可空）" Foreground="#9CA3AF"/>
+                                        <TextBox x:Name="OfflineUuidBox" Margin="0,6,0,12"/>
+                                        <Button Width="148" HorizontalAlignment="Left" Content="添加/更新" Click="AddOfflineAccount"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Style="{StaticResource CardStyle}" Margin="0,0,0,16">
+                                    <StackPanel>
+                                        <TextBlock Text="Microsoft 账号" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12"/>
+                                        <WrapPanel Margin="0,0,0,12">
+                                            <Button Content="生成登录链接" Width="116" Margin="0,0,8,0" Click="GenerateMicrosoftLogin"/>
+                                            <Button Content="等待回调并登录" Width="140" Click="WaitMicrosoftCallback"/>
+                                        </WrapPanel>
+                                        <TextBox x:Name="MicrosoftOutputBox" MinHeight="72" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Style="{StaticResource CardStyle}">
+                                    <StackPanel>
+                                        <TextBlock Text="外置登录" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12"/>
+                                        <TextBlock Text="认证服务器" Foreground="#9CA3AF"/>
+                                        <TextBox x:Name="ExternalServerBox" Margin="0,6,0,10"/>
+                                        <TextBlock Text="用户名" Foreground="#9CA3AF"/>
+                                        <TextBox x:Name="ExternalUsernameBox" Margin="0,6,0,10"/>
+                                        <TextBlock Text="密码" Foreground="#9CA3AF"/>
+                                        <TextBox x:Name="ExternalPasswordBox" Margin="0,6,0,10"/>
+                                        <TextBlock Text="authlib-injector.jar" Foreground="#9CA3AF"/>
+                                        <TextBox x:Name="AuthlibPathBox" Margin="0,6,0,12"/>
+                                        <WrapPanel>
+                                            <Button Content="规范化地址" Width="116" Margin="0,0,8,8" Click="NormalizeExternalServer"/>
+                                            <Button Content="测试服务器" Width="104" Margin="0,0,8,8" Click="ProbeExternalServer"/>
+                                            <Button Content="选择 Jar" Width="88" Margin="0,0,8,8" Click="ChooseAuthlibInjector"/>
+                                            <Button Content="自动下载" Width="92" Margin="0,0,8,8" Click="DownloadAuthlibInjector"/>
+                                            <Button Content="登录并添加" Width="116" Margin="0,0,8,8" Click="LoginExternalAccount"/>
+                                            <Button Content="生成 JVM 参数" Width="128" Margin="0,0,8,8" Click="PreviewAuthlibArgs"/>
+                                        </WrapPanel>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+
+                    <StackPanel x:Name="ResourcesPanel" Visibility="Collapsed">
+                        <Border Style="{StaticResource CardStyle}" Margin="0,0,0,16">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="1.4*"/>
+                                    <ColumnDefinition/>
+                                    <ColumnDefinition/>
+                                    <ColumnDefinition/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,10,0">
+                                    <TextBlock Text="搜索" Foreground="#9CA3AF"/>
+                                    <TextBox x:Name="ResourceQueryBox" Margin="0,6,0,0"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Margin="0,0,10,0">
+                                    <TextBlock Text="类型" Foreground="#9CA3AF"/>
+                                    <ComboBox x:Name="ResourceTypeBox" Margin="0,6,0,0">
+                                        <ComboBoxItem Content="mod"/>
+                                        <ComboBoxItem Content="resourcepack"/>
+                                        <ComboBoxItem Content="shader"/>
+                                    </ComboBox>
+                                </StackPanel>
+                                <StackPanel Grid.Column="2" Margin="0,0,10,0">
+                                    <TextBlock Text="游戏版本" Foreground="#9CA3AF"/>
+                                    <TextBox x:Name="ResourceGameVersionBox" Margin="0,6,0,0"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="3" Margin="0,0,10,0">
+                                    <TextBlock Text="加载器" Foreground="#9CA3AF"/>
+                                    <TextBox x:Name="ResourceLoaderBox" Margin="0,6,0,0"/>
+                                </StackPanel>
+                                <Button Grid.Column="4" Width="112" VerticalAlignment="Bottom" Content="搜索" Click="SearchResources"/>
+                            </Grid>
+                        </Border>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition/>
+                                <ColumnDefinition/>
+                            </Grid.ColumnDefinitions>
+                            <Border Style="{StaticResource CardStyle}" Margin="0,0,16,0">
+                                <DockPanel>
+                                    <StackPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
+                                        <CheckBox x:Name="InstallResourceDependenciesCheckBox" Content="安装必需依赖" IsChecked="True" Margin="0,0,0,8"/>
+                                        <Button Content="安装选中资源" Height="36" Click="InstallSelectedResource"/>
+                                    </StackPanel>
+                                    <TextBlock DockPanel.Dock="Top" Text="搜索结果" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12"/>
+                                    <ListBox x:Name="ResourceResultsList" Style="{StaticResource DarkListBoxStyle}"/>
+                                </DockPanel>
+                            </Border>
+                            <Border Grid.Column="1" Style="{StaticResource CardStyle}">
+                                <DockPanel>
+                                    <StackPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
+                                        <TextBlock Text="依赖检查" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                        <TextBlock Text="Mods 目录" Foreground="#9CA3AF"/>
+                                        <TextBox x:Name="ModsDirBox" Margin="0,6,0,12"/>
+                                        <WrapPanel>
+                                            <Button Width="108" Margin="0,0,8,8" Content="解析依赖" Click="ResolveDependencies"/>
+                                            <Button Width="116" Margin="0,0,8,8" Content="安装缺失前置" Click="InstallMissingDependencies"/>
+                                        </WrapPanel>
+                                        <TextBox x:Name="ResourceOutputBox" Margin="0,4,0,0" MinHeight="150" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True"/>
+                                    </StackPanel>
+                                    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+                                        <TextBlock Text="本地资源" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12"/>
+                                        <WrapPanel>
+                                            <Button Width="92" Margin="0,0,8,8" Content="刷新本地" Click="RefreshLocalResources"/>
+                                            <Button Width="92" Margin="0,0,8,8" Content="查看详情" Click="ShowLocalResourceDetail"/>
+                                            <Button Width="72" Margin="0,0,8,8" Content="启用" Click="EnableLocalResource"/>
+                                            <Button Width="72" Margin="0,0,8,8" Content="禁用" Click="DisableLocalResource"/>
+                                            <Button Width="72" Margin="0,0,8,8" Content="删除" Click="DeleteLocalResource"/>
+                                        </WrapPanel>
+                                    </StackPanel>
+                                    <ListBox x:Name="LocalResourcesList" Style="{StaticResource DarkListBoxStyle}" MinHeight="160"/>
+                                </DockPanel>
+                            </Border>
+                        </Grid>
+                    </StackPanel>
+
+                    <StackPanel x:Name="ModpacksPanel" Visibility="Collapsed">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition/>
+                                <ColumnDefinition/>
+                            </Grid.ColumnDefinitions>
+                            <Border Style="{StaticResource CardStyle}" Margin="0,0,16,0">
+                                <StackPanel>
+                                    <TextBlock Text="导出整合包" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12"/>
+                                    <TextBlock Text="版本" Foreground="#9CA3AF"/>
+                                    <ComboBox x:Name="PackVersionBox" Margin="0,6,0,10"/>
+                                    <TextBlock Text="目标文件" Foreground="#9CA3AF"/>
+                                    <TextBox x:Name="PackTargetBox" Margin="0,6,0,10"/>
+                                    <TextBlock Text="格式" Foreground="#9CA3AF"/>
+                                    <ComboBox x:Name="PackFormatBox" Margin="0,6,0,12">
+                                        <ComboBoxItem Content="modrinth"/>
+                                        <ComboBoxItem Content="curseforge"/>
+                                    </ComboBox>
+                                    <Button Width="120" HorizontalAlignment="Left" Content="导出" Click="ExportModpack"/>
+                                    <TextBlock Text="导入整合包" FontSize="18" FontWeight="SemiBold" Margin="0,18,0,12"/>
+                                    <TextBlock Text="整合包文件" Foreground="#9CA3AF"/>
+                                    <TextBox x:Name="ImportPackPathBox" Margin="0,6,0,10"/>
+                                    <TextBlock Text="目标版本 ID（可空）" Foreground="#9CA3AF"/>
+                                    <TextBox x:Name="ImportTargetVersionBox" Margin="0,6,0,12"/>
+                                    <WrapPanel>
+                                        <Button Width="92" Margin="0,0,8,0" Content="选择文件" Click="ChooseModpackFile"/>
+                                        <Button Width="92" Content="导入" Click="ImportModpack"/>
+                                    </WrapPanel>
+                                    <TextBlock Text="开黑胶囊" FontSize="18" FontWeight="SemiBold" Margin="0,18,0,12"/>
+                                    <TextBlock Text="胶囊文件" Foreground="#9CA3AF"/>
+                                    <TextBox x:Name="CapsulePathBox" Margin="0,6,0,10"/>
+                                    <TextBlock Text="目标版本 ID（导入可空）" Foreground="#9CA3AF"/>
+                                    <TextBox x:Name="CapsuleTargetVersionBox" Margin="0,6,0,12"/>
+                                    <WrapPanel>
+                                        <Button Width="92" Margin="0,0,8,0" Content="选择胶囊" Click="ChooseCapsuleFile"/>
+                                        <Button Width="92" Margin="0,0,8,0" Content="导入胶囊" Click="ImportCapsule"/>
+                                        <Button Width="92" Content="导出胶囊" Click="ExportCapsule"/>
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Border>
+                            <Border Grid.Column="1" Style="{StaticResource CardStyle}">
+                                <StackPanel>
+                                    <TextBlock Text="崩溃分析" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12"/>
+                                    <TextBlock Text="运行目录" Foreground="#9CA3AF"/>
+                                    <TextBox x:Name="CrashRuntimeDirBox" Margin="0,6,0,12"/>
+                                    <Button Width="120" HorizontalAlignment="Left" Content="分析日志" Click="AnalyzeCrashLogs"/>
+                                    <TextBox x:Name="PackOutputBox" Margin="0,12,0,0" MinHeight="230" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True"/>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                    </StackPanel>
+
+                    <StackPanel x:Name="OnlinePanel" Visibility="Collapsed">
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel>
+                                <TextBlock Text="常用服务器" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12"/>
+                                <Grid Margin="0,0,0,18">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition/>
+                                        <ColumnDefinition Width="220"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,12,0">
+                                        <TextBlock Text="每行一个地址，可在 | 后添加备注" Foreground="#9CA3AF"/>
+                                        <TextBox x:Name="ServerListBox" Margin="0,6,0,10" MinHeight="86" TextWrapping="Wrap" AcceptsReturn="True"/>
+                                        <WrapPanel>
+                                            <Button Width="116" Margin="0,0,8,0" Content="保存服务器" Click="SaveServers"/>
+                                            <Button Width="132" Content="复制首个服务器" Click="CopyFirstServer"/>
+                                        </WrapPanel>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="NAT 检测" Foreground="#9CA3AF"/>
+                                        <Button Width="120" Margin="0,6,0,10" HorizontalAlignment="Left" Content="检测 NAT" Click="DetectNat"/>
+                                        <TextBox x:Name="NatOutputBox" MinHeight="86" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True"/>
+                                    </StackPanel>
+                                </Grid>
+                                <TextBlock Text="P2P 联机" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12"/>
+                                <UniformGrid Columns="3">
+                                    <StackPanel Margin="0,0,10,10">
+                                        <TextBlock Text="中继地址" Foreground="#9CA3AF"/>
+                                        <TextBox x:Name="RelayHostBox" Margin="0,6,0,0"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,10,10">
+                                        <TextBlock Text="中继端口" Foreground="#9CA3AF"/>
+                                        <TextBox x:Name="RelayPortBox" Margin="0,6,0,0"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,0,10">
+                                        <TextBlock Text="房间号" Foreground="#9CA3AF"/>
+                                        <TextBox x:Name="RoomBox" Margin="0,6,0,0"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,10,10">
+                                        <TextBlock Text="口令" Foreground="#9CA3AF"/>
+                                        <TextBox x:Name="SecretBox" Margin="0,6,0,0"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,10,10">
+                                        <TextBlock Text="房主 LAN 端口" Foreground="#9CA3AF"/>
+                                        <TextBox x:Name="HostPortBox" Margin="0,6,0,0"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,0,10">
+                                        <TextBlock Text="加入者本地端口" Foreground="#9CA3AF"/>
+                                        <TextBox x:Name="JoinPortBox" Margin="0,6,0,0"/>
+                                    </StackPanel>
+                                </UniformGrid>
+                                <CheckBox x:Name="UdpEnabledBox" Content="UDP 打洞优先，失败后自动回退 TCP 中继" Margin="0,0,0,12"/>
+                                <WrapPanel Margin="0,2,0,12">
+                                    <Button Content="生成房间号" Width="116" Margin="0,0,8,0" Click="GenerateRoom"/>
+                                    <Button Content="挑选本地端口" Width="128" Margin="0,0,8,0" Click="PickJoinPort"/>
+                                    <Button Content="保存联机设置" Width="128" Margin="0,0,8,0" Click="SaveOnlineSettings"/>
+                                    <Button Content="生成邀请信息" Width="128" Margin="0,0,8,0" Click="BuildInviteText"/>
+                                    <Button Content="作为房主启动" Width="128" Margin="0,0,8,0" Click="StartP2PHost"/>
+                                    <Button Content="作为加入者启动" Width="136" Margin="0,0,8,0" Click="StartP2PGuest"/>
+                                    <Button Content="停止隧道" Width="100" Click="StopP2P"/>
+                                </WrapPanel>
+                                <TextBox x:Name="OnlineOutputBox" MinHeight="210" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <StackPanel x:Name="SettingsPanel" Visibility="Collapsed">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition/>
+                                <ColumnDefinition/>
+                            </Grid.ColumnDefinitions>
+                            <Border Style="{StaticResource CardStyle}" Margin="0,0,16,0">
+                                <StackPanel>
+                                    <TextBlock Text="下载设置" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12"/>
+                                    <TextBlock Text="核心线程" Foreground="#9CA3AF"/>
+                                    <TextBox x:Name="CoreThreadsBox" Margin="0,6,0,10"/>
+                                    <TextBlock Text="资源线程" Foreground="#9CA3AF"/>
+                                    <TextBox x:Name="AssetThreadsBox" Margin="0,6,0,10"/>
+                                    <TextBlock Text="限速 KB/s" Foreground="#9CA3AF"/>
+                                    <TextBox x:Name="SpeedLimitBox" Margin="0,6,0,10"/>
+                                    <TextBlock Text="缓存策略" Foreground="#9CA3AF"/>
+                                    <ComboBox x:Name="CacheStrategyBox" Margin="0,6,0,12">
+                                        <ComboBoxItem Content="reuse"/>
+                                        <ComboBoxItem Content="network_only"/>
+                                    </ComboBox>
+                                    <TextBlock Text="Modrinth API" Foreground="#9CA3AF"/>
+                                    <TextBox x:Name="ModrinthApiBaseBox" Margin="0,6,0,10"/>
+                                    <TextBlock Text="Modrinth CDN" Foreground="#9CA3AF"/>
+                                    <TextBox x:Name="ModrinthCdnBaseBox" Margin="0,6,0,12"/>
+                                    <Button Width="120" HorizontalAlignment="Left" Content="保存下载设置" Click="SaveDownloadSettings"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Grid.Column="1" Style="{StaticResource CardStyle}">
+                                <StackPanel>
+                                    <TextBlock Text="更新与外观" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12"/>
+                                    <TextBlock Text="主题" Foreground="#9CA3AF"/>
+                                    <ComboBox x:Name="ThemeBox" Margin="0,6,0,10">
+                                        <ComboBoxItem Content="dark"/>
+                                        <ComboBoxItem Content="light"/>
+                                        <ComboBoxItem Content="auto"/>
+                                    </ComboBox>
+                                    <TextBlock Text="更新清单 URL" Foreground="#9CA3AF"/>
+                                    <TextBox x:Name="UpdateManifestBox" Margin="0,6,0,8"/>
+                                    <CheckBox x:Name="UpdateAutoCheckBox" Content="启动时自动检查更新" Margin="0,0,0,8"/>
+                                    <WrapPanel Margin="0,0,0,12">
+                                        <Button Width="96" Margin="0,0,8,0" Content="检查更新" Click="CheckForUpdates"/>
+                                        <Button Width="96" Margin="0,0,8,0" Content="下载更新" Click="DownloadUpdate"/>
+                                        <Button Width="96" Content="应用更新" Click="ApplyDownloadedUpdate"/>
+                                    </WrapPanel>
+                                    <TextBox x:Name="UpdateOutputBox" Margin="0,12,0,16" MinHeight="110" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True"/>
+                                    <TextBlock Text="自定义主页" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12"/>
+                                    <TextBlock Text="主页内容" Foreground="#9CA3AF"/>
+                                    <TextBox x:Name="HomeContentSourceBox" Margin="0,6,0,8"/>
+                                    <CheckBox x:Name="HomeNetworkCheckBox" Content="允许联网主页纯文本" Margin="0,0,0,8"/>
+                                    <WrapPanel Margin="0,0,0,16">
+                                        <Button Width="104" Margin="0,0,8,0" Content="选择主页文件" Click="ChooseHomeContentFile"/>
+                                        <Button Width="92" Content="刷新主页" Click="RefreshHomeContent"/>
+                                    </WrapPanel>
+                                    <TextBlock Text="背景音乐" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12"/>
+                                    <CheckBox x:Name="MusicEnabledBox" Content="启用背景音乐" Margin="0,0,0,8"/>
+                                    <TextBlock Text="音乐文件" Foreground="#9CA3AF"/>
+                                    <TextBox x:Name="MusicPathBox" Margin="0,6,0,10"/>
+                                    <TextBlock Text="音量 0-100" Foreground="#9CA3AF"/>
+                                    <TextBox x:Name="MusicVolumeBox" Margin="0,6,0,8"/>
+                                    <CheckBox x:Name="MusicPauseOnLaunchBox" Content="游戏启动后暂停音乐" Margin="0,0,0,12"/>
+                                    <WrapPanel>
+                                        <Button Width="92" Margin="0,0,8,0" Content="选择音乐" Click="ChooseMusicFile"/>
+                                        <Button Width="92" Margin="0,0,8,0" Content="播放/应用" Click="ApplyMusicSettings"/>
+                                        <Button Width="92" Content="停止音乐" Click="StopMusic"/>
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                    </StackPanel>
+
+                    <StackPanel x:Name="LogsPanel" Visibility="Collapsed">
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel>
+                                <WrapPanel Margin="0,0,0,12">
+                                    <Button Content="读取日志" Width="100" Margin="0,0,8,0" Click="LoadLogs"/>
+                                    <Button Content="打开 logs 目录" Width="120" Click="OpenLogsDirectory"/>
+                                </WrapPanel>
+                                <TextBox x:Name="LogOutputBox" MinHeight="520" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </Grid>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</Window>

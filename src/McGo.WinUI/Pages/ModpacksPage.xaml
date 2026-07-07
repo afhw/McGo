@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="McGo.WinUI.Pages.ModpacksPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+    <ScrollViewer>
+        <StackPanel Padding="24,16,24,16" Spacing="14">
+            <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="整合包" />
+            <Grid ColumnSpacing="14">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Spacing="12">
+                    <TextBlock Text="整合包导出" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Text="导出版本" />
+                    <ComboBox x:Name="PackVersionBox" />
+                    <TextBlock Text="目标文件" />
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="PackTargetBox" />
+                        <Button Grid.Column="1" Content="选择" Click="ChoosePackTarget" />
+                    </Grid>
+                    <TextBlock Text="格式" />
+                    <ComboBox x:Name="PackFormatBox" SelectedIndex="0">
+                        <ComboBoxItem Content="modrinth" />
+                        <ComboBoxItem Content="curseforge" />
+                        <ComboBoxItem Content="zip" />
+                    </ComboBox>
+                    <Button Content="导出整合包" Click="ExportModpack" HorizontalAlignment="Left" />
+
+                    <TextBlock Text="整合包导入" FontSize="18" FontWeight="SemiBold" Margin="0,14,0,0" />
+                    <TextBlock Text="整合包路径" />
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="ImportPackPathBox" />
+                        <Button Grid.Column="1" Content="选择" Click="ChooseImportPack" />
+                    </Grid>
+                    <TextBlock Text="目标版本（可留空）" />
+                    <TextBox x:Name="ImportTargetVersionBox" />
+                    <Button Content="导入整合包" Click="ImportModpack" HorizontalAlignment="Left" />
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Spacing="12">
+                    <TextBlock Text="开黑胶囊" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Text="胶囊路径" />
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="CapsulePathBox" />
+                        <Button Grid.Column="1" Content="选择" Click="ChooseCapsulePath" />
+                        <Button Grid.Column="2" Content="另存" Click="ChooseCapsuleTarget" />
+                    </Grid>
+                    <TextBlock Text="目标版本（导入可留空）" />
+                    <TextBox x:Name="CapsuleTargetVersionBox" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="导入胶囊" Click="ImportCapsule" />
+                        <Button Content="导出胶囊" Click="ExportCapsule" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="启动补包服务" Click="StartCapsuleFileHost" />
+                        <Button Content="补齐胶囊文件" Click="PullCapsuleFiles" />
+                        <Button Content="停止补包服务" Click="StopCapsuleFileHost" />
+                    </StackPanel>
+                    <ProgressBar x:Name="CapsulePullProgressBar" Minimum="0" Maximum="100" Height="8" />
+
+                    <TextBlock Text="胶囊 P2P 信息" FontSize="18" FontWeight="SemiBold" Margin="0,14,0,0" />
+                    <Grid ColumnSpacing="10" RowSpacing="10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBox x:Name="RelayHostBox" PlaceholderText="中继主机" />
+                        <TextBox x:Name="RelayPortBox" Grid.Column="1" PlaceholderText="中继端口" />
+                        <TextBox x:Name="RoomBox" Grid.Row="1" PlaceholderText="房间号" />
+                        <TextBox x:Name="SecretBox" Grid.Row="1" Grid.Column="1" PlaceholderText="口令" />
+                        <TextBox x:Name="HostPortBox" Grid.Row="2" PlaceholderText="房主端口" />
+                        <TextBox x:Name="JoinPortBox" Grid.Row="2" Grid.Column="1" PlaceholderText="加入端口" />
+                    </Grid>
+
+                    <TextBlock Text="崩溃日志分析" FontSize="18" FontWeight="SemiBold" Margin="0,14,0,0" />
+                    <TextBlock Text="运行目录（可留空自动推断）" />
+                    <TextBox x:Name="CrashRuntimeDirBox" />
+                    <Button Content="分析日志" Click="AnalyzeCrashLogs" HorizontalAlignment="Left" />
+                </StackPanel>
+            </Grid>
+
+            <TextBox x:Name="PackOutputBox" MinHeight="260" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
+        </StackPanel>
+    </ScrollViewer>
+</Page>

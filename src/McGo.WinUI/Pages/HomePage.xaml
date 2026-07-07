@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="McGo.WinUI.Pages.HomePage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+    <ScrollViewer>
+        <StackPanel Padding="24,18,24,24" Spacing="16">
+            <StackPanel Spacing="4">
+                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="McGo" />
+                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="一个 Fluent 风格的 Minecraft 启动器" />
+            </StackPanel>
+
+            <Grid ColumnSpacing="12" RowSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1.2*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                    <StackPanel Spacing="14">
+                        <StackPanel Spacing="4">
+                            <TextBlock Text="开始使用" FontSize="20" FontWeight="SemiBold" />
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="按顺序完成账号、环境、下载和启动，更容易定位问题。" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="1. 管理账号与环境" Click="OpenManage" />
+                            <Button Content="2. 下载版本" Click="OpenDownload" />
+                            <Button Content="3. 启动游戏" Click="OpenLaunch" />
+                            <Button Content="联机" Click="OpenOnline" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Column="1" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="当前状态" FontSize="20" FontWeight="SemiBold" />
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="本地版本" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <TextBlock x:Name="VersionCountText" FontSize="28" FontWeight="SemiBold" Text="0" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Spacing="4">
+                                <TextBlock Text="账号" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <TextBlock x:Name="AccountCountText" FontSize="28" FontWeight="SemiBold" Text="0" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" Spacing="4">
+                                <TextBlock Text="推荐内存" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <TextBlock x:Name="MemoryText" FontSize="28" FontWeight="SemiBold" Text="4096 MB" />
+                            </StackPanel>
+                        </Grid>
+                        <Button Content="刷新状态" Click="RefreshStatus" HorizontalAlignment="Left" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="自定义主页" FontSize="20" FontWeight="SemiBold" />
+                    <TextBlock x:Name="SummaryText" TextWrapping="WrapWholeWords" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</Page>
