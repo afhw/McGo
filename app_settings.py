@@ -17,7 +17,7 @@ redirect_uri = "http://localhost:5000/login/callback"
 game_directory = ".minecraft"
 config_file = "launcher_config.ini"
 accounts_file = "accounts.json"
-APP_VERSION = "1.0.10"
+APP_VERSION = "1.0.11"
 DEFAULT_UPDATE_MANIFEST_URL = "https://mcgo.flyliq.cn/update.json"
 
 config = configparser.ConfigParser()

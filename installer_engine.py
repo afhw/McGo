@@ -77,6 +77,16 @@ class InstallerEngine:
     def _resolve_base_minecraft_version(self):
         return resolve_base_minecraft_version(self.game_dir, self.minecraft_version)
 
+    def _use_base_minecraft_version_for_loader(self, label):
+        base_minecraft_version = self._resolve_base_minecraft_version()
+        if base_minecraft_version and base_minecraft_version != self.minecraft_version:
+            self.emit_status(
+                f"{label} 将基于原版 Minecraft {base_minecraft_version} 安装，"
+                f"已从当前加载器版本 {self.minecraft_version} 自动切换。"
+            )
+            self.minecraft_version = base_minecraft_version
+        return self.minecraft_version
+
     def _find_matching_fabric_versions(self, base_minecraft_version):
         return find_matching_fabric_versions(self.game_dir, base_minecraft_version)
 
@@ -171,9 +181,7 @@ class InstallerEngine:
             json.dump(version_json, file_handle, ensure_ascii=False, indent=4)
 
     def _install_fabric(self):
-        base_minecraft_version = self._resolve_base_minecraft_version()
-        if base_minecraft_version != self.minecraft_version:
-            raise RuntimeError("安装 Fabric 时请选择原版 Minecraft 版本，而不是已安装的 Fabric 版本。")
+        self._use_base_minecraft_version_for_loader("Fabric")
 
         versions = get_fabric_loader_versions(self.minecraft_version, self.mirror_source)
         if not versions:
@@ -245,6 +253,7 @@ class InstallerEngine:
     def _install_forge_like(self, kind):
         if not self.java_path:
             raise RuntimeError(f"安装 {kind} 需要可用的 Java。")
+        self._use_base_minecraft_version_for_loader("Forge" if kind == "forge" else "NeoForge")
         os.makedirs(self.game_dir, exist_ok=True)
         self.ensure_launcher_profiles()
 
@@ -331,6 +340,7 @@ class InstallerEngine:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     def _install_optifine(self):
+        self._use_base_minecraft_version_for_loader("OptiFine")
         base_json = get_version_json(self.game_dir, self.minecraft_version)
         if not base_json:
             raise RuntimeError(f"请先在当前游戏目录下载原版 Minecraft {self.minecraft_version}，再安装 OptiFine。")

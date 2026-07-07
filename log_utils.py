@@ -2,12 +2,16 @@ import logging
 import os
 import re
 import sys
+import threading
 from logging.handlers import RotatingFileHandler
 
 
 LOG_DIR = "logs"
 LOG_FILE = "mcgo.log"
 _CONFIGURED = False
+_NOTICE_LOCK = threading.Lock()
+_PENDING_NOTICES = []
+_NOTICE_KEYS = set()
 
 _SENSITIVE_KEYWORDS = (
     "access_token",
@@ -21,6 +25,56 @@ _SENSITIVE_KEYWORDS = (
     "password",
     "token",
 )
+
+
+def _queue_logging_notice(key, message):
+    with _NOTICE_LOCK:
+        if key in _NOTICE_KEYS:
+            return
+        _NOTICE_KEYS.add(key)
+        _PENDING_NOTICES.append(message)
+
+
+def consume_logging_notices():
+    with _NOTICE_LOCK:
+        notices = list(_PENDING_NOTICES)
+        _PENDING_NOTICES.clear()
+    return notices
+
+
+class SafeRotatingFileHandler(RotatingFileHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.rollover_blocked = False
+
+    def shouldRollover(self, record):
+        if self.rollover_blocked:
+            return False
+        return super().shouldRollover(record)
+
+    def doRollover(self):
+        try:
+            super().doRollover()
+            self.rollover_blocked = False
+        except PermissionError as exc:
+            _queue_logging_notice(
+                "log-rollover-permission",
+                f"日志文件正在被占用，暂时无法轮转：{self.baseFilename}。"
+                "请关闭其它 McGo 实例、日志查看器或占用该文件的程序。",
+            )
+            self.rollover_blocked = True
+            self.stream = self._open()
+
+    def handleError(self, record):
+        exc = sys.exc_info()[1]
+        if isinstance(exc, PermissionError):
+            _queue_logging_notice(
+                "log-write-permission",
+                f"日志文件正在被占用，部分日志可能无法写入：{self.baseFilename}。"
+                "请关闭其它 McGo 实例、日志查看器或占用该文件的程序。",
+            )
+            return
+        super().handleError(record)
 
 
 def setup_logging(log_dir=LOG_DIR, level=logging.DEBUG):
@@ -39,15 +93,22 @@ def setup_logging(log_dir=LOG_DIR, level=logging.DEBUG):
             datefmt="%Y-%m-%d %H:%M:%S",
         )
 
-        file_handler = RotatingFileHandler(
-            log_path,
-            maxBytes=2 * 1024 * 1024,
-            backupCount=5,
-            encoding="utf-8",
-        )
-        file_handler.setLevel(level)
-        file_handler.setFormatter(formatter)
-        root_logger.addHandler(file_handler)
+        try:
+            file_handler = SafeRotatingFileHandler(
+                log_path,
+                maxBytes=2 * 1024 * 1024,
+                backupCount=5,
+                encoding="utf-8",
+            )
+            file_handler.setLevel(level)
+            file_handler.setFormatter(formatter)
+            root_logger.addHandler(file_handler)
+        except PermissionError:
+            _queue_logging_notice(
+                "log-open-permission",
+                f"日志文件正在被占用，无法打开：{log_path}。"
+                "请关闭其它 McGo 实例、日志查看器或占用该文件的程序。",
+            )
 
         console_handler = logging.StreamHandler()
         console_handler.setLevel(logging.INFO)

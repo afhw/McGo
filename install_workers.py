@@ -15,9 +15,11 @@ from installer_engine import InstallerEngine
 from java_runtime import extract_java_archive, find_java_in_directory, java_runtime_download_url
 from launcher import get_version_inheritance_chain
 from log_utils import get_logger
+from version_utils import resolve_base_minecraft_version
 
 
 logger = get_logger(__name__)
+LOADER_INSTALL_TYPES = {"fabric", "forge", "neoforge", "optifine"}
 
 
 def _progress_percent(snapshot):
@@ -63,6 +65,13 @@ class DownloadWorker(QObject):
 
     def run(self):
         try:
+            if any(item in LOADER_INSTALL_TYPES for item in self.auto_install_types):
+                base_version = resolve_base_minecraft_version(self.game_dir, self.version_id)
+                if base_version and base_version != self.version_id:
+                    self.status.emit(
+                        f"下载并安装加载器时已从 {self.version_id} 切换到原版 Minecraft {base_version}"
+                    )
+                    self.version_id = base_version
             logger.info(
                 "DownloadWorker started: version=%s mirror=%s game_dir=%s auto_install=%s java=%s",
                 self.version_id,

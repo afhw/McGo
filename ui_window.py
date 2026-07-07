@@ -94,7 +94,7 @@ from external_auth import (
 from file_utils import sanitize_filename
 from java_utils import get_java_version
 from launcher import build_launch_command, get_local_versions, get_version_inheritance_chain, infer_required_java_version, get_version_json
-from log_utils import get_logger, redact_mapping
+from log_utils import consume_logging_notices, get_logger, redact_mapping
 from install_services import (
     INSTALL_TYPE_LABELS,
     MIRROR_SOURCES,
@@ -128,6 +128,8 @@ from version_utils import (
 )
 
 logger = get_logger(__name__)
+
+LOADER_INSTALL_TYPES = {"fabric", "forge", "neoforge", "optifine"}
 
 
 
@@ -236,6 +238,10 @@ class LauncherWindow(FluentWindow):
         self.apply_feature_visibility()
         self.update_download_task_widgets()
         self.apply_music_settings(show_feedback=False)
+        self.logging_notice_timer = QTimer(self)
+        self.logging_notice_timer.setInterval(3000)
+        self.logging_notice_timer.timeout.connect(self.show_pending_logging_notices)
+        self.logging_notice_timer.start()
         self.refresh_account_selector()
         self.remote_version_combo.addItem("点击刷新远程版本")
         self.log("QFluentWidgets 界面已启动。远程版本列表已延后加载。")
@@ -2495,6 +2501,12 @@ class LauncherWindow(FluentWindow):
     def base_version_for(self, version_id):
         return normalize_minecraft_version_for_api(self.current_game_dir(), version_id)
 
+    def normalized_install_target_version(self, install_type, version_id):
+        version_id = (version_id or "").strip()
+        if install_type in LOADER_INSTALL_TYPES:
+            return self.base_version_for(version_id) or version_id
+        return version_id
+
     def version_matches_category(self, version_id, category):
         return version_matches_category(self.current_game_dir(), version_id, category)
 
@@ -3676,6 +3688,12 @@ class LauncherWindow(FluentWindow):
     def show_warning(self, title, content):
         InfoBar.warning(title, content, duration=3500, position=InfoBarPosition.TOP_RIGHT, parent=self)
 
+    def show_pending_logging_notices(self):
+        for message in consume_logging_notices():
+            text = f"日志提醒：{message}"
+            self.status_log.append(text)
+            InfoBar.warning("日志被占用", message, duration=6500, position=InfoBarPosition.TOP_RIGHT, parent=self)
+
     def current_account(self):
         for account in self.accounts:
             if account.get("id") == self.selected_account_id:
@@ -4788,7 +4806,18 @@ class LauncherWindow(FluentWindow):
             fabric_versions = [version for version in versions if version.startswith("fabric-loader-")]
             if fabric_versions:
                 versions = fabric_versions
+        elif install_type in LOADER_INSTALL_TYPES:
+            local_versions = set(versions)
+            base_versions = []
+            seen = set()
+            for version in versions:
+                target = self.normalized_install_target_version(install_type, version)
+                if target and target in local_versions and target not in seen:
+                    base_versions.append(target)
+                    seen.add(target)
+            versions = base_versions
         current = self.install_version_combo.currentText().strip()
+        current = self.normalized_install_target_version(install_type, current)
         self.install_version_combo.reset_items(
             versions,
             current_text=current if current in versions else "",
@@ -5155,17 +5184,22 @@ class LauncherWindow(FluentWindow):
 
     def start_download(self):
         logger.info("Download requested from UI")
-        version = self.remote_version_combo.currentText().strip()
-        if not version or version == "点击刷新远程版本":
+        selected_version = self.remote_version_combo.currentText().strip()
+        if not selected_version or selected_version == "点击刷新远程版本":
             self.show_warning("缺少版本", "请先刷新并选择要下载的版本。")
             return
 
         if not self.save_settings(show_feedback=False):
             return
         auto_install_types = self.get_selected_download_addons()
+        loader_install_type = next((item for item in auto_install_types if item in LOADER_INSTALL_TYPES), "")
+        version = self.normalized_install_target_version(loader_install_type, selected_version) if loader_install_type else selected_version
+        if auto_install_types and selected_version != version:
+            self.log(f"下载并安装时已从 {selected_version} 切换到原版 Minecraft {version}")
         java_path = self.java_combo.currentText().strip()
         logger.info(
-            "Download selection: version=%s mirror=%s game_dir=%s auto_install=%s java=%s",
+            "Download selection: selected_version=%s version=%s mirror=%s game_dir=%s auto_install=%s java=%s",
+            selected_version,
             version,
             self.mirror_combo.currentText(),
             self.current_game_dir(),
@@ -5247,8 +5281,9 @@ class LauncherWindow(FluentWindow):
         self.download_thread.start()
 
     def start_install(self):
-        minecraft_version = self.install_version_combo.currentText().strip()
+        selected_version = self.install_version_combo.currentText().strip()
         install_type = self.install_type_combo.currentText().strip()
+        minecraft_version = self.normalized_install_target_version(install_type, selected_version)
         if not minecraft_version:
             self.show_warning("缺少目标版本", "请先下载并选择目标 Minecraft 版本。")
             return
@@ -5261,6 +5296,11 @@ class LauncherWindow(FluentWindow):
         self.save_settings(show_feedback=False)
         mirror_key = self.mirror_combo.currentText()
         game_dir = self.current_game_dir()
+        if selected_version and selected_version != minecraft_version:
+            self.log(
+                f"安装 {INSTALL_TYPE_LABELS.get(install_type, install_type)} 时已从 {selected_version} "
+                f"切换到原版 Minecraft {minecraft_version}"
+            )
         title = f"安装 {INSTALL_TYPE_LABELS.get(install_type, install_type)} 到 {minecraft_version}"
         task = DownloadTask(
             "install",
