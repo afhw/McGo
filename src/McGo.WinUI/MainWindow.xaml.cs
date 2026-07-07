@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
 using McGo.Core.Configuration;
 using McGo.WinUI.Pages;
+using Windows.UI;
 
 namespace McGo.WinUI;
 
@@ -21,6 +22,7 @@ public sealed partial class MainWindow : Window
             AppWindow.SetIcon(iconPath);
         }
 
+        ApplyTitleBarButtonColors(ElementTheme.Dark);
         ApplySavedAppearance();
         NavFrame.Navigate(typeof(HomePage));
     }
@@ -41,12 +43,14 @@ public sealed partial class MainWindow : Window
 
     public void ApplyAppearance(string theme, string imagePath)
     {
-        RootGrid.RequestedTheme = (theme ?? "").Trim().ToLowerInvariant() switch
+        var requestedTheme = (theme ?? "").Trim().ToLowerInvariant() switch
         {
             "light" => ElementTheme.Light,
             "auto" => ElementTheme.Default,
             _ => ElementTheme.Dark,
         };
+        RootGrid.RequestedTheme = requestedTheme;
+        ApplyTitleBarButtonColors(requestedTheme);
 
         var path = Environment.ExpandEnvironmentVariables((imagePath ?? "").Trim());
         if (path.Length == 0 || !File.Exists(path))
@@ -58,6 +62,22 @@ public sealed partial class MainWindow : Window
 
         ThemeBackgroundImage.Source = new BitmapImage(new Uri(Path.GetFullPath(path)));
         ThemeBackgroundImage.Visibility = Visibility.Visible;
+    }
+
+    private void ApplyTitleBarButtonColors(ElementTheme theme)
+    {
+        var titleBar = AppWindow.TitleBar;
+        var isLight = theme == ElementTheme.Light;
+        titleBar.BackgroundColor = Color.FromArgb(0, 0, 0, 0);
+        titleBar.InactiveBackgroundColor = Color.FromArgb(0, 0, 0, 0);
+        titleBar.ButtonBackgroundColor = Color.FromArgb(0, 0, 0, 0);
+        titleBar.ButtonInactiveBackgroundColor = Color.FromArgb(0, 0, 0, 0);
+        titleBar.ButtonForegroundColor = isLight ? Color.FromArgb(255, 32, 32, 32) : Color.FromArgb(255, 255, 255, 255);
+        titleBar.ButtonInactiveForegroundColor = isLight ? Color.FromArgb(150, 32, 32, 32) : Color.FromArgb(170, 255, 255, 255);
+        titleBar.ButtonHoverForegroundColor = isLight ? Color.FromArgb(255, 0, 0, 0) : Color.FromArgb(255, 255, 255, 255);
+        titleBar.ButtonPressedForegroundColor = isLight ? Color.FromArgb(255, 0, 0, 0) : Color.FromArgb(255, 255, 255, 255);
+        titleBar.ButtonHoverBackgroundColor = isLight ? Color.FromArgb(28, 0, 0, 0) : Color.FromArgb(40, 255, 255, 255);
+        titleBar.ButtonPressedBackgroundColor = isLight ? Color.FromArgb(45, 0, 0, 0) : Color.FromArgb(70, 255, 255, 255);
     }
 
     private void TitleBar_PaneToggleRequested(TitleBar sender, object args)
