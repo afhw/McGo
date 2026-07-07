@@ -201,6 +201,7 @@ class LauncherWindow(FluentWindow):
         self.download_task_record_by_id = {}
         self.completed_download_task_limit = 24
         self.floating_download_button = None
+        self.updating_quick_play_worlds = False
         self.scan_threads = {}
         self.scan_workers = {}
         self.scan_feedback_tasks = set()
@@ -505,6 +506,7 @@ class LauncherWindow(FluentWindow):
         self.version_game_args_input.setPlaceholderText("--fullscreen")
         self.version_quick_play_combo = NativeComboBox()
         self.version_quick_play_combo.addItem("不快速进入存档")
+        self.version_quick_play_combo.currentTextChanged.connect(self.on_quick_play_selection_changed)
         self.version_quick_play_world_ids = [""]
         self.version_pre_launch_input = LineEdit()
         self.version_pre_launch_input.setPlaceholderText("启动前命令，例如备份存档或同步配置")
@@ -962,6 +964,7 @@ class LauncherWindow(FluentWindow):
         self.add_labeled_control(start_layout, "当前账号", self.account_combo)
         self.add_labeled_control(start_layout, "版本分类", self.version_category_combo)
         self.add_labeled_control(start_layout, "当前版本", self.version_display_combo)
+        self.launch_quick_play_row = self.add_labeled_control(start_layout, "快速进入存档", self.version_quick_play_combo)
         start_layout.addWidget(self.version_summary_label)
         start_layout.addWidget(self.launch_status_label)
         self.launch_progress_bar = ProgressBar()
@@ -980,11 +983,17 @@ class LauncherWindow(FluentWindow):
         start_layout.addLayout(launch_info_grid)
         start_row = QHBoxLayout()
         refresh_button = PushButton("刷新本地版本")
+        self.refresh_quick_play_button = PushButton("刷新存档")
+        self.launch_open_saves_button = PushButton("打开存档文件夹")
         self.launch_button = PrimaryPushButton("启动 Minecraft")
         refresh_button.clicked.connect(self.refresh_local_versions)
+        self.refresh_quick_play_button.clicked.connect(self.refresh_current_quick_play_worlds)
+        self.launch_open_saves_button.clicked.connect(self.open_current_saves_directory)
         self.launch_button.clicked.connect(self.launch_game)
         self.stabilize_launch_status_area()
         start_row.addWidget(refresh_button)
+        start_row.addWidget(self.refresh_quick_play_button)
+        start_row.addWidget(self.launch_open_saves_button)
         start_row.addWidget(self.launch_button)
         start_row.addStretch()
         start_layout.addLayout(start_row)
@@ -1059,7 +1068,6 @@ class LauncherWindow(FluentWindow):
         launch_settings_layout.addWidget(self.version_window_row)
         self.version_gc_row = self.add_labeled_control(launch_settings_layout, "GC 策略", self.version_gc_combo)
         self.version_jvm_args_row = self.add_labeled_control(launch_settings_layout, "额外 JVM 参数", self.version_jvm_args_input)
-        self.version_quick_play_row = self.add_labeled_control(launch_settings_layout, "快速进入存档", self.version_quick_play_combo)
         self.version_game_args_row = self.add_labeled_control(launch_settings_layout, "额外游戏参数", self.version_game_args_input)
         self.version_pre_launch_row = self.add_labeled_control(launch_settings_layout, "启动前命令", self.version_pre_launch_input)
         launch_settings_layout.addWidget(self.version_isolation_check)
@@ -2646,6 +2654,10 @@ class LauncherWindow(FluentWindow):
         has_version = bool(version_id)
         self.open_version_folder_button.setEnabled(has_version)
         self.open_saves_button.setEnabled(has_version)
+        if hasattr(self, "launch_open_saves_button"):
+            self.launch_open_saves_button.setEnabled(has_version)
+        if hasattr(self, "refresh_quick_play_button"):
+            self.refresh_quick_play_button.setEnabled(has_version)
         self.version_quick_play_combo.setEnabled(has_version)
         self.open_resourcepacks_button.setEnabled(has_version)
         self.open_shaderpacks_button.setEnabled(has_version)
@@ -2692,6 +2704,9 @@ class LauncherWindow(FluentWindow):
             summary.append("已收藏")
         if entry.get("hidden"):
             summary.append("已隐藏")
+        quick_play_world = (entry.get("quick_play_singleplayer") or "").strip()
+        if quick_play_world:
+            summary.append(f"快速进入：{quick_play_world}")
         self.version_summary_label.setText(" | ".join(summary))
         self.motion.fade_slide_in(self.version_summary_label, offset=8, duration=220)
 
@@ -2705,12 +2720,7 @@ class LauncherWindow(FluentWindow):
         entry["alias_auto"] = False
         entry["jvm_args"] = self.version_jvm_args_input.text().strip()
         entry["game_args"] = self.version_game_args_input.text().strip()
-        quick_play_index = self.version_quick_play_combo.currentIndex()
-        entry["quick_play_singleplayer"] = (
-            self.version_quick_play_world_ids[quick_play_index]
-            if 0 <= quick_play_index < len(self.version_quick_play_world_ids)
-            else ""
-        )
+        entry["quick_play_singleplayer"] = self.current_quick_play_world()
         entry["pre_launch_command"] = self.version_pre_launch_input.text().strip()
         entry["min_memory_mb"] = self.version_min_memory_input.value()
         entry["manual_memory"] = self.version_manual_memory_check.isChecked()
@@ -2802,7 +2812,50 @@ class LauncherWindow(FluentWindow):
 
         current_index = world_ids.index(selected_world) if selected_world in world_ids else 0
         self.version_quick_play_world_ids = world_ids
-        self.version_quick_play_combo.reset_items(texts, current_index=current_index)
+        self.updating_quick_play_worlds = True
+        try:
+            self.version_quick_play_combo.reset_items(texts, current_index=current_index)
+        finally:
+            self.updating_quick_play_worlds = False
+
+    def current_quick_play_world(self):
+        quick_play_index = self.version_quick_play_combo.currentIndex()
+        return (
+            self.version_quick_play_world_ids[quick_play_index]
+            if 0 <= quick_play_index < len(self.version_quick_play_world_ids)
+            else ""
+        )
+
+    def save_quick_play_selection(self, *, show_feedback=False):
+        version_id = self.current_selected_version()
+        if not version_id:
+            return False
+        entry = self.version_settings_entry(version_id)
+        selected_world = self.current_quick_play_world()
+        if entry.get("quick_play_singleplayer", "") == selected_world:
+            return False
+        entry["quick_play_singleplayer"] = selected_world
+        save_version_settings(self.version_settings)
+        if show_feedback:
+            if selected_world:
+                self.show_success("快速进入已设置", selected_world)
+            else:
+                self.show_info("快速进入已关闭", "启动时会停留在 Minecraft 主菜单。")
+        return True
+
+    def on_quick_play_selection_changed(self, *_):
+        if getattr(self, "updating_quick_play_worlds", False):
+            return
+        self.save_quick_play_selection(show_feedback=True)
+
+    def refresh_current_quick_play_worlds(self):
+        version_id = self.current_selected_version()
+        if not version_id:
+            self.show_warning("缺少版本", "请先选择一个本地版本。")
+            return
+        entry = self.version_settings_entry(version_id)
+        self.refresh_quick_play_worlds(entry.get("quick_play_singleplayer", ""))
+        self.show_info("存档已刷新", f"已扫描：{self.current_saves_directory()}")
 
     def current_resourcepack_directory(self):
         version_id = self.current_selected_version()
@@ -3675,6 +3728,12 @@ class LauncherWindow(FluentWindow):
     def set_launch_running(self, running):
         if hasattr(self, "launch_button"):
             self.launch_button.setEnabled(not running)
+        if hasattr(self, "version_quick_play_combo"):
+            self.version_quick_play_combo.setEnabled(not running and bool(self.current_selected_version()))
+        if hasattr(self, "refresh_quick_play_button"):
+            self.refresh_quick_play_button.setEnabled(not running and bool(self.current_selected_version()))
+        if hasattr(self, "launch_open_saves_button"):
+            self.launch_open_saves_button.setEnabled(not running and bool(self.current_selected_version()))
         self.java_combo.setEnabled(not running)
         self.local_version_combo.setEnabled(not running)
         self.account_combo.setEnabled(not running)
@@ -5074,6 +5133,7 @@ class LauncherWindow(FluentWindow):
         if not version:
             self.show_warning("缺少版本", "请先选择本地游戏版本。")
             return
+        self.save_quick_play_selection(show_feedback=False)
 
         required_java = self.get_required_java_version(version)
         selected_java_major = self.java_versions.get(java_path)
