@@ -218,6 +218,9 @@ cython_debug/
 /webside/node_modules/.bin/update-browserslist-db.ps1
 /webside/node_modules/.bin/vite
 /webside/node_modules/.bin/vite.cmd
+/artifacts/
+!/src/McGo.Core/Downloads/
+!/src/McGo.Core/Downloads/DownloadTaskManager.cs
 /webside/node_modules/.bin/vite.ps1
 /webside/node_modules/.vite/deps/_metadata.json
 /webside/node_modules/.vite/deps/chunk-CTA6WUNY.js

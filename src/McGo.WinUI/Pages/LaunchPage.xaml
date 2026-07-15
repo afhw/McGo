@@ -6,137 +6,413 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
-    <ScrollViewer>
-        <StackPanel Padding="24,16,24,16" Spacing="14">
-            <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="启动" />
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled" HorizontalContentAlignment="Stretch">
+        <StackPanel x:Name="ResponsiveLayoutRoot" Padding="24,18,24,24" Spacing="18" MaxWidth="1280" HorizontalAlignment="Stretch" SizeChanged="ResponsiveLayoutRoot_SizeChanged" LayoutUpdated="ResponsiveLayoutRoot_LayoutUpdated">
+            <StackPanel x:Name="LaunchPageHeader" Spacing="4">
+                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="启动" />
+                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="选择账号与版本，确认运行环境后启动 Minecraft。" TextWrapping="Wrap" />
+            </StackPanel>
 
-            <Grid ColumnSpacing="12">
+            <Grid ColumnSpacing="18" RowSpacing="18">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="2*" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition x:Name="LaunchActionColumn" Width="5*" />
+                    <ColumnDefinition x:Name="LaunchVersionCenterColumn" Width="6*" />
                 </Grid.ColumnDefinitions>
-                <StackPanel Spacing="6">
-                    <TextBlock Text="游戏目录" />
-                    <TextBox x:Name="GameDirectoryBox" />
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <StackPanel x:Name="LaunchActionPanel" Spacing="14">
+                    <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                        <StackPanel Spacing="14">
+                            <StackPanel Spacing="3">
+                                <TextBlock Text="立即启动" FontSize="20" FontWeight="SemiBold" />
+                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="选择账号和本地版本，准备好后直接进入游戏。" TextWrapping="Wrap" />
+                            </StackPanel>
+
+                            <Grid ColumnSpacing="12" RowSpacing="10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <StackPanel Spacing="5">
+                                    <TextBlock Text="当前账号" />
+                                    <ComboBox x:Name="AccountComboBox" SelectionChanged="AccountSelectionChanged" HorizontalAlignment="Stretch" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Spacing="5">
+                                    <TextBlock Text="版本分类" />
+                                    <ComboBox x:Name="VersionCategoryBox" SelectionChanged="VersionCategoryChanged" SelectedIndex="0" HorizontalAlignment="Stretch">
+                                        <ComboBoxItem Content="全部版本" />
+                                        <ComboBoxItem Content="收藏" />
+                                        <ComboBoxItem Content="原版" />
+                                        <ComboBoxItem Content="仅 OptiFine" />
+                                        <ComboBoxItem Content="可安装 Mod" />
+                                        <ComboBoxItem Content="隐藏" />
+                                    </ComboBox>
+                                </StackPanel>
+                                <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Spacing="5">
+                                    <TextBlock Text="当前版本" />
+                                    <ComboBox x:Name="VersionDisplayBox" SelectionChanged="VersionDisplayChanged" HorizontalAlignment="Stretch" />
+                                </StackPanel>
+                                <StackPanel Grid.Row="2" Grid.ColumnSpan="2" Spacing="5">
+                                    <TextBlock Text="快速进入存档" />
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <ComboBox x:Name="QuickPlayBox" SelectionChanged="QuickPlaySelectionChanged" HorizontalAlignment="Stretch" />
+                                        <Button Grid.Column="1" Click="RefreshQuickPlayWorlds" ToolTipService.ToolTip="刷新存档">
+                                            <SymbolIcon Symbol="Refresh" />
+                                        </Button>
+                                    </Grid>
+                                </StackPanel>
+                            </Grid>
+
+                            <TextBlock x:Name="VersionSummaryText" Text="未选择版本" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                            <ProgressBar x:Name="LaunchProgressBar" Minimum="0" Maximum="100" Height="6" />
+                            <TextBlock x:Name="LaunchStatusText" Text="将根据游戏版本自动选择合适的 Java" TextWrapping="Wrap" />
+                            <Grid ColumnSpacing="10" RowSpacing="4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <TextBlock x:Name="LaunchStageText" Text="当前步骤：等待启动" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                                <TextBlock x:Name="LaunchMethodText" Grid.Column="1" Text="登录方式：未选择" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                                <TextBlock x:Name="LaunchProgressText" Grid.Row="1" Text="启动进度：0%" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                            </Grid>
+
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="1.25*" />
+                                </Grid.ColumnDefinitions>
+                                <Button Click="RefreshVersions" HorizontalAlignment="Stretch">
+                                    <StackPanel Orientation="Horizontal" Spacing="7">
+                                        <SymbolIcon Symbol="Refresh" />
+                                        <TextBlock Text="刷新版本" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Grid.Column="1" Click="OpenSavesFolder" HorizontalAlignment="Stretch">
+                                    <StackPanel Orientation="Horizontal" Spacing="7">
+                                        <SymbolIcon Symbol="Folder" />
+                                        <TextBlock Text="打开存档" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Grid.Column="2" Style="{StaticResource AccentButtonStyle}" Click="LaunchGame" HorizontalAlignment="Stretch">
+                                    <StackPanel Orientation="Horizontal" Spacing="7">
+                                        <SymbolIcon Symbol="Play" />
+                                        <TextBlock Text="启动游戏" />
+                                    </StackPanel>
+                                </Button>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                        <StackPanel Spacing="12">
+                            <StackPanel Spacing="3">
+                                <TextBlock Text="运行环境" FontSize="20" FontWeight="SemiBold" />
+                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="通常无需调整；Java 不匹配时可在这里检测或下载。" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <StackPanel Spacing="5">
+                                <TextBlock Text="游戏目录" />
+                                <TextBox x:Name="GameDirectoryBox" />
+                            </StackPanel>
+                            <StackPanel Spacing="5">
+                                <TextBlock Text="Java 路径" />
+                                <TextBox x:Name="JavaPathBox" />
+                            </StackPanel>
+                            <StackPanel Spacing="5">
+                                <TextBlock Text="检测到的 Java" />
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <ComboBox x:Name="JavaCandidatesBox" PlaceholderText="Java 候选" SelectionChanged="JavaCandidateChanged" HorizontalAlignment="Stretch" />
+                                    <Button Grid.Column="1" Click="RefreshJavaCandidates" ToolTipService.ToolTip="刷新 Java 候选">
+                                        <SymbolIcon Symbol="Refresh" />
+                                    </Button>
+                                </Grid>
+                            </StackPanel>
+                            <TextBlock x:Name="JavaVersionText" Text="未选择 Java" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                            <ProgressBar x:Name="JavaDownloadProgressBar" Minimum="0" Maximum="100" Height="6" />
+                            <TextBlock x:Name="JavaDownloadStatusText" Text="可自动下载当前版本推荐的 Java 运行时" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                            <Grid ColumnSpacing="8" RowSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Button Content="检测 Java" Click="CheckJavaRuntime" HorizontalAlignment="Stretch" />
+                                <Button Grid.Column="1" Content="下载推荐 Java" Click="DownloadRecommendedJava" HorizontalAlignment="Stretch" />
+                                <Button Grid.Row="1" Grid.ColumnSpan="2" Content="保存运行环境" Click="SaveSettings" HorizontalAlignment="Stretch" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
-                <StackPanel Grid.Column="1" Spacing="6">
-                    <TextBlock Text="Java 路径" />
-                    <TextBox x:Name="JavaPathBox" />
-                </StackPanel>
-                <StackPanel Grid.Column="2" Spacing="6">
-                    <TextBlock Text="账号" />
-                    <ComboBox x:Name="AccountComboBox" />
-                </StackPanel>
-                <Button Grid.Column="3" Content="保存设置" Click="SaveSettings" VerticalAlignment="Bottom" />
-            </Grid>
 
-            <Grid ColumnSpacing="14">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="280" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
+                <StackPanel x:Name="VersionCenterPanel" Grid.Column="1" Spacing="14">
+                    <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                        <StackPanel Spacing="8">
+                        <StackPanel Spacing="3">
+                            <TextBlock Text="版本中心" FontSize="22" FontWeight="SemiBold" />
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="在本地版本列表和当前版本设置之间切换。" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <SelectorBar x:Name="VersionSectionBar" SelectionChanged="VersionSectionChanged">
+                            <SelectorBarItem Text="选择版本" Tag="selector" />
+                            <SelectorBarItem Text="版本设置" Tag="settings" />
+                        </SelectorBar>
+                        </StackPanel>
+                    </Border>
 
-                <StackPanel Spacing="10">
-                    <TextBlock Text="版本分类" />
-                    <ComboBox x:Name="VersionCategoryBox" SelectionChanged="VersionCategoryChanged" SelectedIndex="0">
-                        <ComboBoxItem Content="全部版本" />
-                        <ComboBoxItem Content="收藏" />
-                        <ComboBoxItem Content="原版" />
-                        <ComboBoxItem Content="仅 OptiFine" />
-                        <ComboBoxItem Content="可安装 Mod" />
-                        <ComboBoxItem Content="隐藏" />
-                    </ComboBox>
-                    <Button Content="刷新本地版本" Click="RefreshVersions" />
-                    <ListView x:Name="VersionsList" MinHeight="360" SelectionChanged="VersionsList_SelectionChanged" />
-                </StackPanel>
+                    <Border x:Name="VersionSelectorPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                        <StackPanel Spacing="12">
+                            <Grid ColumnSpacing="10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Spacing="3">
+                                    <TextBlock Text="本地版本" FontSize="20" FontWeight="SemiBold" />
+                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="按左侧分类筛选，选择后可直接启动或进入版本设置。" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <Button Grid.Column="1" Click="RefreshVersions" ToolTipService.ToolTip="刷新本地版本">
+                                    <SymbolIcon Symbol="Refresh" />
+                                </Button>
+                            </Grid>
+                            <StackPanel x:Name="NoVersionsPanel" Padding="12,28" Spacing="10" HorizontalAlignment="Center">
+                                <SymbolIcon Symbol="Library" />
+                                <TextBlock Text="未发现本地版本" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="下载游戏后即可在这里选择、启动和维护版本。" TextWrapping="Wrap" TextAlignment="Center" />
+                                <Button Content="前往下载" Click="OpenDownloadPage" HorizontalAlignment="Center" />
+                            </StackPanel>
+                            <ListView x:Name="VersionsList" MinHeight="220" MaxHeight="420" SelectionChanged="VersionsList_SelectionChanged" Visibility="Collapsed" />
+                            <TextBlock x:Name="SelectorVersionSummaryText" Text="未选择版本" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
 
-                <StackPanel Grid.Column="1" Spacing="12">
-                    <Grid ColumnSpacing="10" RowSpacing="10">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
-                        <StackPanel Spacing="5">
-                            <TextBlock Text="显示名称" />
-                            <TextBox x:Name="VersionAliasBox" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="1" Spacing="5">
-                            <TextBlock Text="Quick Play 世界" />
-                            <TextBox x:Name="QuickPlayBox" />
-                        </StackPanel>
-                        <StackPanel Grid.Row="1" Spacing="5">
-                            <TextBlock Text="最大内存 MB" />
-                            <TextBox x:Name="MemoryBox" />
-                        </StackPanel>
-                        <StackPanel Grid.Row="1" Grid.Column="1" Spacing="5">
-                            <TextBlock Text="最小内存 MB" />
-                            <TextBox x:Name="MinMemoryBox" />
-                        </StackPanel>
-                        <StackPanel Grid.Row="2" Spacing="5">
-                            <TextBlock Text="窗口宽度" />
-                            <TextBox x:Name="WindowWidthBox" />
-                        </StackPanel>
-                        <StackPanel Grid.Row="2" Grid.Column="1" Spacing="5">
-                            <TextBlock Text="窗口高度" />
-                            <TextBox x:Name="WindowHeightBox" />
-                        </StackPanel>
-                        <StackPanel Grid.Row="3" Spacing="5">
-                            <TextBlock Text="GC 策略" />
-                            <ComboBox x:Name="GcStrategyBox" SelectedIndex="0">
-                                <ComboBoxItem Content="G1GC" />
-                                <ComboBoxItem Content="ZGC" />
-                                <ComboBoxItem Content="SerialGC" />
-                                <ComboBoxItem Content="None" />
-                            </ComboBox>
-                        </StackPanel>
-                    </Grid>
+                    <StackPanel x:Name="VersionSettingsPanel" Spacing="12" Visibility="Collapsed">
+                        <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                            <StackPanel Spacing="12">
+                                <StackPanel Spacing="3">
+                                    <TextBlock Text="个性化" FontSize="20" FontWeight="SemiBold" />
+                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="使用名称、图标和标记区分不同游戏实例。" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <Grid ColumnSpacing="12" RowSpacing="10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="2*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <StackPanel Spacing="5">
+                                        <TextBlock Text="显示名称" />
+                                        <TextBox x:Name="VersionAliasBox" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Spacing="5">
+                                        <TextBlock Text="版本图标" />
+                                        <ComboBox x:Name="VersionIconBox" SelectedIndex="0" HorizontalAlignment="Stretch">
+                                            <ComboBoxItem Content="自动" />
+                                            <ComboBoxItem Content="⭐" />
+                                            <ComboBoxItem Content="⚙" />
+                                            <ComboBoxItem Content="📦" />
+                                            <ComboBoxItem Content="🧪" />
+                                        </ComboBox>
+                                    </StackPanel>
+                                    <Grid Grid.Row="1" Grid.ColumnSpan="2" ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <CheckBox x:Name="UseIsolationCheckBox" Content="版本独立目录" />
+                                        <CheckBox x:Name="VersionFavoriteCheckBox" Grid.Column="1" Content="收藏当前版本" />
+                                        <CheckBox x:Name="VersionHiddenCheckBox" Grid.Column="2" Content="隐藏当前版本" />
+                                    </Grid>
+                                </Grid>
+                                <Button Style="{StaticResource AccentButtonStyle}" Content="保存当前版本设置" Click="SaveVersionSettings" HorizontalAlignment="Left" />
+                            </StackPanel>
+                        </Border>
 
-                    <TextBlock Text="额外 JVM 参数" />
-                    <TextBox x:Name="ExtraJvmArgsBox" />
-                    <TextBlock Text="额外游戏参数" />
-                    <TextBox x:Name="ExtraGameArgsBox" />
-                    <TextBlock Text="启动前命令" />
-                    <TextBox x:Name="PreLaunchCommandBox" />
-                    <TextBlock Text="运行目录" />
-                    <TextBox x:Name="RuntimeDirectoryBox" />
-                    <TextBlock Text="自定义 Mods 目录" />
-                    <TextBox x:Name="CustomModsDirectoryBox" />
+                        <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                            <StackPanel Spacing="12">
+                                <StackPanel Spacing="3">
+                                    <TextBlock Text="启动设置" FontSize="20" FontWeight="SemiBold" />
+                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="为当前版本单独配置内存、窗口和启动参数。" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <StackPanel Spacing="6">
+                                    <CheckBox x:Name="ManualMemoryCheckBox" Content="手动分配最大内存" Checked="ManualMemoryChanged" Unchecked="ManualMemoryChanged" />
+                                    <TextBlock x:Name="MemoryLabel" Text="最大内存：自动" />
+                                    <Slider x:Name="MemorySlider" Minimum="1024" Maximum="65536" StepFrequency="256" ValueChanged="MemorySliderChanged" />
+                                </StackPanel>
+                                <Grid ColumnSpacing="12" RowSpacing="10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <StackPanel x:Name="MinimumMemoryPanel" Spacing="5">
+                                        <TextBlock Text="最小内存 MB" />
+                                        <NumberBox x:Name="MinMemoryBox" Minimum="0" Maximum="65536" SmallChange="256" LargeChange="1024" SpinButtonPlacementMode="Compact" />
+                                    </StackPanel>
+                                    <StackPanel x:Name="GcStrategyPanel" Grid.Column="1" Spacing="5">
+                                        <TextBlock Text="GC 策略" />
+                                        <ComboBox x:Name="GcStrategyBox" SelectedIndex="0">
+                                            <ComboBoxItem Content="G1GC" />
+                                            <ComboBoxItem Content="ZGC" />
+                                            <ComboBoxItem Content="SerialGC" />
+                                            <ComboBoxItem Content="None" />
+                                        </ComboBox>
+                                    </StackPanel>
+                                    <StackPanel x:Name="WindowWidthPanel" Grid.Row="1" Spacing="5">
+                                        <TextBlock Text="窗口宽度" />
+                                        <NumberBox x:Name="WindowWidthBox" Minimum="0" Maximum="16384" SmallChange="64" LargeChange="256" SpinButtonPlacementMode="Compact" />
+                                    </StackPanel>
+                                    <StackPanel x:Name="WindowHeightPanel" Grid.Row="1" Grid.Column="1" Spacing="5">
+                                        <TextBlock Text="窗口高度" />
+                                        <NumberBox x:Name="WindowHeightBox" Minimum="0" Maximum="16384" SmallChange="64" LargeChange="256" SpinButtonPlacementMode="Compact" />
+                                    </StackPanel>
+                                </Grid>
+                                <StackPanel Spacing="5">
+                                    <TextBlock Text="快速进入存档" />
+                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="在左侧“立即启动”区域选择。" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
 
-                    <StackPanel Orientation="Horizontal" Spacing="12">
-                        <CheckBox x:Name="UseIsolationCheckBox" Content="版本独立目录" />
-                        <CheckBox x:Name="VersionFavoriteCheckBox" Content="收藏当前版本" />
-                        <CheckBox x:Name="VersionHiddenCheckBox" Content="隐藏当前版本" />
+                        <Border x:Name="AdvancedLaunchSettingsCard" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                            <StackPanel Spacing="12">
+                                <StackPanel Spacing="3">
+                                    <TextBlock Text="参数与路径" FontSize="20" FontWeight="SemiBold" />
+                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="高级模式下可覆盖 JVM 参数、运行目录和 Mods 目录。" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <Grid ColumnSpacing="12" RowSpacing="10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <StackPanel Spacing="5">
+                                        <TextBlock Text="额外 JVM 参数" />
+                                        <TextBox x:Name="ExtraJvmArgsBox" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Spacing="5">
+                                        <TextBlock Text="额外游戏参数" />
+                                        <TextBox x:Name="ExtraGameArgsBox" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="1" Spacing="5">
+                                        <TextBlock Text="启动前命令" />
+                                        <TextBox x:Name="PreLaunchCommandBox" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="1" Grid.Column="1" Spacing="5">
+                                        <TextBlock Text="运行目录" />
+                                        <TextBox x:Name="RuntimeDirectoryBox" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="2" Grid.ColumnSpan="2" Spacing="5">
+                                        <TextBlock Text="自定义 Mods 目录" />
+                                        <TextBox x:Name="CustomModsDirectoryBox" />
+                                    </StackPanel>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                            <StackPanel Spacing="12">
+                                <StackPanel Spacing="3">
+                                    <TextBlock Text="快捷方式" FontSize="20" FontWeight="SemiBold" />
+                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="打开常用目录，或进入当前版本的导出与诊断任务。" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <Grid ColumnSpacing="8" RowSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Button Content="版本文件夹" Click="OpenVersionFolder" HorizontalAlignment="Stretch" />
+                                    <Button Grid.Column="1" Content="存档" Click="OpenSavesFolder" HorizontalAlignment="Stretch" />
+                                    <Button Grid.Column="2" Content="Mods" Click="OpenModsFolder" HorizontalAlignment="Stretch" />
+                                    <Button Grid.Row="1" Content="资源包" Click="OpenResourcepacksFolder" HorizontalAlignment="Stretch" />
+                                    <Button Grid.Row="1" Grid.Column="1" Content="光影" Click="OpenShaderpacksFolder" HorizontalAlignment="Stretch" />
+                                    <Button Grid.Row="1" Grid.Column="2" Content="截图" Click="OpenScreenshotsFolder" HorizontalAlignment="Stretch" />
+                                    <Button Grid.Row="2" Content="导出启动脚本" Click="ExportLaunchScript" HorizontalAlignment="Stretch" />
+                                    <Button Grid.Row="2" Grid.Column="1" Content="导出整合包" Click="OpenModpackExport" HorizontalAlignment="Stretch" />
+                                    <Button Grid.Row="2" Grid.Column="2" Content="分析崩溃" Click="OpenCrashAnalysis" HorizontalAlignment="Stretch" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                            <StackPanel Spacing="12">
+                                <StackPanel Spacing="3">
+                                    <TextBlock Text="高级管理" FontSize="20" FontWeight="SemiBold" />
+                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="校验当前版本文件、生成命令或执行删除操作。" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Button Content="生成命令" Click="PreviewCommand" HorizontalAlignment="Stretch" />
+                                    <Button Grid.Column="1" Content="补全 / 校验文件" Click="RepairSelectedVersion" HorizontalAlignment="Stretch" />
+                                    <Button Grid.Column="2" Content="删除版本" Click="DeleteSelectedVersion" HorizontalAlignment="Stretch" />
+                                </Grid>
+                                <TextBox x:Name="OutputBox" MinHeight="110" MaxHeight="220" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                            <StackPanel Spacing="12">
+                                <StackPanel Spacing="3">
+                                    <TextBlock Text="Mod 管理" FontSize="20" FontWeight="SemiBold" />
+                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="管理当前版本 mods 目录内的 jar，并补齐 Modrinth 必需前置。" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <TextBlock x:Name="VersionModsStatusText" Text="选择支持 Mod 的版本后显示列表" TextWrapping="Wrap" />
+                                <ProgressBar x:Name="VersionModsProgressBar" Minimum="0" Maximum="100" Height="6" />
+                                <ListView x:Name="VersionModsList" MinHeight="180" MaxHeight="320" />
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Button x:Name="ToggleVersionModButton" Content="启用 / 禁用" Click="ToggleSelectedVersionMod" HorizontalAlignment="Stretch" />
+                                    <Button x:Name="DeleteVersionModButton" Grid.Column="1" Content="删除所选 Mod" Click="DeleteSelectedVersionMod" HorizontalAlignment="Stretch" />
+                                    <Button x:Name="RepairVersionModDependenciesButton" Grid.Column="2" Content="补齐 Mod 前置" Click="RepairVersionModDependencies" HorizontalAlignment="Stretch" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
-
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button Content="保存版本设置" Click="SaveVersionSettings" Margin="0,0,8,8" />
-                        <Button Content="检测 Java" Click="CheckJavaRuntime" Margin="0,0,8,8" />
-                        <Button Content="下载推荐 Java" Click="DownloadRecommendedJava" Margin="0,0,8,8" />
-                        <Button Content="生成命令" Click="PreviewCommand" Margin="0,0,8,8" />
-                        <Button Content="补全/校验文件" Click="RepairSelectedVersion" Margin="0,0,8,8" />
-                        <Button Content="启动游戏" Click="LaunchGame" Margin="0,0,8,8" />
-                        <Button Content="导出启动脚本" Click="ExportLaunchScript" Margin="0,0,8,8" />
-                        <Button Content="删除版本" Click="DeleteSelectedVersion" Margin="0,0,8,8" />
-                    </StackPanel>
-
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button Content="版本文件夹" Click="OpenVersionFolder" />
-                        <Button Content="存档" Click="OpenSavesFolder" />
-                        <Button Content="Mods" Click="OpenModsFolder" />
-                        <Button Content="资源包" Click="OpenResourcepacksFolder" />
-                        <Button Content="光影" Click="OpenShaderpacksFolder" />
-                        <Button Content="截图" Click="OpenScreenshotsFolder" />
-                    </StackPanel>
-
-                    <TextBox x:Name="OutputBox" MinHeight="180" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
                 </StackPanel>
             </Grid>
         </StackPanel>

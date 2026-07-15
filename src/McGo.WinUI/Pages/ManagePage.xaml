@@ -6,69 +6,84 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
-    <ScrollViewer>
-        <StackPanel Padding="24,18,24,24" Spacing="16">
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled">
+        <StackPanel x:Name="ResponsiveLayoutRoot" Padding="24,18,24,24" Spacing="16" MaxWidth="1280" HorizontalAlignment="Center" SizeChanged="ResponsiveLayoutRoot_SizeChanged">
+            <VisualStateManager.VisualStateGroups>
+                <VisualStateGroup>
+                    <VisualState x:Name="NarrowLayout">
+                        <VisualState.StateTriggers><AdaptiveTrigger MinWindowWidth="0" /></VisualState.StateTriggers>
+                        <VisualState.Setters>
+                            <Setter Target="ManageFirstColumn.Width" Value="*" />
+                            <Setter Target="ManageSecondColumn.Width" Value="0" />
+                            <Setter Target="ManageThirdColumn.Width" Value="0" />
+                            <Setter Target="EnvironmentCard.(Grid.Row)" Value="1" />
+                            <Setter Target="EnvironmentCard.(Grid.Column)" Value="0" />
+                            <Setter Target="DiagnosticsCard.(Grid.Row)" Value="2" />
+                            <Setter Target="DiagnosticsCard.(Grid.Column)" Value="0" />
+                        </VisualState.Setters>
+                    </VisualState>
+                    <VisualState x:Name="WideLayout">
+                        <VisualState.StateTriggers><AdaptiveTrigger MinWindowWidth="1100" /></VisualState.StateTriggers>
+                        <VisualState.Setters>
+                            <Setter Target="ManageFirstColumn.Width" Value="*" />
+                            <Setter Target="ManageSecondColumn.Width" Value="*" />
+                            <Setter Target="ManageThirdColumn.Width" Value="*" />
+                            <Setter Target="EnvironmentCard.(Grid.Row)" Value="0" />
+                            <Setter Target="EnvironmentCard.(Grid.Column)" Value="1" />
+                            <Setter Target="DiagnosticsCard.(Grid.Row)" Value="0" />
+                            <Setter Target="DiagnosticsCard.(Grid.Column)" Value="2" />
+                        </VisualState.Setters>
+                    </VisualState>
+                </VisualStateGroup>
+            </VisualStateManager.VisualStateGroups>
             <StackPanel Spacing="4">
                 <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="管理中心" />
-                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="将账号、环境和诊断入口集中在一起，和旧版 McGo 的管理页保持同一条动线。" TextWrapping="Wrap" />
+                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="按任务进入账号、环境设置或诊断帮助。" TextWrapping="Wrap" />
             </StackPanel>
 
-            <Grid ColumnSpacing="12" RowSpacing="12">
+            <Grid ColumnSpacing="14" RowSpacing="14">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition x:Name="ManageFirstColumn" Width="*" />
+                    <ColumnDefinition x:Name="ManageSecondColumn" Width="*" />
+                    <ColumnDefinition x:Name="ManageThirdColumn" Width="*" />
                 </Grid.ColumnDefinitions>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <Border Padding="16" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
                     <StackPanel Spacing="10">
-                        <SymbolIcon Symbol="Contact" />
+                        <SymbolIcon Symbol="Contact" HorizontalAlignment="Left" />
                         <TextBlock Text="账号与登录" FontSize="18" FontWeight="SemiBold" />
-                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="管理当前账号，或新增离线 / Microsoft / 外置账号。" TextWrapping="Wrap" />
-                        <Button Content="进入账号" Click="OpenAccounts" HorizontalAlignment="Left" />
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="切换当前账号，或新增离线、Microsoft 和外置账号。" TextWrapping="Wrap" />
+                        <Button Content="管理账号" Click="OpenAccounts" HorizontalAlignment="Stretch" />
                     </StackPanel>
                 </Border>
 
-                <Border Grid.Column="1" Padding="16" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                <Border x:Name="EnvironmentCard" Grid.Column="1" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
                     <StackPanel Spacing="10">
-                        <SymbolIcon Symbol="Setting" />
+                        <SymbolIcon Symbol="Setting" HorizontalAlignment="Left" />
                         <TextBlock Text="环境与界面" FontSize="18" FontWeight="SemiBold" />
-                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="游戏目录、Java、下载参数、主题、主页、音乐和更新。" TextWrapping="Wrap" />
-                        <Button Content="进入设置" Click="OpenSettings" HorizontalAlignment="Left" />
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="配置游戏目录、Java、下载、主题、主页、音乐和更新。" TextWrapping="Wrap" />
+                        <Button Content="打开设置" Click="OpenSettings" HorizontalAlignment="Stretch" />
                     </StackPanel>
                 </Border>
 
-                <Border Grid.Column="2" Padding="16" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                <Border x:Name="DiagnosticsCard" Grid.Column="2" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
                     <StackPanel Spacing="10">
-                        <SymbolIcon Symbol="Document" />
-                        <TextBlock Text="诊断日志" FontSize="18" FontWeight="SemiBold" />
-                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="查看启动、下载、登录和联机日志，定位失败原因。" TextWrapping="Wrap" />
-                        <Button Content="查看日志" Click="OpenLogs" HorizontalAlignment="Left" />
-                    </StackPanel>
-                </Border>
-
-                <Border Grid.Row="1" Grid.ColumnSpan="2" Padding="16" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                    <StackPanel Spacing="10">
-                        <SymbolIcon Symbol="Library" />
-                        <TextBlock Text="内容管理" FontSize="18" FontWeight="SemiBold" />
-                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="资源市场和整合包仍放在下载任务线里，适合导入 Mod、资源包、光影和胶囊。" TextWrapping="Wrap" />
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Button Content="资源市场" Click="OpenResources" />
-                            <Button Content="整合包" Click="OpenModpacks" />
-                        </StackPanel>
-                    </StackPanel>
-                </Border>
-
-                <Border Grid.Row="1" Grid.Column="2" Padding="16" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                    <StackPanel Spacing="10">
-                        <SymbolIcon Symbol="Help" />
-                        <TextBlock Text="帮助与关于" FontSize="18" FontWeight="SemiBold" />
-                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="常见问题、目录说明、版本信息和鸣谢。" TextWrapping="Wrap" />
-                        <Button Content="打开关于" Click="OpenAbout" HorizontalAlignment="Left" />
+                        <SymbolIcon Symbol="Document" HorizontalAlignment="Left" />
+                        <TextBlock Text="诊断与帮助" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="查看运行日志、常见问题、目录说明和版本信息。" TextWrapping="Wrap" />
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Button Content="查看日志" Click="OpenLogs" HorizontalAlignment="Stretch" />
+                            <Button Grid.Column="1" Content="帮助与关于" Click="OpenAbout" HorizontalAlignment="Stretch" />
+                        </Grid>
                     </StackPanel>
                 </Border>
             </Grid>

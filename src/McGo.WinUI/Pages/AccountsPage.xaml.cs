@@ -5,6 +5,7 @@ using Microsoft.UI.Xaml.Controls;
 using McGo.Core.App;
 using McGo.Core.Authentication;
 using McGo.Core.Configuration;
+using McGo.Core.Downloads;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
@@ -19,10 +20,13 @@ public sealed partial class AccountsPage : Page
     private List<JsonObject> _accounts = [];
     private readonly Dictionary<string, JsonObject> _accountsByLabel = [];
     private string _lastMicrosoftLoginUrl = "";
+    private bool _initialized;
 
     public AccountsPage()
     {
         InitializeComponent();
+        _initialized = true;
+        LoginModeBox.SelectedItem = LoginModeBox.Items[0];
         Refresh();
     }
 
@@ -32,7 +36,9 @@ public sealed partial class AccountsPage : Page
     {
         _settings.LoadConfig();
         _accounts = _settings.LoadAccounts();
+        selectedAccountId ??= _settings.Config.Get("ACCOUNTS", "selected_account_id", "");
         AutoOpenBrowserCheckBox.IsChecked = _settings.Config.GetBool("AUTH", "auto_open_browser", true);
+        ApplyAdvancedVisibility();
         _accountsByLabel.Clear();
         var labels = new List<string>();
         foreach (var account in _accounts)
@@ -42,20 +48,29 @@ public sealed partial class AccountsPage : Page
             _accountsByLabel[label] = account;
         }
 
-        AccountsList.ItemsSource = labels;
+        CurrentAccountBox.ItemsSource = labels;
+        DeleteAccountBox.ItemsSource = labels;
         if (!string.IsNullOrWhiteSpace(selectedAccountId))
         {
-            AccountsList.SelectedItem = labels.FirstOrDefault(label => _accountsByLabel[label]["id"]?.GetValue<string>() == selectedAccountId);
+            CurrentAccountBox.SelectedItem = labels.FirstOrDefault(label => _accountsByLabel[label]["id"]?.GetValue<string>() == selectedAccountId);
         }
-        else if (labels.Count > 0)
+        if (CurrentAccountBox.SelectedItem is null && labels.Count > 0)
         {
-            AccountsList.SelectedIndex = 0;
+            CurrentAccountBox.SelectedIndex = 0;
         }
+
+        DeleteAccountBox.SelectedItem = CurrentAccountBox.SelectedItem;
 
         OutputBox.Text = labels.Count == 0 ? "当前没有账号。" : $"已加载 {labels.Count} 个账号。";
+        if (labels.Count == 0)
+        {
+            _settings.Config.Set("ACCOUNTS", "selected_account_id", "");
+            _settings.SaveConfig();
+            CurrentAccountStatusText.Text = "当前账号：未选择";
+        }
     }
 
-    private void AccountsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void CurrentAccountSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (SelectedAccount() is not { } account)
         {
@@ -63,17 +78,96 @@ public sealed partial class AccountsPage : Page
         }
 
         var type = account["type"]?.GetValue<string>() ?? "offline";
+        _settings.Config.Set("ACCOUNTS", "selected_account_id", account["id"]?.GetValue<string>() ?? "");
+        _settings.SaveConfig();
+        CurrentAccountStatusText.Text = "当前账号：" + AccountLabel(account);
+
         if (type == "offline")
         {
             OfflineNameBox.Text = account["username"]?.GetValue<string>() ?? account["display_name"]?.GetValue<string>() ?? "";
             OfflineUuidBox.Text = account["uuid"]?.GetValue<string>() ?? "";
+            OfflineAccessTokenBox.Password = account["access_token"]?.GetValue<string>() ?? "";
         }
         else if (type == "external")
         {
             ExternalServerBox.Text = account["auth_server"]?.GetValue<string>() ?? account["server"]?.GetValue<string>() ?? "";
             ExternalUsernameBox.Text = account["username"]?.GetValue<string>() ?? account["display_name"]?.GetValue<string>() ?? "";
             AuthlibPathBox.Text = account["authlib_injector_path"]?.GetValue<string>() ?? "";
+            ExternalStatusText.Text = $"当前外置账号：{AccountLabel(account)}";
         }
+    }
+
+    private void LoginModeChanged(SelectorBar sender, SelectorBarSelectionChangedEventArgs e)
+    {
+        if (!_initialized)
+        {
+            return;
+        }
+
+        var mode = SelectedLoginMode();
+        var showEditor = mode != "overview";
+        CurrentAccountCard.Visibility = showEditor ? Visibility.Collapsed : Visibility.Visible;
+        AccountEditors.Visibility = showEditor ? Visibility.Visible : Visibility.Collapsed;
+        OfflineAccountCard.Visibility = mode == "offline" ? Visibility.Visible : Visibility.Collapsed;
+        MicrosoftAccountCard.Visibility = mode == "microsoft" ? Visibility.Visible : Visibility.Collapsed;
+        ExternalAccountCard.Visibility = mode == "external" ? Visibility.Visible : Visibility.Collapsed;
+        if (mode == "microsoft")
+        {
+            FocusMicrosoftLogin(sender, new RoutedEventArgs());
+        }
+        else if (mode == "external")
+        {
+            FocusExternalLogin(sender, new RoutedEventArgs());
+        }
+        else if (mode == "offline")
+        {
+            FocusOfflineAccount(sender, new RoutedEventArgs());
+        }
+        else
+        {
+            FocusCurrentAccounts(sender, new RoutedEventArgs());
+        }
+    }
+
+    private void DeleteAccountSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+    }
+
+    private void SelectLoginMode(string mode)
+    {
+        foreach (var item in LoginModeBox.Items.OfType<SelectorBarItem>())
+        {
+            if (string.Equals(item.Tag?.ToString(), mode, StringComparison.OrdinalIgnoreCase))
+            {
+                LoginModeBox.SelectedItem = item;
+                return;
+            }
+        }
+    }
+
+    private void FocusCurrentAccounts(object sender, RoutedEventArgs e)
+    {
+        CurrentAccountBox.Focus(FocusState.Programmatic);
+        OutputBox.Text = "已切到当前账号列表。";
+    }
+
+    private void FocusOfflineAccount(object sender, RoutedEventArgs e)
+    {
+        OfflineNameBox.Focus(FocusState.Programmatic);
+        OutputBox.Text = "填写用户名后可添加或更新离线账号。";
+    }
+
+    private void FocusMicrosoftLogin(object sender, RoutedEventArgs e)
+    {
+        AutoOpenBrowserCheckBox.Focus(FocusState.Programmatic);
+        OutputBox.Text = "可生成 Microsoft 登录链接，或直接添加 Microsoft 账号。";
+    }
+
+    private void FocusExternalLogin(object sender, RoutedEventArgs e)
+    {
+        ExternalServerBox.Focus(FocusState.Programmatic);
+        UpdateExternalStatus();
+        OutputBox.Text = "填写外置登录服务器、用户名、密码和 authlib-injector.jar 后登录。";
     }
 
     private async void RefreshSelectedAccount(object sender, RoutedEventArgs e)
@@ -117,6 +211,7 @@ public sealed partial class AccountsPage : Page
                 refreshed["auth_server"] = account["auth_server"]?.GetValue<string>() ?? refreshed["auth_server"]?.GetValue<string>() ?? "";
                 refreshed["authlib_injector_path"] = account["authlib_injector_path"]?.GetValue<string>() ?? "";
                 UpsertAccount(refreshed);
+                ExternalStatusText.Text = "外置账号已刷新/验证。";
                 OutputBox.Text = "外置账号已刷新/验证。";
                 return;
             }
@@ -143,7 +238,7 @@ public sealed partial class AccountsPage : Page
         account["display_name"] = username;
         account["username"] = username;
         account["uuid"] = OfflineUuidBox.Text.Trim();
-        account["access_token"] = "";
+        account["access_token"] = OfflineAccessTokenBox.Password.Trim();
         account["refresh_token"] = "";
         if (existing is null)
         {
@@ -157,7 +252,7 @@ public sealed partial class AccountsPage : Page
 
     private async void DeleteSelectedAccount(object sender, RoutedEventArgs e)
     {
-        var account = SelectedAccount();
+        var account = SelectedDeleteAccount();
         if (account is null)
         {
             OutputBox.Text = "请先选择账号。";
@@ -190,10 +285,12 @@ public sealed partial class AccountsPage : Page
         try
         {
             ExternalServerBox.Text = ExternalAuthService.NormalizeAuthServer(ExternalServerBox.Text);
+            UpdateExternalStatus();
             OutputBox.Text = "认证服务器地址已规范化。";
         }
         catch (Exception exc)
         {
+            ExternalStatusText.Text = "服务器地址无效：" + exc.Message;
             OutputBox.Text = exc.Message;
         }
     }
@@ -202,34 +299,68 @@ public sealed partial class AccountsPage : Page
     {
         try
         {
+            ExternalStatusText.Text = "正在探测认证服务器...";
             OutputBox.Text = "正在探测认证服务器...";
             var service = new ExternalAuthService();
             var result = await service.ProbeExternalAuthServerAsync(ExternalServerBox.Text);
             ExternalServerBox.Text = result.Server;
+            ExternalStatusText.Text = result.Message;
             OutputBox.Text = result.Message;
         }
         catch (Exception exc)
         {
+            ExternalStatusText.Text = "认证服务器探测失败：" + exc.Message;
             OutputBox.Text = "认证服务器探测失败：" + exc.Message;
         }
     }
 
-    private async void DownloadAuthlibInjector(object sender, RoutedEventArgs e)
+    private void DownloadAuthlibInjector(object sender, RoutedEventArgs e)
     {
         try
         {
-            OutputBox.Text = "正在下载 authlib-injector...";
             _settings.LoadConfig();
             var gameDir = _settings.Config.Get("GAME", "directory", AppConstants.DefaultGameDirectory);
             var targetDir = Path.Combine(gameDir, "authlib-injector");
-            var service = new ExternalAuthService();
-            var result = await service.DownloadAuthlibInjectorAsync(targetDir);
-            AuthlibPathBox.Text = result.Path;
-            OutputBox.Text = "authlib-injector 已下载：" + result.Path;
+            ExternalStatusText.Text = "已加入全局队列，等待下载 authlib-injector...";
+            OutputBox.Text = ExternalStatusText.Text;
+            DownloadTaskManager.Current.Enqueue("authlib", "下载 authlib-injector", (record, token) =>
+                DownloadAuthlibInjectorTaskAsync(record, targetDir, token));
         }
         catch (Exception exc)
         {
+            ExternalStatusText.Text = "authlib-injector 下载失败：" + exc.Message;
             OutputBox.Text = "authlib-injector 下载失败：" + exc.Message;
+        }
+    }
+
+    private async Task<string> DownloadAuthlibInjectorTaskAsync(
+        DownloadTaskRecord record,
+        string targetDir,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            ExternalStatusText.Text = "正在下载 authlib-injector...";
+            OutputBox.Text = ExternalStatusText.Text;
+            DownloadTaskManager.Current.Update(record, item => item.Detail = "正在下载 authlib-injector...");
+            var service = new ExternalAuthService();
+            var result = await service.DownloadAuthlibInjectorAsync(targetDir, cancellationToken);
+            AuthlibPathBox.Text = result.Path;
+            UpdateExternalStatus();
+            OutputBox.Text = "authlib-injector 已下载：" + result.Path;
+            return "authlib-injector 已下载";
+        }
+        catch (OperationCanceledException)
+        {
+            ExternalStatusText.Text = "authlib-injector 下载已取消。";
+            OutputBox.Text = ExternalStatusText.Text;
+            throw;
+        }
+        catch (Exception exc)
+        {
+            ExternalStatusText.Text = "authlib-injector 下载失败：" + exc.Message;
+            OutputBox.Text = "authlib-injector 下载失败：" + exc.Message;
+            throw;
         }
     }
 
@@ -246,6 +377,7 @@ public sealed partial class AccountsPage : Page
         if (file is not null)
         {
             AuthlibPathBox.Text = file.Path;
+            UpdateExternalStatus();
             OutputBox.Text = "已选择 authlib-injector.jar：" + file.Path;
         }
     }
@@ -278,6 +410,7 @@ public sealed partial class AccountsPage : Page
     private void GenerateMicrosoftLogin(object sender, RoutedEventArgs e)
     {
         _lastMicrosoftLoginUrl = _microsoftAuthenticator.GetLoginUrl();
+        MicrosoftLoginLinkBox.Text = _lastMicrosoftLoginUrl;
         SaveMicrosoftLoginSettings();
         MicrosoftOutputBox.Text = LoginHelpText(_lastMicrosoftLoginUrl, AutoOpenBrowserCheckBox.IsChecked == true
             ? "可点击“开始登录”自动打开浏览器，也可以手动复制链接。"
@@ -287,27 +420,31 @@ public sealed partial class AccountsPage : Page
 
     private void CopyMicrosoftLogin(object sender, RoutedEventArgs e)
     {
-        if (string.IsNullOrWhiteSpace(_lastMicrosoftLoginUrl))
+        var loginUrl = CurrentMicrosoftLoginUrl();
+        if (string.IsNullOrWhiteSpace(loginUrl))
         {
             GenerateMicrosoftLogin(sender, e);
+            loginUrl = CurrentMicrosoftLoginUrl();
         }
 
         var package = new DataPackage();
-        package.SetText(_lastMicrosoftLoginUrl);
+        package.SetText(loginUrl);
         Clipboard.SetContent(package);
-        MicrosoftOutputBox.Text = LoginHelpText(_lastMicrosoftLoginUrl, "登录链接已复制到剪贴板。请在浏览器中打开并完成授权。");
+        MicrosoftOutputBox.Text = LoginHelpText(loginUrl, "登录链接已复制到剪贴板。请在浏览器中打开并完成授权。");
         OutputBox.Text = "登录链接已复制。";
     }
 
     private void OpenMicrosoftLogin(object sender, RoutedEventArgs e)
     {
-        if (string.IsNullOrWhiteSpace(_lastMicrosoftLoginUrl))
+        var loginUrl = CurrentMicrosoftLoginUrl();
+        if (string.IsNullOrWhiteSpace(loginUrl))
         {
             GenerateMicrosoftLogin(sender, e);
+            loginUrl = CurrentMicrosoftLoginUrl();
         }
 
-        Process.Start(new ProcessStartInfo(_lastMicrosoftLoginUrl) { UseShellExecute = true });
-        MicrosoftOutputBox.Text = LoginHelpText(_lastMicrosoftLoginUrl, "已打开浏览器。完成授权后点击“等待回调并登录”。");
+        Process.Start(new ProcessStartInfo(loginUrl) { UseShellExecute = true });
+        MicrosoftOutputBox.Text = LoginHelpText(loginUrl, "已打开浏览器。完成授权后点击“等待回调并登录”。");
         OutputBox.Text = "已打开浏览器。";
     }
 
@@ -355,10 +492,12 @@ public sealed partial class AccountsPage : Page
             var injectorPath = AuthlibPathBox.Text.Trim();
             if (injectorPath.Length == 0 || !File.Exists(injectorPath))
             {
+                ExternalStatusText.Text = "Authlib：未选择或不存在";
                 OutputBox.Text = "请选择有效的 authlib-injector.jar。";
                 return;
             }
 
+            ExternalStatusText.Text = "正在登录外置账号...";
             var service = new ExternalAuthService();
             var account = await service.AuthenticateExternalAccountAsync(ExternalServerBox.Text, ExternalUsernameBox.Text, ExternalPasswordBox.Password);
             account["id"] = Guid.NewGuid().ToString();
@@ -367,12 +506,53 @@ public sealed partial class AccountsPage : Page
             account["authlib_injector_path"] = injectorPath;
             UpsertAccount(account, findDuplicate: true);
             Refresh(account["id"]?.GetValue<string>());
+            ExternalStatusText.Text = $"外置登录成功：{AccountLabel(account)}";
             OutputBox.Text = "外置账号已添加。";
         }
         catch (Exception exc)
         {
+            ExternalStatusText.Text = "外置登录失败：" + exc.Message;
             OutputBox.Text = "外置登录失败：" + exc.Message;
         }
+    }
+
+    private void ExternalFormChanged(object sender, TextChangedEventArgs e) => UpdateExternalStatus();
+
+    private void UpdateExternalStatus()
+    {
+        if (ExternalStatusText is null)
+        {
+            return;
+        }
+
+        var serverText = ExternalServerBox.Text.Trim();
+        var parts = new List<string>();
+        if (serverText.Length == 0)
+        {
+            parts.Add("服务器：未填写");
+        }
+        else
+        {
+            try
+            {
+                parts.Add("服务器：" + ExternalAuthService.NormalizeAuthServer(serverText));
+            }
+            catch (Exception exc)
+            {
+                ExternalStatusText.Text = "服务器地址无效：" + exc.Message;
+                return;
+            }
+        }
+
+        var injectorPath = AuthlibPathBox.Text.Trim();
+        parts.Add(injectorPath.Length > 0 && File.Exists(injectorPath) ? "Authlib：已选择" : "Authlib：未选择或不存在");
+        var username = ExternalUsernameBox.Text.Trim();
+        if (username.Length > 0)
+        {
+            parts.Add("用户：" + username);
+        }
+
+        ExternalStatusText.Text = string.Join(" | ", parts);
     }
 
     private void PreviewAuthlibArgs(object sender, RoutedEventArgs e)
@@ -394,7 +574,10 @@ public sealed partial class AccountsPage : Page
     }
 
     private JsonObject? SelectedAccount()
-        => AccountsList.SelectedItem is string label && _accountsByLabel.TryGetValue(label, out var account) ? account : null;
+        => CurrentAccountBox.SelectedItem is string label && _accountsByLabel.TryGetValue(label, out var account) ? account : null;
+
+    private JsonObject? SelectedDeleteAccount()
+        => DeleteAccountBox.SelectedItem is string label && _accountsByLabel.TryGetValue(label, out var account) ? account : null;
 
     private void UpsertAccount(JsonObject account, bool findDuplicate = false)
     {
@@ -439,6 +622,25 @@ public sealed partial class AccountsPage : Page
         _settings.SaveConfig();
     }
 
+    private void ApplyAdvancedVisibility()
+    {
+        var advanced = _settings.Config.GetBool("UI", "advanced_mode", false);
+        OfflineUuidBox.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
+        OfflineAccessTokenBox.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
+        Grid.SetColumnSpan(OfflineNameBox, advanced ? 1 : 2);
+    }
+
+    private string CurrentMicrosoftLoginUrl()
+    {
+        var loginUrl = MicrosoftLoginLinkBox.Text.Trim();
+        if (loginUrl.Length > 0)
+        {
+            _lastMicrosoftLoginUrl = loginUrl;
+        }
+
+        return _lastMicrosoftLoginUrl;
+    }
+
     private static string LoginHelpText(string loginUrl, string hint)
         => string.Join(Environment.NewLine, [
             hint,
@@ -454,4 +656,50 @@ public sealed partial class AccountsPage : Page
         var name = account["display_name"]?.GetValue<string>() ?? account["username"]?.GetValue<string>() ?? "(未命名)";
         return $"{name} ({type})";
     }
+
+    private static string ComboText(ComboBox combo, string fallback)
+    {
+        if (combo.SelectedItem is ComboBoxItem item)
+        {
+            return item.Content?.ToString() ?? fallback;
+        }
+
+        return combo.SelectedItem?.ToString() ?? fallback;
+    }
+
+    private string SelectedLoginMode()
+        => LoginModeBox.SelectedItem?.Tag?.ToString() ?? "overview";
+
+    internal void RunSmokeChecks()
+    {
+        var advancedVisibility = _settings.Config.GetBool("UI", "advanced_mode", false) ? Visibility.Visible : Visibility.Collapsed;
+        if (OfflineUuidBox.Visibility != advancedVisibility || OfflineAccessTokenBox.Visibility != advancedVisibility)
+        {
+            throw new InvalidOperationException("账号高级字段可见性与高级模式不一致。");
+        }
+
+        foreach (var item in LoginModeBox.Items.OfType<SelectorBarItem>())
+        {
+            LoginModeBox.SelectedItem = item;
+            var mode = item.Tag?.ToString() ?? "";
+            var expectedEditorVisibility = mode == "overview" ? Visibility.Collapsed : Visibility.Visible;
+            if (CurrentAccountCard.Visibility != (mode == "overview" ? Visibility.Visible : Visibility.Collapsed)
+                || AccountEditors.Visibility != expectedEditorVisibility
+                || OfflineAccountCard.Visibility != (mode == "offline" ? Visibility.Visible : Visibility.Collapsed)
+                || MicrosoftAccountCard.Visibility != (mode == "microsoft" ? Visibility.Visible : Visibility.Collapsed)
+                || ExternalAccountCard.Visibility != (mode == "external" ? Visibility.Visible : Visibility.Collapsed))
+            {
+                throw new InvalidOperationException($"账号分段 {mode} 的可见性不正确。");
+            }
+        }
+
+        LoginModeBox.SelectedItem = LoginModeBox.Items[0];
+    }
+
+    internal void SelectLoginModeForSmoke(string mode)
+    {
+        SelectLoginMode(mode);
+        ResponsiveLayoutRoot.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false });
+    }
+
 }

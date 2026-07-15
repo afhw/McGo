@@ -37,9 +37,46 @@
             Grid.Row="1"
             IsBackButtonVisible="Collapsed"
             IsPaneToggleButtonVisible="False"
-            OpenPaneLength="220"
+            IsSettingsVisible="False"
+            OpenPaneLength="184"
             CompactPaneLength="48"
+            CompactModeThresholdWidth="640"
+            ExpandedModeThresholdWidth="1000"
             SelectionChanged="NavView_SelectionChanged">
+            <NavigationView.Resources>
+                <ResourceDictionary>
+                    <ResourceDictionary.ThemeDictionaries>
+                        <ResourceDictionary x:Key="Dark">
+                            <SolidColorBrush x:Key="NavigationViewItemBackgroundSelected" Color="#FF3A3A3A" />
+                            <SolidColorBrush x:Key="NavigationViewItemBackgroundSelectedPointerOver" Color="#FF454545" />
+                            <SolidColorBrush x:Key="NavigationViewItemBackgroundSelectedPressed" Color="#FF505050" />
+                            <SolidColorBrush x:Key="NavigationViewItemBackgroundChecked" Color="#FF3A3A3A" />
+                            <SolidColorBrush x:Key="NavigationViewItemBackgroundCheckedPointerOver" Color="#FF454545" />
+                            <SolidColorBrush x:Key="NavigationViewItemBackgroundCheckedPressed" Color="#FF505050" />
+                            <SolidColorBrush x:Key="NavigationViewItemForegroundSelected" Color="#FFFFFFFF" />
+                            <SolidColorBrush x:Key="NavigationViewItemForegroundSelectedPointerOver" Color="#FFFFFFFF" />
+                            <SolidColorBrush x:Key="NavigationViewItemForegroundSelectedPressed" Color="#FFFFFFFF" />
+                            <SolidColorBrush x:Key="NavigationViewItemForegroundChecked" Color="#FFFFFFFF" />
+                            <SolidColorBrush x:Key="NavigationViewItemForegroundCheckedPointerOver" Color="#FFFFFFFF" />
+                            <SolidColorBrush x:Key="NavigationViewItemForegroundCheckedPressed" Color="#FFFFFFFF" />
+                        </ResourceDictionary>
+                        <ResourceDictionary x:Key="Light">
+                            <SolidColorBrush x:Key="NavigationViewItemBackgroundSelected" Color="#FFE7E7E7" />
+                            <SolidColorBrush x:Key="NavigationViewItemBackgroundSelectedPointerOver" Color="#FFDDDDDD" />
+                            <SolidColorBrush x:Key="NavigationViewItemBackgroundSelectedPressed" Color="#FFD2D2D2" />
+                            <SolidColorBrush x:Key="NavigationViewItemBackgroundChecked" Color="#FFE7E7E7" />
+                            <SolidColorBrush x:Key="NavigationViewItemBackgroundCheckedPointerOver" Color="#FFDDDDDD" />
+                            <SolidColorBrush x:Key="NavigationViewItemBackgroundCheckedPressed" Color="#FFD2D2D2" />
+                            <SolidColorBrush x:Key="NavigationViewItemForegroundSelected" Color="#FF1B1B1B" />
+                            <SolidColorBrush x:Key="NavigationViewItemForegroundSelectedPointerOver" Color="#FF1B1B1B" />
+                            <SolidColorBrush x:Key="NavigationViewItemForegroundSelectedPressed" Color="#FF1B1B1B" />
+                            <SolidColorBrush x:Key="NavigationViewItemForegroundChecked" Color="#FF1B1B1B" />
+                            <SolidColorBrush x:Key="NavigationViewItemForegroundCheckedPointerOver" Color="#FF1B1B1B" />
+                            <SolidColorBrush x:Key="NavigationViewItemForegroundCheckedPressed" Color="#FF1B1B1B" />
+                        </ResourceDictionary>
+                    </ResourceDictionary.ThemeDictionaries>
+                </ResourceDictionary>
+            </NavigationView.Resources>
             <NavigationView.MenuItems>
                 <NavigationViewItem Content="首页" IsSelected="True" Tag="home">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Home" /></NavigationViewItem.Icon>
@@ -47,42 +84,36 @@
                 <NavigationViewItem Content="启动" Tag="launch">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Play" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem Content="下载" Tag="download">
+                <NavigationViewItem x:Name="DownloadNavItem" Content="下载" Tag="download">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Download" /></NavigationViewItem.Icon>
-                    <NavigationViewItem.MenuItems>
-                        <NavigationViewItem Content="下载原版" Tag="download">
-                            <NavigationViewItem.Icon><SymbolIcon Symbol="Download" /></NavigationViewItem.Icon>
-                        </NavigationViewItem>
-                        <NavigationViewItem Content="资源市场" Tag="resources">
-                            <NavigationViewItem.Icon><SymbolIcon Symbol="Library" /></NavigationViewItem.Icon>
-                        </NavigationViewItem>
-                        <NavigationViewItem Content="整合包" Tag="modpacks">
-                            <NavigationViewItem.Icon><SymbolIcon Symbol="Folder" /></NavigationViewItem.Icon>
-                        </NavigationViewItem>
-                    </NavigationViewItem.MenuItems>
                 </NavigationViewItem>
                 <NavigationViewItem Content="联机" Tag="online">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Globe" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem Content="管理" Tag="manage">
+                <NavigationViewItem x:Name="ManageNavItem" Content="管理" Tag="manage">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Setting" /></NavigationViewItem.Icon>
-                    <NavigationViewItem.MenuItems>
-                        <NavigationViewItem Content="账号" Tag="accounts">
-                            <NavigationViewItem.Icon><SymbolIcon Symbol="Contact" /></NavigationViewItem.Icon>
-                        </NavigationViewItem>
-                        <NavigationViewItem Content="环境与界面" Tag="settings">
-                            <NavigationViewItem.Icon><SymbolIcon Symbol="Setting" /></NavigationViewItem.Icon>
-                        </NavigationViewItem>
-                        <NavigationViewItem Content="日志" Tag="logs">
-                            <NavigationViewItem.Icon><SymbolIcon Symbol="Document" /></NavigationViewItem.Icon>
-                        </NavigationViewItem>
-                        <NavigationViewItem Content="关于" Tag="about">
-                            <NavigationViewItem.Icon><SymbolIcon Symbol="Help" /></NavigationViewItem.Icon>
-                        </NavigationViewItem>
-                    </NavigationViewItem.MenuItems>
                 </NavigationViewItem>
             </NavigationView.MenuItems>
             <Frame x:Name="NavFrame" />
         </NavigationView>
+
+        <Button
+            x:Name="GlobalDownloadTaskButton"
+            Grid.Row="1"
+            Canvas.ZIndex="20"
+            MinWidth="150"
+            Height="42"
+            Margin="0,0,24,20"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Bottom"
+            Click="OpenGlobalDownloadTasks"
+            Style="{StaticResource AccentButtonStyle}"
+            ToolTipService.ToolTip="打开全局下载任务"
+            Visibility="Collapsed">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <SymbolIcon Symbol="Download" />
+                <TextBlock x:Name="GlobalDownloadTaskText" VerticalAlignment="Center" Text="下载任务" />
+            </StackPanel>
+        </Button>
     </Grid>
 </Window>

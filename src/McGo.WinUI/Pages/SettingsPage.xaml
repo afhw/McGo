@@ -6,133 +6,209 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
-    <ScrollViewer>
-        <StackPanel Padding="24,16,24,16" Spacing="18">
-            <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="设置" />
-
-            <StackPanel Spacing="10">
-                <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="基础路径" />
-                <Grid ColumnSpacing="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBox x:Name="GameDirectoryBox" Header="游戏目录" />
-                    <Button Grid.Column="1" VerticalAlignment="Bottom" Content="选择" Click="ChooseGameDirectory" />
-                </Grid>
-                <Grid ColumnSpacing="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBox x:Name="JavaPathBox" Header="Java 路径" />
-                    <Button Grid.Column="1" VerticalAlignment="Bottom" Content="选择" Click="ChooseJavaFile" />
-                </Grid>
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled" HorizontalContentAlignment="Stretch">
+        <StackPanel x:Name="SettingsLayoutRoot" Padding="24,18,24,24" Spacing="16" MaxWidth="1100" HorizontalAlignment="Stretch">
+            <StackPanel Spacing="4">
+                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="环境与界面" />
+                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="按任务切换设置分区；保存会一次写入所有修改。" TextWrapping="Wrap" />
             </StackPanel>
 
-            <StackPanel Spacing="10">
-                <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="下载" />
-                <Grid ColumnSpacing="10" RowSpacing="10">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
+            <SelectorBar x:Name="SettingsSectionBar" SelectionChanged="SettingsSectionChanged">
+                <SelectorBarItem Text="环境" Tag="environment" />
+                <SelectorBarItem Text="下载" Tag="download" />
+                <SelectorBarItem Text="外观与功能" Tag="appearance" />
+                <SelectorBarItem Text="音乐" Tag="music" />
+                <SelectorBarItem Text="更新" Tag="update" />
+            </SelectorBar>
 
-                    <ComboBox x:Name="MirrorBox" Header="镜像源" HorizontalAlignment="Stretch">
-                        <ComboBoxItem Content="官方源" Tag="official" />
-                        <ComboBoxItem Content="BMCLAPI" Tag="bmclapi" />
-                    </ComboBox>
-                    <ComboBox x:Name="CacheStrategyBox" Grid.Column="1" Header="缓存策略" HorizontalAlignment="Stretch">
-                        <ComboBoxItem Content="复用缓存" Tag="reuse" />
-                        <ComboBoxItem Content="校验后复用" Tag="verify" />
-                        <ComboBoxItem Content="总是下载" Tag="redownload" />
-                    </ComboBox>
-
-                    <TextBox x:Name="CoreThreadsBox" Grid.Row="1" Header="核心文件并发" InputScope="Number" />
-                    <TextBox x:Name="AssetThreadsBox" Grid.Row="1" Grid.Column="1" Header="资源文件并发" InputScope="Number" />
-                    <TextBox x:Name="SpeedLimitBox" Grid.Row="2" Header="限速 KB/s（0 为不限）" InputScope="Number" />
-                    <TextBox x:Name="ModrinthApiBaseBox" Grid.Row="2" Grid.Column="1" Header="Modrinth API Base" />
-                </Grid>
-                <TextBox x:Name="ModrinthCdnBaseBox" Header="Modrinth CDN Base" />
-            </StackPanel>
-
-            <StackPanel Spacing="10">
-                <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="外观和主页" />
-                <Grid ColumnSpacing="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="220" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <ComboBox x:Name="ThemeBox" Header="界面主题" HorizontalAlignment="Stretch">
-                        <ComboBoxItem Content="深色" Tag="dark" />
-                        <ComboBoxItem Content="浅色" Tag="light" />
-                        <ComboBoxItem Content="跟随系统" Tag="auto" />
-                    </ComboBox>
-                    <TextBox x:Name="ThemeImageBox" Grid.Column="1" Header="主题背景图" />
-                    <Button Grid.Column="2" VerticalAlignment="Bottom" Content="选择" Click="ChooseThemeImageFile" />
-                </Grid>
-                <Grid ColumnSpacing="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBox x:Name="HomeContentSourceBox" Header="主页内容源" />
-                    <Button Grid.Column="1" VerticalAlignment="Bottom" Content="选择" Click="ChooseHomeContentFile" />
-                </Grid>
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <CheckBox x:Name="HomeNetworkCheckBox" Content="允许联网主页" />
-                    <Button Content="刷新主页预览" Click="RefreshHomeContent" />
+            <Border x:Name="EnvironmentSettingsPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                <StackPanel Spacing="12">
+                    <StackPanel Spacing="3">
+                        <TextBlock Text="环境与目录" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="Minecraft 数据目录和默认 Java 运行时。" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="GameDirectoryBox" Header="游戏目录" />
+                        <Button Grid.Column="1" VerticalAlignment="Bottom" Content="选择目录" Click="ChooseGameDirectory" />
+                    </Grid>
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="JavaPathBox" Header="Java 路径" />
+                        <Button Grid.Column="1" VerticalAlignment="Bottom" Content="选择文件" Click="ChooseJavaFile" />
+                    </Grid>
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <ComboBox x:Name="JavaCandidatesBox" Header="检测到的 Java" SelectionChanged="JavaCandidateChanged" />
+                        <Button Grid.Column="1" VerticalAlignment="Bottom" Content="重新检测" Click="RefreshJavaCandidates" />
+                    </Grid>
                 </StackPanel>
-                <TextBox x:Name="HomePreviewBox" MinHeight="120" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
-            </StackPanel>
+            </Border>
 
-            <StackPanel Spacing="10">
-                <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="背景音乐" />
-                <Grid ColumnSpacing="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBox x:Name="MusicPathBox" Header="音乐文件" />
-                    <Button Grid.Column="1" VerticalAlignment="Bottom" Content="选择" Click="ChooseMusicFile" />
-                </Grid>
-                <StackPanel Orientation="Horizontal" Spacing="12">
-                    <CheckBox x:Name="MusicEnabledBox" Content="启用背景音乐" />
-                    <CheckBox x:Name="MusicPauseOnLaunchBox" Content="启动游戏后暂停" />
+            <Border x:Name="DownloadSettingsPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" Visibility="Collapsed">
+                <StackPanel Spacing="12">
+                    <StackPanel Spacing="3">
+                        <TextBlock Text="下载参数" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="镜像、缓存、并发和可选的 Modrinth 自定义地址。" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <Grid ColumnSpacing="12" RowSpacing="10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <ComboBox x:Name="MirrorBox" Header="镜像源">
+                            <ComboBoxItem Content="官方源" Tag="official" />
+                            <ComboBoxItem Content="BMCLAPI" Tag="bmclapi" />
+                        </ComboBox>
+                        <ComboBox x:Name="CacheStrategyBox" Grid.Column="1" Header="缓存策略">
+                            <ComboBoxItem Content="复用缓存" Tag="reuse" />
+                            <ComboBoxItem Content="校验后复用" Tag="verify" />
+                            <ComboBoxItem Content="总是下载" Tag="redownload" />
+                        </ComboBox>
+                        <NumberBox x:Name="CoreThreadsBox" Grid.Row="1" Header="核心文件并发" Minimum="1" Maximum="64" SmallChange="1" LargeChange="4" SpinButtonPlacementMode="Compact" />
+                        <NumberBox x:Name="AssetThreadsBox" Grid.Row="1" Grid.Column="1" Header="资源文件并发" Minimum="1" Maximum="96" SmallChange="1" LargeChange="8" SpinButtonPlacementMode="Compact" />
+                        <NumberBox x:Name="SpeedLimitBox" Grid.Row="2" Header="限速 KB/s（0 为不限）" Minimum="0" Maximum="1048576" SmallChange="256" LargeChange="1024" SpinButtonPlacementMode="Compact" />
+                    </Grid>
+                    <TextBox x:Name="ModrinthApiBaseBox" Header="Modrinth API Base" PlaceholderText="留空使用官方地址" />
+                    <TextBox x:Name="ModrinthCdnBaseBox" Header="Modrinth CDN Base" PlaceholderText="留空不重写下载地址" />
                 </StackPanel>
-                <StackPanel Spacing="4">
-                    <TextBlock Text="音量" />
-                    <Slider x:Name="MusicVolumeSlider" Minimum="0" Maximum="100" StepFrequency="1" />
-                </StackPanel>
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Button Content="应用音乐" Click="ApplyMusicSettings" />
-                    <Button Content="停止音乐" Click="StopMusic" />
-                </StackPanel>
-            </StackPanel>
+            </Border>
 
-            <StackPanel Spacing="10">
-                <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="更新" />
-                <TextBox x:Name="UpdateManifestBox" Header="更新清单 URL" />
-                <CheckBox x:Name="UpdateAutoCheckBox" Content="启动时自动检查更新" />
-                <ProgressBar x:Name="UpdateProgressBar" Minimum="0" Maximum="100" />
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Button Content="检查更新" Click="CheckUpdates" />
-                    <Button Content="下载更新" Click="DownloadUpdate" />
-                    <Button Content="应用更新" Click="ApplyDownloadedUpdate" />
+            <Border x:Name="AppearanceSettingsPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" Visibility="Collapsed">
+                <StackPanel Spacing="12">
+                    <StackPanel Spacing="3">
+                        <TextBlock Text="个性化与功能" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="主题、主页内容和可见功能集中在这里。" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="220" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <ComboBox x:Name="ThemeBox" Header="界面主题">
+                            <ComboBoxItem Content="深色" Tag="dark" />
+                            <ComboBoxItem Content="浅色" Tag="light" />
+                            <ComboBoxItem Content="跟随系统" Tag="auto" />
+                        </ComboBox>
+                        <TextBox x:Name="ThemeImageBox" Grid.Column="1" Header="主题背景图" />
+                        <Button Grid.Column="2" VerticalAlignment="Bottom" Content="选择" Click="ChooseThemeImageFile" />
+                    </Grid>
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="HomeContentSourceBox" Header="主页内容源" />
+                        <Button Grid.Column="1" VerticalAlignment="Bottom" Content="选择" Click="ChooseHomeContentFile" />
+                    </Grid>
+                    <Grid ColumnSpacing="12" RowSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <CheckBox x:Name="HomeNetworkCheckBox" Content="允许联网主页" />
+                        <CheckBox x:Name="AdvancedModeCheckBox" Grid.Column="1" Content="显示高级选项" Checked="AdvancedModeChanged" Unchecked="AdvancedModeChanged" />
+                        <CheckBox x:Name="ResourceIsolationCheckBox" Grid.Row="1" Content="启用版本资源隔离" />
+                        <CheckBox x:Name="ShowDownloadCheckBox" Grid.Row="1" Grid.Column="1" Content="显示下载页" />
+                        <CheckBox x:Name="ShowManageCheckBox" Grid.Row="2" Content="显示管理页" />
+                    </Grid>
+                    <Grid ColumnSpacing="8" MaxWidth="360" HorizontalAlignment="Left">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button Content="刷新主页预览" Click="RefreshHomeContent" HorizontalAlignment="Stretch" />
+                    </Grid>
+                    <TextBox x:Name="HomePreviewBox" MinHeight="150" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
                 </StackPanel>
-                <TextBox x:Name="UpdateOutputBox" MinHeight="120" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
-            </StackPanel>
+            </Border>
 
-            <StackPanel Orientation="Horizontal" Spacing="8">
+            <Border x:Name="MusicSettingsPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" Visibility="Collapsed">
+                <StackPanel Spacing="12">
+                    <StackPanel Spacing="3">
+                        <TextBlock Text="背景音乐" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="选择本地音乐并控制启动游戏后的播放行为。" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="MusicPathBox" Header="音乐文件" />
+                        <Button Grid.Column="1" VerticalAlignment="Bottom" Content="选择" Click="ChooseMusicFile" />
+                    </Grid>
+                    <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <CheckBox x:Name="MusicEnabledBox" Content="启用背景音乐" />
+                        <CheckBox x:Name="MusicPauseOnLaunchBox" Grid.Column="1" Content="启动游戏后暂停" />
+                    </Grid>
+                    <NumberBox x:Name="MusicVolumeBox" Header="音量 %" Minimum="0" Maximum="100" SmallChange="1" LargeChange="10" SpinButtonPlacementMode="Compact" />
+                    <Grid ColumnSpacing="8" MaxWidth="360" HorizontalAlignment="Left">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button Content="播放 / 应用" Click="ApplyMusicSettings" HorizontalAlignment="Stretch" />
+                        <Button Grid.Column="1" Content="停止音乐" Click="StopMusic" HorizontalAlignment="Stretch" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <Border x:Name="UpdateSettingsPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" Visibility="Collapsed">
+                <StackPanel Spacing="12">
+                    <StackPanel Spacing="3">
+                        <TextBlock Text="McGo 更新" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="检查更新清单，下载并应用新版本。" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <TextBox x:Name="UpdateManifestBox" Header="更新清单 URL" />
+                    <CheckBox x:Name="UpdateAutoCheckBox" Content="启动时自动检查更新" />
+                    <TextBlock x:Name="UpdateStatusText" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <ProgressBar x:Name="UpdateProgressBar" Minimum="0" Maximum="100" Height="8" />
+                    <Grid ColumnSpacing="8" MaxWidth="540" HorizontalAlignment="Left">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button Content="检查更新" Click="CheckUpdates" HorizontalAlignment="Stretch" />
+                        <Button Grid.Column="1" Content="下载更新" Click="DownloadUpdate" HorizontalAlignment="Stretch" />
+                        <Button Grid.Column="2" Content="应用更新" Click="ApplyDownloadedUpdate" HorizontalAlignment="Stretch" />
+                    </Grid>
+                    <TextBox x:Name="UpdateOutputBox" MinHeight="180" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
+                </StackPanel>
+            </Border>
+
+            <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
                 <Button Content="保存全部设置" Click="SaveSettings" />
-                <TextBlock x:Name="StatusText" VerticalAlignment="Center" TextWrapping="Wrap" />
-            </StackPanel>
+                <TextBlock x:Name="StatusText" Grid.Column="1" VerticalAlignment="Center" TextWrapping="Wrap" />
+            </Grid>
         </StackPanel>
     </ScrollViewer>
 </Page>

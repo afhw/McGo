@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using McGo.Core.App;
 using McGo.Core.Configuration;
+using McGo.Core.Downloads;
 using McGo.Core.Formatting;
 using McGo.Core.Minecraft;
 using McGo.Core.Resources;
@@ -20,9 +21,11 @@ public sealed partial class ResourcesPage : Page
     private readonly Dictionary<string, JsonObject> _resourceHitsByLabel = [];
     private readonly Dictionary<string, LocalResourceInfo> _localResourcesByLabel = [];
     private readonly Queue<JsonObject> _resourceDetailQueue = new();
+    private List<string> _allLocalVersions = [];
     private List<JsonObject> _resourceSearchHits = [];
     private int _resourceSearchGeneration;
     private bool _resourceDetailRunning;
+    private bool _resourceBusy;
     private bool _initialized;
 
     public ResourcesPage()
@@ -31,24 +34,47 @@ public sealed partial class ResourcesPage : Page
         _versionSettingsService = new VersionSettingsService(_launcher);
         LoadState();
         _initialized = true;
+        ResourceSectionBar.SelectedItem = ResourceSectionBar.Items[0];
+    }
+
+    private void ResourceSectionChanged(SelectorBar sender, SelectorBarSelectionChangedEventArgs e)
+    {
+        var section = (sender.SelectedItem as SelectorBarItem)?.Tag?.ToString() ?? "market";
+        var market = section == "market";
+        ResourceSearchPanel.Visibility = market ? Visibility.Visible : Visibility.Collapsed;
+        ResourceResultsPanel.Visibility = market ? Visibility.Visible : Visibility.Collapsed;
+        LocalResourcesPanel.Visibility = market ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private void LoadState()
     {
         _settings.LoadConfig();
         _versionSettings = _versionSettingsService.LoadVersionSettings();
+        _resourceMarket.ModrinthApiBase = _settings.Config.Get("DOWNLOAD", "modrinth_api_base", "");
+        if (string.IsNullOrWhiteSpace(_resourceMarket.ModrinthApiBase))
+        {
+            _resourceMarket.ModrinthApiBase = "https://api.modrinth.com/v2";
+        }
+
+        _resourceMarket.ModrinthCdnBase = _settings.Config.Get("DOWNLOAD", "modrinth_cdn_base", "");
         var gameDir = _settings.Config.Get("GAME", "directory", AppConstants.DefaultGameDirectory);
-        var versionId = _launcher.GetLocalVersions(gameDir).FirstOrDefault() ?? "";
-        ResourceGameVersionBox.Text = versionId.Length > 0 ? _versionSettingsService.ResolveBaseMinecraftVersion(gameDir, versionId) : "";
-        ResourceLoaderBox.Text = "";
-        TargetDirBox.Text = CurrentResourceTargetDir();
+        _allLocalVersions = _launcher.GetLocalVersions(gameDir).ToList();
+        RefreshResourceTargetVersions();
     }
 
     private async void SearchResources(object sender, RoutedEventArgs e)
     {
+        SetResourceBusy(true, "正在搜索资源...");
         try
         {
             var source = ComboText(ResourceSourceBox, "modrinth");
+            if (ComboText(ResourceTypeBox, "mod") == "mod" && !VersionSupportsModManagement(CurrentResourceVersion()))
+            {
+                ResourceOutputBox.Text = "Mod 安装目标需要选择 Fabric、Forge、NeoForge 或 OptiFine 版本。";
+                ResourceStatusText.Text = "当前目标版本不支持 Mod。";
+                return;
+            }
+
             ResourceOutputBox.Text = source == "local" ? "正在扫描本地资源..." : "正在搜索资源...";
             ResourceStatusText.Text = ResourceOutputBox.Text;
             ResourceDetailBox.Text = "";
@@ -95,59 +121,96 @@ public sealed partial class ResourcesPage : Page
             ResourceOutputBox.Text = "资源搜索失败：" + exc.Message;
             ResourceStatusText.Text = "资源搜索失败。";
         }
+        finally
+        {
+            SetResourceBusy(false);
+        }
     }
 
-    private async void InstallSelectedResource(object sender, RoutedEventArgs e)
+    private void InstallSelectedResource(object sender, RoutedEventArgs e)
     {
-        try
+        if (ResourceResultsList.SelectedItem is not string label || !_resourceHitsByLabel.TryGetValue(label, out var hit))
         {
-            if (ResourceResultsList.SelectedItem is not string label || !_resourceHitsByLabel.TryGetValue(label, out var hit))
-            {
-                ResourceOutputBox.Text = "请先选择一个资源。";
-                return;
-            }
-
-            if ((hit["source"]?.GetValue<string>() ?? "modrinth") != "modrinth")
-            {
-                ResourceOutputBox.Text = "当前只支持从 Modrinth 一键安装；本地来源请在本地资源列表管理。";
-                return;
-            }
-
-            if (hit["compatible"]?.GetValue<bool>() == false)
-            {
-                ResourceOutputBox.Text = "这个资源没有适配当前安装目标的可下载文件，请换一个版本或资源。";
-                return;
-            }
-
-            var projectId = hit["project_id"]?.GetValue<string>() ?? hit["slug"]?.GetValue<string>() ?? "";
-            if (projectId.Length == 0)
-            {
-                ResourceOutputBox.Text = "选中资源缺少 project_id。";
-                return;
-            }
-
-            var targetDir = CurrentResourceTargetDir();
-            TargetDirBox.Text = targetDir;
-            var progress = new Progress<ResourceDownloadProgress>(snapshot =>
-            {
-                ResourceOutputBox.Text = $"{snapshot.Phase} {snapshot.Progress:P0} {snapshot.CurrentFile}";
-            });
-            var result = await _resourceMarket.InstallModrinthResourceAsync(
-                projectId,
-                ComboText(ResourceTypeBox, "mod"),
-                ResourceGameVersionBox.Text.Trim(),
-                ResourceLoaderBox.Text.Trim(),
-                targetDir,
-                InstallResourceDependenciesCheckBox.IsChecked == true,
-                status: message => ResourceOutputBox.Text = message,
-                progress: progress);
-            ResourceOutputBox.Text = $"已安装：{result.Filename}\n版本：{result.Version}\n路径：{result.Path}\n依赖：{string.Join(", ", result.DependenciesInstalled)}";
-            RefreshLocalResources(sender, e);
+            ResourceOutputBox.Text = "请先选择一个资源。";
+            return;
         }
-        catch (Exception exc)
+
+        var resourceType = ComboText(ResourceTypeBox, "mod");
+        if (resourceType == "mod" && !VersionSupportsModManagement(CurrentResourceVersion()))
         {
-            ResourceOutputBox.Text = "资源安装失败：" + exc.Message;
+            ResourceOutputBox.Text = "当前目标版本不支持 Mod 管理，请切换到 Fabric、Forge、NeoForge 或 OptiFine 版本。";
+            return;
         }
+
+        if ((hit["source"]?.GetValue<string>() ?? "modrinth") != "modrinth")
+        {
+            ResourceOutputBox.Text = "当前只支持从 Modrinth 一键安装；本地来源请在本地资源列表管理。";
+            return;
+        }
+
+        if (hit["compatible"]?.GetValue<bool>() == false)
+        {
+            ResourceOutputBox.Text = "这个资源没有适配当前安装目标的可下载文件，请换一个版本或资源。";
+            return;
+        }
+
+        var projectId = hit["project_id"]?.GetValue<string>() ?? hit["slug"]?.GetValue<string>() ?? "";
+        if (projectId.Length == 0)
+        {
+            ResourceOutputBox.Text = "选中资源缺少 project_id。";
+            return;
+        }
+
+        var title = hit["title"]?.GetValue<string>() ?? projectId;
+        var targetDir = CurrentResourceTargetDir();
+        var gameVersion = ResourceGameVersionBox.Text.Trim();
+        var loader = ResourceLoaderBox.Text.Trim();
+        var includeDependencies = InstallResourceDependenciesCheckBox.IsChecked == true;
+        TargetDirBox.Text = targetDir;
+        SetResourceBusy(true, "已加入全局队列，等待安装资源...", indeterminate: false);
+        DownloadTaskManager.Current.Enqueue("resource", $"安装资源 {title}", async (record, token) =>
+        {
+            try
+            {
+                var progress = new Progress<ResourceDownloadProgress>(snapshot =>
+                {
+                    var detail = $"{snapshot.Phase} {snapshot.Progress:P0} {snapshot.CurrentFile}";
+                    ResourceOutputBox.Text = detail;
+                    ResourceProgressBar.Value = Math.Clamp(snapshot.Progress * 100, 0, 100);
+                    DownloadTaskManager.Current.Update(record, item =>
+                    {
+                        item.Progress = (int)Math.Round(snapshot.Progress * 100);
+                        item.Detail = detail;
+                    });
+                });
+                var result = await _resourceMarket.InstallModrinthResourceAsync(
+                    projectId, resourceType, gameVersion, loader, targetDir, includeDependencies,
+                    status: message =>
+                    {
+                        ResourceOutputBox.Text = message;
+                        DownloadTaskManager.Current.Update(record, item => item.Detail = message);
+                    },
+                    progress: progress,
+                    cancellationToken: token);
+                ResourceOutputBox.Text = $"已安装：{result.Filename}\n版本：{result.Version}\n路径：{result.Path}\n依赖：{string.Join(", ", result.DependenciesInstalled)}";
+                RefreshLocalResources(sender, e);
+                return $"已安装 {result.Filename}";
+            }
+            catch (OperationCanceledException)
+            {
+                ResourceOutputBox.Text = "资源安装已取消。";
+                throw;
+            }
+            catch (Exception exc)
+            {
+                ResourceOutputBox.Text = "资源安装失败：" + exc.Message;
+                throw;
+            }
+            finally
+            {
+                SetResourceBusy(false);
+            }
+        });
     }
 
     private void ShowSelectedResourceDetail(object sender, RoutedEventArgs e)
@@ -164,6 +227,7 @@ public sealed partial class ResourcesPage : Page
 
     private async void ResolveDependencies(object sender, RoutedEventArgs e)
     {
+        SetResourceBusy(true, "正在解析 Mod 前置依赖...");
         try
         {
             var plan = await _resourceMarket.ResolveModrinthDependencyPlanAsync(TargetDirBox.Text.Trim());
@@ -181,31 +245,63 @@ public sealed partial class ResourcesPage : Page
         {
             ResourceOutputBox.Text = "依赖解析失败：" + exc.Message;
         }
+        finally
+        {
+            SetResourceBusy(false);
+        }
     }
 
-    private async void InstallMissingDependencies(object sender, RoutedEventArgs e)
+    private void InstallMissingDependencies(object sender, RoutedEventArgs e)
     {
-        try
+        var gameVersion = ResourceGameVersionBox.Text.Trim();
+        var loader = ResourceLoaderBox.Text.Trim();
+        var targetDir = TargetDirBox.Text.Trim();
+        SetResourceBusy(true, "已加入全局队列，等待安装缺失前置...", indeterminate: false);
+        DownloadTaskManager.Current.Enqueue("resource_dependencies", "安装缺失 Mod 前置", async (record, token) =>
         {
-            var progress = new Progress<ResourceDownloadProgress>(snapshot =>
+            try
             {
-                ResourceOutputBox.Text = $"{snapshot.Phase} {snapshot.Progress:P0} {snapshot.CurrentFile}";
-            });
-            var result = await _resourceMarket.InstallMissingModrinthDependenciesAsync(
-                ResourceGameVersionBox.Text.Trim(),
-                ResourceLoaderBox.Text.Trim(),
-                TargetDirBox.Text.Trim(),
-                message => ResourceOutputBox.Text = message,
-                progress);
-            ResourceOutputBox.Text = result.DependenciesInstalled.Count == 0
-                ? "没有缺失前置。"
-                : "已安装缺失前置：\n" + string.Join(Environment.NewLine, result.DependenciesInstalled);
-            RefreshLocalResources(sender, e);
-        }
-        catch (Exception exc)
-        {
-            ResourceOutputBox.Text = "前置安装失败：" + exc.Message;
-        }
+                var progress = new Progress<ResourceDownloadProgress>(snapshot =>
+                {
+                    var detail = $"{snapshot.Phase} {snapshot.Progress:P0} {snapshot.CurrentFile}";
+                    ResourceOutputBox.Text = detail;
+                    ResourceProgressBar.Value = Math.Clamp(snapshot.Progress * 100, 0, 100);
+                    DownloadTaskManager.Current.Update(record, item =>
+                    {
+                        item.Progress = (int)Math.Round(snapshot.Progress * 100);
+                        item.Detail = detail;
+                    });
+                });
+                var result = await _resourceMarket.InstallMissingModrinthDependenciesAsync(
+                    gameVersion, loader, targetDir,
+                    message =>
+                    {
+                        ResourceOutputBox.Text = message;
+                        DownloadTaskManager.Current.Update(record, item => item.Detail = message);
+                    },
+                    progress,
+                    token);
+                ResourceOutputBox.Text = result.DependenciesInstalled.Count == 0
+                    ? "没有缺失前置。"
+                    : "已安装缺失前置：\n" + string.Join(Environment.NewLine, result.DependenciesInstalled);
+                RefreshLocalResources(sender, e);
+                return result.DependenciesInstalled.Count == 0 ? "没有缺失前置" : $"已安装 {result.DependenciesInstalled.Count} 个前置";
+            }
+            catch (OperationCanceledException)
+            {
+                ResourceOutputBox.Text = "前置安装已取消。";
+                throw;
+            }
+            catch (Exception exc)
+            {
+                ResourceOutputBox.Text = "前置安装失败：" + exc.Message;
+                throw;
+            }
+            finally
+            {
+                SetResourceBusy(false);
+            }
+        });
     }
 
     private void RefreshLocalResources(object sender, RoutedEventArgs e)
@@ -602,9 +698,105 @@ public sealed partial class ResourcesPage : Page
         var isModrinth = source == "modrinth";
         ResourceSortBox.IsEnabled = isModrinth;
         InstallResourceDependenciesCheckBox.IsEnabled = isModrinth;
-        InstallResourceButton.IsEnabled = isModrinth;
+        InstallResourceButton.IsEnabled = isModrinth && !_resourceBusy;
         ResourceStatusText.Text = source == "local" ? "本地来源会扫描当前目标目录。" : "等待搜索";
     }
+
+    private void SetResourceBusy(bool busy, string status = "", bool indeterminate = true)
+    {
+        _resourceBusy = busy;
+        SearchResourcesButton.IsEnabled = !busy;
+        ResourceDetailButton.IsEnabled = !busy;
+        ResolveDependenciesButton.IsEnabled = !busy;
+        InstallMissingDependenciesButton.IsEnabled = !busy;
+        InstallResourceButton.IsEnabled = !busy && ComboText(ResourceSourceBox, "modrinth") == "modrinth";
+        ResourceProgressBar.IsIndeterminate = busy && indeterminate;
+        if (!busy)
+        {
+            ResourceProgressBar.IsIndeterminate = false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            ResourceStatusText.Text = status;
+        }
+    }
+
+    private void ResourceVersionChanged(object sender, SelectionChangedEventArgs e) => ApplyResourceVersionSelection();
+
+    private void ResourceTypeChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_initialized || TargetDirBox is null)
+        {
+            return;
+        }
+
+        RefreshResourceTargetVersions();
+    }
+
+    private void RefreshResourceTargetVersions()
+    {
+        if (ResourceVersionBox is null || ResourceTypeBox is null)
+        {
+            return;
+        }
+
+        var selected = CurrentResourceVersion();
+        var resourceType = ComboText(ResourceTypeBox, "mod");
+        var versions = resourceType == "mod"
+            ? _allLocalVersions.Where(VersionSupportsModManagement).ToList()
+            : _allLocalVersions.ToList();
+        ResourceVersionBox.ItemsSource = versions.Count == 0 ? new[] { "未发现兼容的本地版本" } : versions;
+        ResourceVersionBox.SelectedItem = versions.Contains(selected) ? selected : null;
+        if (ResourceVersionBox.SelectedItem is null)
+        {
+            ResourceVersionBox.SelectedIndex = 0;
+        }
+
+        ApplyResourceVersionSelection();
+    }
+
+    private void ApplyResourceVersionSelection()
+    {
+        if (ResourceVersionBox is null || ResourceGameVersionBox is null || ResourceLoaderBox is null || TargetDirBox is null)
+        {
+            return;
+        }
+
+        var versionId = CurrentResourceVersion();
+        var gameDir = _settings.Config.Get("GAME", "directory", AppConstants.DefaultGameDirectory);
+        ResourceGameVersionBox.Text = versionId.Length > 0 ? _versionSettingsService.ResolveBaseMinecraftVersion(gameDir, versionId) : "";
+        ResourceLoaderBox.Text = versionId.Length > 0 ? ModrinthLoaderForVersion(gameDir, versionId) : "";
+        TargetDirBox.Text = DefaultResourceTargetDir(versionId);
+    }
+
+    private string CurrentResourceVersion()
+    {
+        var value = ResourceVersionBox.SelectedItem?.ToString() ?? "";
+        return value.StartsWith("未发现", StringComparison.Ordinal) ? "" : value;
+    }
+
+    private bool VersionSupportsModManagement(string versionId)
+        => versionId.Length > 0
+           && _versionSettingsService.DetectVersionType(_settings.Config.Get("GAME", "directory", AppConstants.DefaultGameDirectory), versionId)
+               is "Fabric" or "Forge" or "NeoForge" or "OptiFine";
+
+    private string DefaultResourceTargetDir(string versionId)
+    {
+        var gameDir = _settings.Config.Get("GAME", "directory", AppConstants.DefaultGameDirectory);
+        return versionId.Length == 0
+            ? ResourceMarketService.ResourceDirectoryForType(gameDir, _versionSettings, "", ComboText(ResourceTypeBox, "mod"), _settings.Config.GetBool("GAME", "enable_resource_isolation", true))
+            : ResourceMarketService.ResourceDirectoryForType(gameDir, _versionSettings, versionId, ComboText(ResourceTypeBox, "mod"), _settings.Config.GetBool("GAME", "enable_resource_isolation", true));
+    }
+
+    private string ModrinthLoaderForVersion(string gameDir, string versionId)
+        => _versionSettingsService.DetectVersionType(gameDir, versionId) switch
+        {
+            "Fabric" => "fabric",
+            "Forge" => "forge",
+            "NeoForge" => "neoforge",
+            _ => "",
+        };
 
     private static Dictionary<string, object?> ToDictionary(JsonObject obj)
         => obj.ToDictionary(pair => pair.Key, pair => pair.Value is null ? null : JsonNodeValue(pair.Value));
@@ -627,5 +819,61 @@ public sealed partial class ResourcesPage : Page
         }
 
         return combo.SelectedItem?.ToString() ?? fallback;
+    }
+
+    internal void RunSmokeChecks()
+    {
+        if (ResourceSectionBar.Items.Count != 2)
+        {
+            throw new InvalidOperationException("资源页缺少市场与本地资源分段。");
+        }
+
+        var resourceTypes = ResourceTypeBox.Items.OfType<ComboBoxItem>()
+            .Select(item => item.Content?.ToString() ?? "")
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!resourceTypes.SetEquals(["mod", "resourcepack", "shader", "datapack"]))
+        {
+            throw new InvalidOperationException("资源类型没有完整迁移 Mod、资源包、光影和数据包。");
+        }
+
+        var sources = ResourceSourceBox.Items.OfType<ComboBoxItem>()
+            .Select(item => item.Content?.ToString() ?? "")
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!sources.SetEquals(["modrinth", "local"]))
+        {
+            throw new InvalidOperationException("资源来源应只保留 Modrinth 和本地。");
+        }
+
+        ResourceSectionBar.SelectedItem = ResourceSectionBar.Items[1];
+        if (LocalResourcesPanel.Visibility != Visibility.Visible
+            || ResourceSearchPanel.Visibility != Visibility.Collapsed
+            || ResourceResultsPanel.Visibility != Visibility.Collapsed)
+        {
+            throw new InvalidOperationException("本地资源分段状态不正确。");
+        }
+
+        ResourceSectionBar.SelectedItem = ResourceSectionBar.Items[0];
+        if (LocalResourcesPanel.Visibility != Visibility.Collapsed
+            || ResourceSearchPanel.Visibility != Visibility.Visible
+            || ResourceResultsPanel.Visibility != Visibility.Visible)
+        {
+            throw new InvalidOperationException("资源市场分段状态不正确。");
+        }
+    }
+
+    internal void SelectResourceSectionForSmoke(string section)
+    {
+        ResourceSectionBar.SelectedItem = ResourceSectionBar.Items.OfType<SelectorBarItem>()
+            .First(item => string.Equals(item.Tag?.ToString(), section, StringComparison.Ordinal));
+    }
+
+    internal void BringResourceSectionIntoViewForSmoke(string section)
+    {
+        var target = section == "local" ? LocalResourcesPanel : ResourceSearchPanel;
+        target.StartBringIntoView(new BringIntoViewOptions
+        {
+            AnimationDesired = false,
+            VerticalAlignmentRatio = 0,
+        });
     }
 }

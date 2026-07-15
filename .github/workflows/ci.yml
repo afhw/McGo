@@ -14,3 +14,12 @@ jobs:
           dotnet-version: "8.0.x"
       - run: dotnet build McGo.slnx
       - run: dotnet run --project tests/McGo.Core.Tests/McGo.Core.Tests.csproj
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: webside/package-lock.json
+      - run: npm ci
+        working-directory: webside
+      - run: npm run build
+        working-directory: webside

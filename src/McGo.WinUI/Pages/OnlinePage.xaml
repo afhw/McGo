@@ -5,34 +5,188 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    NavigationCacheMode="Required"
     mc:Ignorable="d">
-    <ScrollViewer>
-        <StackPanel Padding="24,16,24,16" Spacing="14">
-            <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="联机" />
-            <Grid ColumnSpacing="14">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled" HorizontalContentAlignment="Stretch">
+        <StackPanel x:Name="ResponsiveLayoutRoot" Padding="24,18,24,24" Spacing="16" MaxWidth="1100" HorizontalAlignment="Stretch">
+            <StackPanel Spacing="4">
+                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="联机" />
+                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="管理服务器、检测 NAT，或建立 McGo P2P 隧道。" TextWrapping="Wrap" />
+            </StackPanel>
 
-                <StackPanel Spacing="12">
-                    <TextBlock Text="常用服务器" FontSize="18" FontWeight="SemiBold" />
-                    <TextBox x:Name="ServerListBox" MinHeight="96" TextWrapping="Wrap" AcceptsReturn="True" />
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button Content="保存服务器" Click="SaveServers" />
-                        <Button Content="复制首个服务器" Click="CopyFirstServer" />
+            <SelectorBar x:Name="OnlineSectionBar" SelectionChanged="OnlineSectionChanged">
+                <SelectorBarItem Text="P2P 隧道" Tag="p2p" />
+                <SelectorBarItem Text="NAT 检测" Tag="nat" />
+                <SelectorBarItem Text="常用服务器" Tag="servers" />
+                <SelectorBarItem Text="开黑胶囊" Tag="capsule" />
+            </SelectorBar>
+
+            <Border x:Name="P2PPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                <StackPanel Spacing="14">
+                    <StackPanel Spacing="3">
+                        <TextBlock Text="创建或加入房间" FontSize="20" FontWeight="SemiBold" />
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="两端使用相同的房间号和口令。" TextWrapping="Wrap" />
                     </StackPanel>
-                    <TextBlock Text="NAT 检测" FontSize="18" FontWeight="SemiBold" />
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button Content="检测 NAT" Click="DetectNat" />
-                        <Button Content="复制检测结果" Click="CopyNatResult" />
-                    </StackPanel>
-                    <TextBox x:Name="NatOutputBox" MinHeight="120" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
+
+                    <SelectorBar x:Name="P2PRoleBar" SelectionChanged="P2PRoleChanged">
+                        <SelectorBarItem Text="我是房主" Tag="host" />
+                        <SelectorBarItem Text="我要加入" Tag="guest" />
+                    </SelectorBar>
+
+                    <Grid x:Name="P2PPrimarySettingsGrid" ColumnSpacing="12" RowSpacing="10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="RoomBox" Header="房间号" PlaceholderText="留空会自动生成" />
+                            <Button Grid.Column="1" Click="GenerateRoom" VerticalAlignment="Bottom" ToolTipService.ToolTip="生成房间号">
+                                <SymbolIcon Symbol="Refresh" />
+                            </Button>
+                        </Grid>
+                        <PasswordBox x:Name="SecretBox" Grid.Column="1" Header="房间口令" PlaceholderText="可选" />
+
+                        <StackPanel x:Name="HostPortPanel" Grid.Row="1" Spacing="5">
+                            <TextBlock Text="Minecraft LAN 端口" />
+                            <NumberBox x:Name="HostPortBox" Minimum="1" Maximum="65535" SmallChange="1" LargeChange="100" SpinButtonPlacementMode="Compact" ValueChanged="P2PPortChanged" />
+                        </StackPanel>
+                        <Grid x:Name="JoinPortPanel" Grid.Row="1" ColumnSpacing="8" Visibility="Collapsed">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <NumberBox x:Name="JoinPortBox" Header="本地监听端口" Minimum="1" Maximum="65535" SmallChange="1" LargeChange="100" SpinButtonPlacementMode="Compact" ValueChanged="P2PPortChanged" />
+                            <Button Grid.Column="1" Click="PickJoinPort" VerticalAlignment="Bottom" ToolTipService.ToolTip="自动选择可用端口">
+                                <SymbolIcon Symbol="Refresh" />
+                            </Button>
+                        </Grid>
+                        <StackPanel Grid.Row="1" Grid.Column="1" Spacing="5" VerticalAlignment="Center">
+                            <TextBlock x:Name="P2PRoleHintTitle" Text="房主操作" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <TextBlock x:Name="P2PConnectionHintText" Text="在 Minecraft 中开放局域网后填写端口" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Grid>
+
+                    <ProgressBar x:Name="P2PStatusBar" Minimum="0" Maximum="100" Height="6" />
+                    <TextBlock x:Name="P2PStatusText" Text="状态：未启动" TextWrapping="Wrap" />
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="1.35*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="StartP2PButton" Style="{StaticResource AccentButtonStyle}" Content="创建房间" Click="StartSelectedP2P" HorizontalAlignment="Stretch" />
+                        <Button x:Name="StopP2PButton" Grid.Column="1" Content="停止连接" Click="StopP2P" IsEnabled="False" HorizontalAlignment="Stretch" />
+                    </Grid>
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button Click="CopyInviteText" HorizontalAlignment="Stretch">
+                            <StackPanel Orientation="Horizontal" Spacing="7">
+                                <SymbolIcon Symbol="Copy" />
+                                <TextBlock Text="复制邀请" />
+                            </StackPanel>
+                        </Button>
+                        <Button Grid.Column="1" Click="PasteInviteText" HorizontalAlignment="Stretch">
+                            <StackPanel Orientation="Horizontal" Spacing="7">
+                                <SymbolIcon Symbol="Paste" />
+                                <TextBlock Text="粘贴邀请" />
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+
+                    <Expander x:Name="P2PConnectionSettings" Header="连接设置">
+                        <StackPanel Padding="0,8,0,0" Spacing="10">
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="RelayHostBox" Header="中继主机" />
+                                <NumberBox x:Name="RelayPortBox" Grid.Column="1" Header="中继端口" Minimum="1" Maximum="65535" SmallChange="1" LargeChange="100" SpinButtonPlacementMode="Compact" />
+                            </Grid>
+                            <CheckBox x:Name="UdpEnabledBox" Content="优先 UDP 直连，失败时回退 TCP 中继" />
+                            <Button Click="SaveOnlineSettings" HorizontalAlignment="Left">
+                                <StackPanel Orientation="Horizontal" Spacing="7">
+                                    <SymbolIcon Symbol="Save" />
+                                    <TextBlock Text="保存连接设置" />
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
+                    </Expander>
                 </StackPanel>
+            </Border>
 
-                <StackPanel Grid.Column="1" Spacing="12">
-                    <TextBlock Text="P2P 隧道" FontSize="18" FontWeight="SemiBold" />
-                    <Grid ColumnSpacing="10" RowSpacing="10">
+            <Border x:Name="NatPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" Visibility="Collapsed">
+                <StackPanel Spacing="12">
+                    <StackPanel Spacing="3">
+                        <TextBlock Text="NAT 类型检测" FontSize="20" FontWeight="SemiBold" />
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="通过 STUN 检测当前网络的 UDP 公网映射。" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <TextBlock x:Name="NatStatusText" Text="NAT 类型：未检测" TextWrapping="Wrap" />
+                    <TextBox x:Name="NatOutputBox" MinHeight="160" MaxHeight="320" Text="点击“检测 NAT 类型”后显示 STUN 探测结果。" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="NatDetectButton" Style="{StaticResource AccentButtonStyle}" Content="检测 NAT 类型" Click="DetectNat" HorizontalAlignment="Stretch" />
+                        <Button Grid.Column="1" Content="复制检测结果" Click="CopyNatResult" HorizontalAlignment="Stretch" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <Border x:Name="ServersPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" Visibility="Collapsed">
+                <StackPanel Spacing="12">
+                    <StackPanel Spacing="3">
+                        <TextBlock Text="常用服务器" FontSize="20" FontWeight="SemiBold" />
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="每行保存一个服务器地址，可使用“地址 | 备注”格式。" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <TextBox x:Name="ServerListBox" MinHeight="180" MaxHeight="360" TextWrapping="Wrap" AcceptsReturn="True" />
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button Style="{StaticResource AccentButtonStyle}" Content="保存服务器" Click="SaveServers" HorizontalAlignment="Stretch" />
+                        <Button Grid.Column="1" Content="复制首个服务器" Click="CopyFirstServer" HorizontalAlignment="Stretch" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <Border x:Name="CapsulePanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" Visibility="Collapsed">
+                <StackPanel Spacing="12">
+                    <StackPanel Spacing="3">
+                        <TextBlock Text="开黑胶囊" FontSize="20" FontWeight="SemiBold" />
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="导入或导出私有文件清单，并通过 P2P 补齐胶囊文件。" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <TextBox x:Name="CapsuleGameDirBox" Header="游戏目录" />
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <ComboBox x:Name="CapsuleVersionBox" Header="本地版本" SelectionChanged="CapsuleVersionChanged" HorizontalAlignment="Stretch" />
+                        <Button Grid.Column="1" Content="同步版本" Click="RefreshCapsuleVersions" VerticalAlignment="Bottom" />
+                    </Grid>
+                    <TextBox x:Name="CapsuleRuntimeDirBox" Header="胶囊运行目录" />
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="CapsuleManifestPathBox" Header="胶囊文件或 mcgo-capsule.json" />
+                        <Button Grid.Column="1" Content="选择胶囊" Click="ChooseCapsuleManifest" VerticalAlignment="Bottom" />
+                    </Grid>
+                    <Grid ColumnSpacing="8" RowSpacing="8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="*" />
@@ -42,57 +196,22 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
-                        <StackPanel Spacing="6">
-                            <TextBlock Text="中继主机" />
-                            <TextBox x:Name="RelayHostBox" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="1" Spacing="6">
-                            <TextBlock Text="中继端口" />
-                            <TextBox x:Name="RelayPortBox" />
-                        </StackPanel>
-                        <StackPanel Grid.Row="1" Spacing="6">
-                            <TextBlock Text="房间号" />
-                            <TextBox x:Name="RoomBox" />
-                        </StackPanel>
-                        <StackPanel Grid.Row="1" Grid.Column="1" Spacing="6">
-                            <TextBlock Text="口令" />
-                            <TextBox x:Name="SecretBox" />
-                        </StackPanel>
-                        <StackPanel Grid.Row="2" Spacing="6">
-                            <TextBlock Text="房主 Minecraft 端口" />
-                            <TextBox x:Name="HostPortBox" />
-                        </StackPanel>
-                        <StackPanel Grid.Row="2" Grid.Column="1" Spacing="6">
-                            <TextBlock Text="加入者本地端口" />
-                            <TextBox x:Name="JoinPortBox" />
-                        </StackPanel>
+                        <Button x:Name="ImportCapsuleButton" Content="导入开黑胶囊" Click="ImportCapsule" HorizontalAlignment="Stretch" />
+                        <Button x:Name="ExportCapsuleButton" Grid.Column="1" Content="导出开黑胶囊" Click="ExportCapsule" HorizontalAlignment="Stretch" />
+                        <Button x:Name="StartCapsuleHostButton" Grid.Row="1" Style="{StaticResource AccentButtonStyle}" Content="启动补包服务" Click="StartCapsuleFileHost" HorizontalAlignment="Stretch" />
+                        <Button x:Name="PullCapsuleButton" Grid.Row="1" Grid.Column="1" Content="补齐胶囊文件" Click="PullCapsuleFiles" IsEnabled="False" HorizontalAlignment="Stretch" />
+                        <Button x:Name="StopCapsuleHostButton" Grid.Row="2" Content="停止补包服务" Click="StopCapsuleFileHost" IsEnabled="False" HorizontalAlignment="Stretch" />
                     </Grid>
-                    <CheckBox x:Name="UdpEnabledBox" Content="UDP 打洞优先，失败后自动回退 TCP 中继" />
-                    <ProgressBar x:Name="P2PStatusBar" Minimum="0" Maximum="100" Height="8" />
-                    <TextBlock x:Name="P2PStatusText" Text="状态：未启动" TextWrapping="Wrap" />
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button Content="生成房间号" Click="GenerateRoom" Margin="0,0,8,8" />
-                        <Button Content="挑选本地端口" Click="PickJoinPort" Margin="0,0,8,8" />
-                        <Button Content="保存联机设置" Click="SaveOnlineSettings" Margin="0,0,8,8" />
-                        <Button Content="生成邀请信息" Click="BuildInviteText" Margin="0,0,8,8" />
-                        <Button Content="复制邀请信息" Click="CopyInviteText" Margin="0,0,8,8" />
-                        <Button Content="作为房主启动" Click="StartP2PHost" Margin="0,0,8,8" />
-                        <Button Content="作为加入者启动" Click="StartP2PGuest" Margin="0,0,8,8" />
-                        <Button Content="停止隧道" Click="StopP2P" Margin="0,0,8,8" />
-                    </StackPanel>
-                    <TextBlock Text="胶囊文件补齐" FontSize="18" FontWeight="SemiBold" />
-                    <TextBox x:Name="CapsuleRuntimeDirBox" PlaceholderText="胶囊运行目录" />
-                    <TextBox x:Name="CapsuleManifestPathBox" PlaceholderText="胶囊文件或 mcgo-capsule.json" />
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button Content="选择胶囊" Click="ChooseCapsuleManifest" />
-                        <Button Content="启动胶囊补包服务" Click="StartCapsuleFileHost" />
-                        <Button Content="补齐胶囊文件" Click="PullCapsuleFiles" />
-                        <Button Content="停止胶囊补包服务" Click="StopCapsuleFileHost" />
-                    </StackPanel>
-                    <ProgressBar x:Name="CapsulePullProgressBar" Minimum="0" Maximum="100" Height="8" />
-                    <TextBox x:Name="OnlineOutputBox" MinHeight="230" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
+                    <ProgressBar x:Name="CapsulePullProgressBar" Minimum="0" Maximum="100" Height="6" />
                 </StackPanel>
-            </Grid>
+            </Border>
+
+            <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="联机状态日志" FontSize="20" FontWeight="SemiBold" />
+                    <TextBox x:Name="OnlineOutputBox" MinHeight="140" MaxHeight="280" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
+                </StackPanel>
+            </Border>
         </StackPanel>
     </ScrollViewer>
 </Page>

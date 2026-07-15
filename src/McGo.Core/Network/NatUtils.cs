@@ -127,9 +127,9 @@ public static class NatUtils
         if (samples.Count == 0)
         {
             return new NatDetectionResult(
-                "UDP 不可达或被防火墙阻止",
+                "未取得 UDP 公网映射",
                 "blocked",
-                "无法从 STUN 服务器取得公网映射地址。",
+                "所有 STUN 探测均失败；可能是 UDP 被防火墙或网络策略阻止，也可能是 STUN 节点暂不可用。",
                 errors.Count > 0 ? string.Join(Environment.NewLine, errors) : "所有 STUN 探测均超时。",
                 []);
         }
@@ -196,10 +196,9 @@ public static class NatUtils
             var endpoint = new IPEndPoint(address, server.Port);
             try
             {
-                udp.Connect(endpoint);
                 var transactionId = RandomNumberGenerator.GetBytes(12);
                 var request = BuildBindingRequest(transactionId);
-                await udp.SendAsync(request, cancellationToken);
+                await udp.SendAsync(request, endpoint, cancellationToken);
                 using var timeoutCts = new CancellationTokenSource(timeout);
                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
                 while (!linked.Token.IsCancellationRequested)

@@ -6,9 +6,22 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
-    <StackPanel Padding="24,16,24,16" Spacing="12">
-        <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="关于" />
-        <TextBlock Text="McGo WinUI 3 客户端" />
-        <TextBlock Text="核心服务来自 McGo.Core；当前正在从旧 WPF 壳迁移到 WinUI 3。" TextWrapping="WrapWholeWords" />
-    </StackPanel>
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled" HorizontalContentAlignment="Stretch">
+        <StackPanel Padding="24,18,24,24" Spacing="14" MaxWidth="960" HorizontalAlignment="Stretch">
+            <StackPanel Spacing="4">
+                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="帮助与关于" />
+                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="目录说明、使用提示和项目来源。" />
+            </StackPanel>
+            <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="目录说明" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Text=".minecraft/versions 保存版本清单与客户端；libraries 保存依赖库；assets 保存资源文件。启用资源隔离后，存档、Mod、资源包、光影和截图会优先放入 versions/&lt;版本名&gt;/。" TextWrapping="Wrap" />
+                    <TextBlock Text="关于 McGo" FontSize="18" FontWeight="SemiBold" Margin="0,8,0,0" />
+                    <TextBlock Text="McGo 是用于管理、下载和启动 Minecraft 的桌面启动器。" TextWrapping="Wrap" />
+                    <TextBlock x:Name="VersionText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="版本" />
+                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="鸣谢：Mojang 版本元数据、BMCLAPI、Modrinth、authlib-injector 和 Windows App SDK。" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
 </Page>

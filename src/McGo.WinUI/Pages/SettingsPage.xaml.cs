@@ -2,6 +2,8 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using McGo.Core.App;
 using McGo.Core.Configuration;
+using McGo.Core.Downloads;
+using McGo.Core.Java;
 using McGo.Core.Personalization;
 using McGo.Core.Updates;
 using McGo.WinUI.Services;
@@ -21,12 +23,80 @@ public sealed partial class SettingsPage : Page
     private JsonObject? _lastUpdateManifest;
     private string? _lastUpdateManifestUrl;
     private string? _lastUpdatePath;
+    private bool _loadingJavaCandidates;
+    private bool _loadingSettings;
+    private int _javaScanRequest;
 
     public SettingsPage()
     {
         InitializeComponent();
+        SettingsSectionBar.SelectedItem = SettingsSectionBar.Items[0];
+        _loadingSettings = true;
         LoadSettings();
+        _loadingSettings = false;
+        ApplyAdvancedVisibility();
         _ = RefreshHomeContentAsync(showFeedback: false);
+        Loaded += SettingsPage_Loaded;
+    }
+
+    private async void SettingsPage_Loaded(object sender, RoutedEventArgs e)
+    {
+        Loaded -= SettingsPage_Loaded;
+        await RefreshJavaCandidatesAsync(JavaPathBox.Text);
+    }
+
+    private void SettingsSectionChanged(SelectorBar sender, SelectorBarSelectionChangedEventArgs e)
+    {
+        var section = sender.SelectedItem?.Tag?.ToString() ?? "environment";
+        EnvironmentSettingsPanel.Visibility = section == "environment" ? Visibility.Visible : Visibility.Collapsed;
+        DownloadSettingsPanel.Visibility = section == "download" ? Visibility.Visible : Visibility.Collapsed;
+        AppearanceSettingsPanel.Visibility = section == "appearance" ? Visibility.Visible : Visibility.Collapsed;
+        MusicSettingsPanel.Visibility = section == "music" ? Visibility.Visible : Visibility.Collapsed;
+        UpdateSettingsPanel.Visibility = section == "update" ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    internal void RunSmokeChecks()
+    {
+        var originalAdvanced = AdvancedModeCheckBox.IsChecked;
+        AdvancedModeCheckBox.IsChecked = false;
+        if (CoreThreadsBox.Visibility != Visibility.Collapsed || ModrinthApiBaseBox.Visibility != Visibility.Collapsed)
+        {
+            throw new InvalidOperationException("关闭高级模式后下载调优控件仍然可见。");
+        }
+
+        AdvancedModeCheckBox.IsChecked = true;
+        if (CoreThreadsBox.Visibility != Visibility.Visible || ModrinthApiBaseBox.Visibility != Visibility.Visible)
+        {
+            throw new InvalidOperationException("开启高级模式后下载调优控件没有显示。");
+        }
+
+        AdvancedModeCheckBox.IsChecked = originalAdvanced;
+        foreach (var item in SettingsSectionBar.Items.OfType<SelectorBarItem>())
+        {
+            SettingsSectionBar.SelectedItem = item;
+            var section = item.Tag?.ToString() ?? "";
+            var visiblePanels = new[]
+            {
+                EnvironmentSettingsPanel.Visibility,
+                DownloadSettingsPanel.Visibility,
+                AppearanceSettingsPanel.Visibility,
+                MusicSettingsPanel.Visibility,
+                UpdateSettingsPanel.Visibility,
+            }.Count(value => value == Visibility.Visible);
+            if (visiblePanels != 1)
+            {
+                throw new InvalidOperationException($"设置分段 {section} 没有只显示一个面板。");
+            }
+        }
+
+        SettingsSectionBar.SelectedItem = SettingsSectionBar.Items[0];
+    }
+
+    internal void SelectSettingsSectionForSmoke(string section)
+    {
+        SettingsSectionBar.SelectedItem = SettingsSectionBar.Items.OfType<SelectorBarItem>()
+            .First(item => string.Equals(item.Tag?.ToString(), section, StringComparison.Ordinal));
+        SettingsLayoutRoot.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false });
     }
 
     private void LoadSettings()
@@ -34,23 +104,61 @@ public sealed partial class SettingsPage : Page
         _settings.LoadConfig();
         GameDirectoryBox.Text = _settings.Config.Get("GAME", "directory", AppConstants.DefaultGameDirectory);
         JavaPathBox.Text = _settings.Config.Get("JAVA", "path", "java");
-        CoreThreadsBox.Text = _settings.Config.Get("DOWNLOAD", "max_core_threads", "12");
-        AssetThreadsBox.Text = _settings.Config.Get("DOWNLOAD", "max_asset_threads", "24");
-        SpeedLimitBox.Text = _settings.Config.Get("DOWNLOAD", "speed_limit_kbps", "0");
+        _loadingJavaCandidates = true;
+        try
+        {
+            JavaCandidatesBox.ItemsSource = new[] { "正在扫描 Java..." };
+            JavaCandidatesBox.SelectedIndex = 0;
+        }
+        finally
+        {
+            _loadingJavaCandidates = false;
+        }
+        CoreThreadsBox.Value = ClampDouble(_settings.Config.GetInt("DOWNLOAD", "max_core_threads", 12), 1, 64);
+        AssetThreadsBox.Value = ClampDouble(_settings.Config.GetInt("DOWNLOAD", "max_asset_threads", 24), 1, 96);
+        SpeedLimitBox.Value = ClampDouble(_settings.Config.GetInt("DOWNLOAD", "speed_limit_kbps", 0), 0, 1_048_576);
         ModrinthApiBaseBox.Text = _settings.Config.Get("DOWNLOAD", "modrinth_api_base", "");
         ModrinthCdnBaseBox.Text = _settings.Config.Get("DOWNLOAD", "modrinth_cdn_base", "");
         ThemeImageBox.Text = _settings.Config.Get("UI", "theme_image", "");
         HomeContentSourceBox.Text = _settings.Config.Get("HOME", "content_source", "");
         HomeNetworkCheckBox.IsChecked = _settings.Config.GetBool("HOME", "allow_network", false);
+        AdvancedModeCheckBox.IsChecked = _settings.Config.GetBool("UI", "advanced_mode", false);
+        ResourceIsolationCheckBox.IsChecked = _settings.Config.GetBool("GAME", "enable_resource_isolation", true);
+        ShowDownloadCheckBox.IsChecked = _settings.Config.GetBool("FEATURES", "show_download", true);
+        ShowManageCheckBox.IsChecked = _settings.Config.GetBool("FEATURES", "show_manage", true);
         MusicPathBox.Text = _settings.Config.Get("MUSIC", "path", "");
         MusicEnabledBox.IsChecked = _settings.Config.GetBool("MUSIC", "enabled", false);
-        MusicVolumeSlider.Value = Math.Clamp(_settings.Config.GetInt("MUSIC", "volume", 35), 0, 100);
+        MusicVolumeBox.Value = ClampDouble(_settings.Config.GetInt("MUSIC", "volume", 35), 0, 100);
         MusicPauseOnLaunchBox.IsChecked = _settings.Config.GetBool("MUSIC", "pause_on_launch", true);
         UpdateManifestBox.Text = _settings.Config.Get("UPDATE", "manifest_url", AppConstants.DefaultUpdateManifestUrl);
         UpdateAutoCheckBox.IsChecked = _settings.Config.GetBool("UPDATE", "auto_check", true);
+        SetUpdateStatus($"当前 McGo 版本：{AppConstants.AppVersion}");
         SetComboValue(MirrorBox, _settings.Config.Get("DOWNLOAD", "mirror_source", "official"));
         SetComboValue(CacheStrategyBox, _settings.Config.Get("DOWNLOAD", "cache_strategy", "reuse"));
         SetComboValue(ThemeBox, _settings.Config.Get("UI", "theme", "dark"));
+    }
+
+    private void AdvancedModeChanged(object sender, RoutedEventArgs e)
+    {
+        ApplyAdvancedVisibility();
+        if (_loadingSettings)
+        {
+            return;
+        }
+
+        _settings.Config.Set("UI", "advanced_mode", (AdvancedModeCheckBox.IsChecked == true).ToString());
+        _settings.SaveConfig();
+        StatusText.Text = AdvancedModeCheckBox.IsChecked == true ? "高级选项已显示。" : "高级选项已隐藏。";
+    }
+
+    private void ApplyAdvancedVisibility()
+    {
+        var visibility = AdvancedModeCheckBox.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        CacheStrategyBox.Visibility = visibility;
+        CoreThreadsBox.Visibility = visibility;
+        AssetThreadsBox.Visibility = visibility;
+        ModrinthApiBaseBox.Visibility = visibility;
+        ModrinthCdnBaseBox.Visibility = visibility;
     }
 
     private void SaveSettings(object sender, RoutedEventArgs e)
@@ -74,15 +182,19 @@ public sealed partial class SettingsPage : Page
         var modrinthCdnBase = NormalizeOptionalHttpBase(ModrinthCdnBaseBox.Text, "Modrinth CDN");
         _settings.Config.Set("GAME", "directory", GameDirectoryBox.Text.Trim());
         _settings.Config.Set("JAVA", "path", JavaPathBox.Text.Trim());
-        _settings.Config.Set("DOWNLOAD", "max_core_threads", ClampIntText(CoreThreadsBox.Text, 1, 128, 12).ToString());
-        _settings.Config.Set("DOWNLOAD", "max_asset_threads", ClampIntText(AssetThreadsBox.Text, 1, 256, 24).ToString());
-        _settings.Config.Set("DOWNLOAD", "speed_limit_kbps", ClampIntText(SpeedLimitBox.Text, 0, 10_000_000, 0).ToString());
+        _settings.Config.Set("DOWNLOAD", "max_core_threads", NumberValue(CoreThreadsBox, 1, 64, 12).ToString());
+        _settings.Config.Set("DOWNLOAD", "max_asset_threads", NumberValue(AssetThreadsBox, 1, 96, 24).ToString());
+        _settings.Config.Set("DOWNLOAD", "speed_limit_kbps", NumberValue(SpeedLimitBox, 0, 1_048_576, 0).ToString());
         _settings.Config.Set("DOWNLOAD", "cache_strategy", ComboValue(CacheStrategyBox, "reuse"));
         _settings.Config.Set("DOWNLOAD", "mirror_source", ComboValue(MirrorBox, "official"));
         _settings.Config.Set("DOWNLOAD", "modrinth_api_base", modrinthApiBase);
         _settings.Config.Set("DOWNLOAD", "modrinth_cdn_base", modrinthCdnBase);
         _settings.Config.Set("UI", "theme", ComboValue(ThemeBox, "dark"));
         _settings.Config.Set("UI", "theme_image", ThemeImageBox.Text.Trim());
+        _settings.Config.Set("UI", "advanced_mode", (AdvancedModeCheckBox.IsChecked == true).ToString());
+        _settings.Config.Set("GAME", "enable_resource_isolation", (ResourceIsolationCheckBox.IsChecked == true).ToString());
+        _settings.Config.Set("FEATURES", "show_download", (ShowDownloadCheckBox.IsChecked == true).ToString());
+        _settings.Config.Set("FEATURES", "show_manage", (ShowManageCheckBox.IsChecked == true).ToString());
         _settings.Config.Set("HOME", "content_source", HomeContentSourceBox.Text.Trim());
         _settings.Config.Set("HOME", "allow_network", (HomeNetworkCheckBox.IsChecked == true).ToString());
         SaveMusicConfig();
@@ -90,9 +202,9 @@ public sealed partial class SettingsPage : Page
         _settings.Config.Set("UPDATE", "auto_check", (UpdateAutoCheckBox.IsChecked == true).ToString());
         _settings.SaveConfig();
 
-        CoreThreadsBox.Text = _settings.Config.Get("DOWNLOAD", "max_core_threads", "12");
-        AssetThreadsBox.Text = _settings.Config.Get("DOWNLOAD", "max_asset_threads", "24");
-        SpeedLimitBox.Text = _settings.Config.Get("DOWNLOAD", "speed_limit_kbps", "0");
+        CoreThreadsBox.Value = ClampDouble(_settings.Config.GetInt("DOWNLOAD", "max_core_threads", 12), 1, 64);
+        AssetThreadsBox.Value = ClampDouble(_settings.Config.GetInt("DOWNLOAD", "max_asset_threads", 24), 1, 96);
+        SpeedLimitBox.Value = ClampDouble(_settings.Config.GetInt("DOWNLOAD", "speed_limit_kbps", 0), 0, 1_048_576);
         ModrinthApiBaseBox.Text = modrinthApiBase;
         ModrinthCdnBaseBox.Text = modrinthCdnBase;
     }
@@ -115,6 +227,66 @@ public sealed partial class SettingsPage : Page
         if (file is not null)
         {
             JavaPathBox.Text = file.Path;
+            await RefreshJavaCandidatesAsync(file.Path);
+        }
+    }
+
+    private async void RefreshJavaCandidates(object sender, RoutedEventArgs e)
+    {
+        StatusText.Text = "正在扫描 Java 运行时...";
+        await RefreshJavaCandidatesAsync(JavaPathBox.Text.Trim());
+        StatusText.Text = $"已刷新 Java 候选：{JavaCandidatesBox.Items.Count} 项。";
+    }
+
+    private void JavaCandidateChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingJavaCandidates)
+        {
+            return;
+        }
+
+        if (JavaCandidatesBox.SelectedItem is string path && path.Length > 0)
+        {
+            JavaPathBox.Text = path;
+        }
+    }
+
+    private async Task RefreshJavaCandidatesAsync(string selectedPath)
+    {
+        var request = ++_javaScanRequest;
+        var gameDirectory = GameDirectoryBox.Text.Trim();
+        IReadOnlyList<string> candidates;
+        try
+        {
+            candidates = await Task.Run(() => FindJavaCandidates(gameDirectory, selectedPath));
+        }
+        catch (Exception exc)
+        {
+            if (request == _javaScanRequest)
+            {
+                StatusText.Text = "扫描 Java 失败：" + exc.Message;
+            }
+
+            return;
+        }
+
+        if (request != _javaScanRequest)
+        {
+            return;
+        }
+
+        _loadingJavaCandidates = true;
+        try
+        {
+            JavaCandidatesBox.ItemsSource = candidates;
+            if (candidates.Count > 0)
+            {
+                JavaCandidatesBox.SelectedItem = candidates.FirstOrDefault(candidate => SamePathOrText(candidate, selectedPath)) ?? candidates[0];
+            }
+        }
+        finally
+        {
+            _loadingJavaCandidates = false;
         }
     }
 
@@ -197,7 +369,7 @@ public sealed partial class SettingsPage : Page
             var played = MusicPlaybackService.Apply(
                 MusicPathBox.Text.Trim(),
                 MusicEnabledBox.IsChecked == true,
-                (int)Math.Round(MusicVolumeSlider.Value));
+                NumberValue(MusicVolumeBox, 0, 100, 35));
             if (played)
             {
                 if (showFeedback)
@@ -235,7 +407,7 @@ public sealed partial class SettingsPage : Page
     {
         _settings.Config.Set("MUSIC", "path", MusicPathBox.Text.Trim());
         _settings.Config.Set("MUSIC", "enabled", (MusicEnabledBox.IsChecked == true).ToString());
-        _settings.Config.Set("MUSIC", "volume", ((int)Math.Round(MusicVolumeSlider.Value)).ToString());
+        _settings.Config.Set("MUSIC", "volume", NumberValue(MusicVolumeBox, 0, 100, 35).ToString());
         _settings.Config.Set("MUSIC", "pause_on_launch", (MusicPauseOnLaunchBox.IsChecked == true).ToString());
     }
 
@@ -257,30 +429,73 @@ public sealed partial class SettingsPage : Page
 
             if (manifest["update_available"]?.GetValue<bool>() != true)
             {
+                SetUpdateStatus($"当前已是最新版：{AppConstants.AppVersion}");
                 StatusText.Text = "当前没有可下载更新。";
                 return;
             }
 
-            var progress = new Progress<int>(value =>
-            {
-                UpdateProgressBar.Value = value;
-                StatusText.Text = $"正在下载更新：{value}%";
-            });
-            var result = await _updater.DownloadUpdateAsync(
-                manifest,
-                progress: progress,
-                status: message => DispatcherQueue.TryEnqueue(() => UpdateOutputBox.Text = message));
-            _lastUpdateManifest = result;
-            _lastUpdatePath = result["path"]?.GetValue<string>();
-            UpdateOutputBox.Text = result.ToJsonString(JsonOptions);
-            StatusText.Text = UpdaterService.CanReplaceCurrentExecutable()
-                ? "更新已下载，可点击“应用更新”。"
-                : "更新已下载；当前不是打包后的 McGo.exe，无法自动替换。";
+            var version = manifest["version"]?.GetValue<string>() ?? "新版本";
+            SetUpdateStatus($"McGo {version} 已加入全局下载队列");
+            DownloadTaskManager.Current.Enqueue("launcher_update", $"下载 McGo {version}", (record, token) =>
+                DownloadUpdateTaskAsync(record, manifest, token));
         }
         catch (Exception exc)
         {
             UpdateOutputBox.Text = exc.Message;
+            SetUpdateStatus("下载更新失败：" + exc.Message);
             StatusText.Text = "下载更新失败。";
+        }
+    }
+
+    private async Task<string> DownloadUpdateTaskAsync(
+        DownloadTaskRecord record,
+        JsonObject manifest,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var progress = new Progress<int>(value =>
+            {
+                UpdateProgressBar.Value = value;
+                SetUpdateStatus($"正在下载更新：{value}%");
+                StatusText.Text = $"正在下载更新：{value}%";
+                DownloadTaskManager.Current.Update(record, item =>
+                {
+                    item.Progress = value;
+                    item.Detail = $"正在下载更新：{value}%";
+                });
+            });
+            var result = await _updater.DownloadUpdateAsync(
+                manifest,
+                progress: progress,
+                status: message => DispatcherQueue.TryEnqueue(() =>
+                {
+                    UpdateOutputBox.Text = message;
+                    DownloadTaskManager.Current.Update(record, item => item.Detail = message);
+                }),
+                cancellationToken: cancellationToken);
+            _lastUpdateManifest = result;
+            _lastUpdatePath = result["path"]?.GetValue<string>();
+            UpdateOutputBox.Text = result.ToJsonString(JsonOptions);
+            var downloadedVersion = result["version"]?.GetValue<string>() ?? "";
+            SetUpdateStatus(downloadedVersion.Length > 0 ? $"McGo {downloadedVersion} 已下载" : "更新已下载");
+            StatusText.Text = UpdaterService.CanReplaceCurrentExecutable()
+                ? "更新已下载，可点击“应用更新”。"
+                : "更新已下载；当前不是打包后的 McGo.exe，无法自动替换。";
+            return downloadedVersion.Length > 0 ? $"McGo {downloadedVersion} 已下载" : "更新已下载";
+        }
+        catch (OperationCanceledException)
+        {
+            SetUpdateStatus("更新下载已取消");
+            StatusText.Text = "更新下载已取消。";
+            throw;
+        }
+        catch (Exception exc)
+        {
+            UpdateOutputBox.Text = exc.Message;
+            SetUpdateStatus("下载更新失败：" + exc.Message);
+            StatusText.Text = "下载更新失败。";
+            throw;
         }
     }
 
@@ -290,6 +505,7 @@ public sealed partial class SettingsPage : Page
         {
             if (string.IsNullOrWhiteSpace(_lastUpdatePath) || !File.Exists(_lastUpdatePath))
             {
+                SetUpdateStatus("请先下载可用更新。");
                 StatusText.Text = "请先下载可用更新。";
                 return;
             }
@@ -297,6 +513,7 @@ public sealed partial class SettingsPage : Page
             if (!UpdaterService.CanReplaceCurrentExecutable())
             {
                 UpdateOutputBox.Text = $"更新文件已下载：{_lastUpdatePath}{Environment.NewLine}当前运行目标不是打包后的 McGo.exe，无法自动替换。";
+                SetUpdateStatus("当前运行模式不支持自动应用更新。");
                 StatusText.Text = "当前运行模式不支持自动应用更新。";
                 return;
             }
@@ -317,12 +534,14 @@ public sealed partial class SettingsPage : Page
 
             var result = UpdaterService.ScheduleWindowsReplaceAndRestart(_lastUpdatePath);
             UpdateOutputBox.Text = $"已安排更新替换。日志：{result.LogPath}{Environment.NewLine}需要管理员权限：{(result.Elevated ? "是" : "否")}";
+            SetUpdateStatus("正在退出并应用更新...");
             StatusText.Text = "正在关闭 McGo 以应用更新。";
             Application.Current.Exit();
         }
         catch (Exception exc)
         {
             UpdateOutputBox.Text = exc.Message;
+            SetUpdateStatus("应用更新失败：" + exc.Message);
             StatusText.Text = "应用更新失败。";
         }
     }
@@ -332,13 +551,23 @@ public sealed partial class SettingsPage : Page
         try
         {
             SaveAllSettings();
+            if (!silent)
+            {
+                SetUpdateStatus("正在检查 McGo 更新...");
+            }
+
             var manifest = await _updater.CheckForUpdateAsync(UpdateManifestBox.Text.Trim(), AppConstants.AppVersion);
             _lastUpdateManifest = manifest;
             _lastUpdateManifestUrl = UpdateManifestBox.Text.Trim();
             var updateAvailable = manifest["update_available"]?.GetValue<bool>() == true;
+            var remoteVersion = manifest["version"]?.GetValue<string>() ?? "";
+            var updateStatus = updateAvailable && remoteVersion.Length > 0
+                ? $"发现新版本：{remoteVersion}"
+                : $"当前已是最新版：{AppConstants.AppVersion}";
             if (!silent || updateAvailable)
             {
                 UpdateOutputBox.Text = manifest.ToJsonString(JsonOptions);
+                SetUpdateStatus(updateStatus);
                 StatusText.Text = updateAvailable ? "发现可用更新。" : "当前已是最新。";
             }
 
@@ -349,6 +578,7 @@ public sealed partial class SettingsPage : Page
             if (!silent)
             {
                 UpdateOutputBox.Text = exc.Message;
+                SetUpdateStatus("检查更新失败：" + exc.Message);
                 StatusText.Text = "检查更新失败。";
             }
 
@@ -381,6 +611,9 @@ public sealed partial class SettingsPage : Page
         if (App.MainWindow is MainWindow mainWindow)
         {
             mainWindow.ApplyAppearance(ComboValue(ThemeBox, "dark"), ThemeImageBox.Text.Trim());
+            mainWindow.ApplyFeatureVisibility(
+                ShowDownloadCheckBox.IsChecked == true,
+                ShowManageCheckBox.IsChecked == true);
         }
     }
 
@@ -409,8 +642,89 @@ public sealed partial class SettingsPage : Page
         combo.SelectedIndex = 0;
     }
 
-    private static int ClampIntText(string value, int min, int max, int fallback)
-        => int.TryParse(value.Trim(), out var parsed) ? Math.Clamp(parsed, min, max) : fallback;
+    private static int NumberValue(NumberBox box, int min, int max, int fallback)
+    {
+        if (double.IsNaN(box.Value))
+        {
+            return fallback;
+        }
+
+        return Math.Clamp((int)Math.Round(box.Value), min, max);
+    }
+
+    private static double ClampDouble(int value, int min, int max) => Math.Clamp(value, min, max);
+
+    private void SetUpdateStatus(string message)
+    {
+        if (UpdateStatusText is not null)
+        {
+            UpdateStatusText.Text = message;
+        }
+    }
+
+    private static IReadOnlyList<string> FindJavaCandidates(string gameDirectory, string configuredPath)
+    {
+        var candidates = new List<string>();
+        AddJavaCandidate(candidates, configuredPath);
+        AddJavaCandidate(candidates, "java");
+        AddJavaCandidate(candidates, JavaRuntimeService.FindJavaInDirectory(Path.Combine(gameDirectory, "java_runtimes")));
+
+        foreach (var pathDir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            AddJavaCandidate(candidates, Path.Combine(pathDir, OperatingSystem.IsWindows() ? "java.exe" : "java"));
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            foreach (var root in new[]
+                     {
+                         Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                         Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                     }.Where(path => !string.IsNullOrWhiteSpace(path)))
+            {
+                AddJavaCandidate(candidates, JavaRuntimeService.FindJavaInDirectory(Path.Combine(root, "Java")));
+                AddJavaCandidate(candidates, JavaRuntimeService.FindJavaInDirectory(Path.Combine(root, "Eclipse Adoptium")));
+                AddJavaCandidate(candidates, JavaRuntimeService.FindJavaInDirectory(Path.Combine(root, "Microsoft")));
+            }
+        }
+
+        return candidates
+            .Where(value => value.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(40)
+            .ToList();
+    }
+
+    private static void AddJavaCandidate(List<string> candidates, string? path)
+    {
+        var value = (path ?? "").Trim();
+        if (value.Length == 0)
+        {
+            return;
+        }
+
+        if (string.Equals(value, "java", StringComparison.OrdinalIgnoreCase) || File.Exists(value))
+        {
+            candidates.Add(value);
+        }
+    }
+
+    private static bool SamePathOrText(string left, string right)
+    {
+        if (string.Equals(left, right, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        try
+        {
+            return Path.GetFullPath(left).Equals(Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     private static string NormalizeOptionalHttpBase(string value, string label)
     {

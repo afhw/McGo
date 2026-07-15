@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml.Controls;
 using McGo.Core.App;
 using McGo.Core.Capsules;
 using McGo.Core.Configuration;
+using McGo.Core.Downloads;
 using McGo.Core.Formatting;
 using McGo.Core.Minecraft;
 using McGo.Core.Modpacks;
@@ -32,7 +33,17 @@ public sealed partial class ModpacksPage : Page
         _versionSettingsService = new VersionSettingsService(_launcher);
         _modpacks = new ModpackService(_launcher);
         _capsules = new CapsuleService(_launcher, _versionSettingsService);
+        ModpackSectionBar.SelectedItem = ModpackSectionBar.Items[0];
         LoadState();
+    }
+
+    private void ModpackSectionChanged(SelectorBar sender, SelectorBarSelectionChangedEventArgs e)
+    {
+        var section = (sender.SelectedItem as SelectorBarItem)?.Tag?.ToString() ?? "import";
+        ImportPanel.Visibility = section == "import" ? Visibility.Visible : Visibility.Collapsed;
+        ExportPanel.Visibility = section == "export" ? Visibility.Visible : Visibility.Collapsed;
+        CapsulePanel.Visibility = section == "capsule" ? Visibility.Visible : Visibility.Collapsed;
+        CrashPanel.Visibility = section == "crash" ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void LoadState()
@@ -47,11 +58,11 @@ public sealed partial class ModpacksPage : Page
         }
 
         RelayHostBox.Text = _settings.Config.Get("P2P", "relay_host", "flyliq.cn");
-        RelayPortBox.Text = _settings.Config.Get("P2P", "relay_port", "10721");
+        RelayPortBox.Value = ClampPort(_settings.Config.GetInt("P2P", "relay_port", 10721), 10721);
         RoomBox.Text = _settings.Config.Get("P2P", "room", "");
-        SecretBox.Text = _settings.Config.Get("P2P", "secret", "");
-        HostPortBox.Text = _settings.Config.Get("P2P", "host_port", "25565");
-        JoinPortBox.Text = _settings.Config.Get("P2P", "join_port", "25565");
+        SecretBox.Password = _settings.Config.Get("P2P", "secret", "");
+        HostPortBox.Value = ClampPort(_settings.Config.GetInt("P2P", "host_port", 25565), 25565);
+        JoinPortBox.Value = ClampPort(_settings.Config.GetInt("P2P", "join_port", 25565), 25565);
     }
 
     private void ExportModpack(object sender, RoutedEventArgs e)
@@ -91,14 +102,47 @@ public sealed partial class ModpacksPage : Page
                 return;
             }
 
+            var packPath = ImportPackPathBox.Text.Trim();
+            var gameDir = GameDir();
+            var targetVersion = ImportTargetVersionBox.Text.Trim();
+            var isolation = _settings.Config.GetBool("GAME", "enable_resource_isolation", true);
+            SetPackBusy(true, "已加入全局队列，等待导入整合包...");
+            PackOutputBox.Text = "已加入全局队列，等待导入整合包...";
+            DownloadTaskManager.Current.Enqueue("modpack", $"导入整合包 {Path.GetFileName(packPath)}", (record, token) =>
+                ImportModpackTaskAsync(record, packPath, gameDir, targetVersion, isolation, token));
+        }
+        catch (Exception exc)
+        {
+            PackOutputBox.Text = "整合包导入失败：" + exc.Message;
+            PackStatusText.Text = "整合包导入失败";
+            SetPackBusy(false);
+        }
+    }
+
+    private async Task<string> ImportModpackTaskAsync(
+        DownloadTaskRecord record,
+        string packPath,
+        string gameDir,
+        string targetVersion,
+        bool isolation,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
             PackOutputBox.Text = "正在导入整合包...";
             var result = await _modpacks.ImportModpackAsync(
-                ImportPackPathBox.Text.Trim(),
-                GameDir(),
+                packPath,
+                gameDir,
                 _versionSettings,
-                ImportTargetVersionBox.Text.Trim(),
-                _settings.Config.GetBool("GAME", "enable_resource_isolation", true),
-                message => PackOutputBox.Text = message);
+                targetVersion,
+                isolation,
+                message =>
+                {
+                    PackOutputBox.Text = message;
+                    PackStatusText.Text = message;
+                    DownloadTaskManager.Current.Update(record, item => item.Detail = message);
+                },
+                cancellationToken);
             _versionSettingsService.SaveVersionSettings(_versionSettings);
             LoadState();
             PackVersionBox.SelectedItem = result.Version;
@@ -113,10 +157,23 @@ public sealed partial class ModpacksPage : Page
                 $"运行目录：{result.RuntimeDir}",
                 result.MissingReportPath.Length > 0 ? $"缺失报告：{result.MissingReportPath}" : "",
             ]);
+            return $"已导入 {result.Name}，下载 {result.FilesDownloaded} 个文件";
+        }
+        catch (OperationCanceledException)
+        {
+            PackOutputBox.Text = "整合包导入已取消。";
+            PackStatusText.Text = "整合包导入已取消";
+            throw;
         }
         catch (Exception exc)
         {
             PackOutputBox.Text = "整合包导入失败：" + exc.Message;
+            PackStatusText.Text = "整合包导入失败";
+            throw;
+        }
+        finally
+        {
+            SetPackBusy(false);
         }
     }
 
@@ -145,10 +202,12 @@ public sealed partial class ModpacksPage : Page
                 $"待补齐文件：{result.MissingFiles.Count}",
                 $"运行目录：{result.RuntimeDir}",
             ]);
+            PackStatusText.Text = $"胶囊已导入，待补齐 {result.MissingFiles.Count} 个文件";
         }
         catch (Exception exc)
         {
             PackOutputBox.Text = "胶囊导入失败：" + exc.Message;
+            PackStatusText.Text = "胶囊导入失败";
         }
     }
 
@@ -178,10 +237,12 @@ public sealed partial class ModpacksPage : Page
                 BuildCapsuleP2PInfo(),
                 _settings.Config.GetBool("GAME", "enable_resource_isolation", true));
             PackOutputBox.Text = $"胶囊已导出：{result.TargetPath}\n文件：{result.FileCount}\n大小：{AppFormatter.FormatBytes(result.TotalSize)}";
+            PackStatusText.Text = "胶囊导出完成";
         }
         catch (Exception exc)
         {
             PackOutputBox.Text = "胶囊导出失败：" + exc.Message;
+            PackStatusText.Text = "胶囊导出失败";
         }
     }
 
@@ -198,21 +259,54 @@ public sealed partial class ModpacksPage : Page
             }
 
             var runtimeDir = VersionSettingsService.RuntimeDirectoryForVersion(GameDir(), _versionSettings, versionId, _settings.Config.GetBool("GAME", "enable_resource_isolation", true));
-            _capsuleFileHostCts = new CancellationTokenSource();
+            var config = BuildP2PConfig();
+            var udpEnabled = UdpEnabled();
+            var cts = new CancellationTokenSource();
+            var cancellationToken = cts.Token;
+            _capsuleFileHostCts = cts;
+            StartCapsuleHostButton.IsEnabled = false;
+            StopCapsuleHostButton.IsEnabled = true;
+            PackStatusText.Text = "正在启动胶囊补包服务";
             PackOutputBox.Text = $"正在启动胶囊补包服务：{runtimeDir}";
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    await _capsuleFiles.RunHostAsync(runtimeDir, BuildP2PConfig(), UdpEnabled(), message => DispatcherQueue.TryEnqueue(() => AppendPack(message)), _capsuleFileHostCts.Token);
+                    await _capsuleFiles.RunHostAsync(runtimeDir, config, udpEnabled, message => DispatcherQueue.TryEnqueue(() =>
+                    {
+                        AppendPack(message);
+                        PackStatusText.Text = message;
+                    }), cancellationToken);
                 }
                 catch (OperationCanceledException)
                 {
-                    DispatcherQueue.TryEnqueue(() => AppendPack("胶囊补包服务已停止。"));
+                    DispatcherQueue.TryEnqueue(() =>
+                    {
+                        AppendPack("胶囊补包服务已停止。");
+                        PackStatusText.Text = "胶囊补包服务已停止";
+                    });
                 }
                 catch (Exception exc)
                 {
-                    DispatcherQueue.TryEnqueue(() => AppendPack("胶囊补包服务失败：" + exc.Message));
+                    DispatcherQueue.TryEnqueue(() =>
+                    {
+                        AppendPack("胶囊补包服务失败：" + exc.Message);
+                        PackStatusText.Text = "胶囊补包服务失败";
+                    });
+                }
+                finally
+                {
+                    DispatcherQueue.TryEnqueue(() =>
+                    {
+                        if (ReferenceEquals(_capsuleFileHostCts, cts))
+                        {
+                            _capsuleFileHostCts = null;
+                            StartCapsuleHostButton.IsEnabled = true;
+                            StopCapsuleHostButton.IsEnabled = false;
+                        }
+
+                        cts.Dispose();
+                    });
                 }
             });
             await Task.CompletedTask;
@@ -220,10 +314,11 @@ public sealed partial class ModpacksPage : Page
         catch (Exception exc)
         {
             PackOutputBox.Text = "启动补包服务失败：" + exc.Message;
+            PackStatusText.Text = "启动补包服务失败";
         }
     }
 
-    private async void PullCapsuleFiles(object sender, RoutedEventArgs e)
+    private void PullCapsuleFiles(object sender, RoutedEventArgs e)
     {
         try
         {
@@ -249,20 +344,75 @@ public sealed partial class ModpacksPage : Page
                 return;
             }
 
+            var runtimeDir = _lastCapsuleRuntimeDir;
+            var files = _lastCapsuleFiles;
+            var config = BuildP2PConfig();
+            var udpEnabled = UdpEnabled();
             CapsulePullProgressBar.Value = 0;
-            var progress = new Progress<int>(value => CapsulePullProgressBar.Value = value);
-            var result = await _capsuleFiles.PullMissingFilesAsync(
-                _lastCapsuleRuntimeDir,
-                _lastCapsuleFiles,
-                BuildP2PConfig(),
-                UdpEnabled(),
-                progress,
-                message => DispatcherQueue.TryEnqueue(() => AppendPack(message)));
-            PackOutputBox.Text = $"胶囊补包完成：下载 {result.Downloaded}/{result.TotalMissing}，跳过 {result.Skipped}，写入 {AppFormatter.FormatBytes(result.Bytes)}";
+            PullCapsuleFilesButton.IsEnabled = false;
+            PackStatusText.Text = "已加入全局队列，等待补齐胶囊文件";
+            DownloadTaskManager.Current.Enqueue("capsule", "补齐开黑胶囊文件", (record, token) =>
+                PullCapsuleFilesTaskAsync(record, runtimeDir, files, config, udpEnabled, token));
         }
         catch (Exception exc)
         {
             PackOutputBox.Text = "胶囊补包失败：" + exc.Message;
+            PackStatusText.Text = "胶囊补包失败";
+            PullCapsuleFilesButton.IsEnabled = true;
+        }
+    }
+
+    private async Task<string> PullCapsuleFilesTaskAsync(
+        DownloadTaskRecord record,
+        string runtimeDir,
+        JsonArray files,
+        P2PTunnelConfig config,
+        bool udpEnabled,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            PackStatusText.Text = "正在补齐胶囊文件";
+            var progress = new Progress<int>(value =>
+            {
+                CapsulePullProgressBar.Value = value;
+                DownloadTaskManager.Current.Update(record, item =>
+                {
+                    item.Progress = value;
+                    item.Detail = $"补齐胶囊文件 {value}%";
+                });
+            });
+            var result = await _capsuleFiles.PullMissingFilesAsync(
+                runtimeDir,
+                files,
+                config,
+                udpEnabled,
+                progress,
+                message => DispatcherQueue.TryEnqueue(() =>
+                {
+                    AppendPack(message);
+                    DownloadTaskManager.Current.Update(record, item => item.Detail = message);
+                }),
+                cancellationToken);
+            PackOutputBox.Text = $"胶囊补包完成：下载 {result.Downloaded}/{result.TotalMissing}，跳过 {result.Skipped}，写入 {AppFormatter.FormatBytes(result.Bytes)}";
+            PackStatusText.Text = "胶囊补包完成";
+            return $"胶囊补包完成：下载 {result.Downloaded}/{result.TotalMissing}";
+        }
+        catch (OperationCanceledException)
+        {
+            PackOutputBox.Text = "胶囊补包已取消。";
+            PackStatusText.Text = "胶囊补包已取消";
+            throw;
+        }
+        catch (Exception exc)
+        {
+            PackOutputBox.Text = "胶囊补包失败：" + exc.Message;
+            PackStatusText.Text = "胶囊补包失败";
+            throw;
+        }
+        finally
+        {
+            PullCapsuleFilesButton.IsEnabled = true;
         }
     }
 
@@ -270,6 +420,7 @@ public sealed partial class ModpacksPage : Page
     {
         StopCapsuleHostOnly();
         AppendPack("正在停止胶囊补包服务...");
+        PackStatusText.Text = "正在停止胶囊补包服务";
     }
 
     private async void ChooseImportPack(object sender, RoutedEventArgs e)
@@ -331,21 +482,21 @@ public sealed partial class ModpacksPage : Page
         => new()
         {
             ["relay_host"] = RelayHostBox.Text.Trim(),
-            ["relay_port"] = P2PUtilities.CleanPort(RelayPortBox.Text, 10721),
+            ["relay_port"] = NumberPort(RelayPortBox, 10721),
             ["room"] = P2PUtilities.CleanRoom(RoomBox.Text),
-            ["secret"] = SecretBox.Text.Trim(),
-            ["host_port"] = P2PUtilities.CleanPort(HostPortBox.Text),
-            ["join_port"] = P2PUtilities.CleanPort(JoinPortBox.Text),
+            ["secret"] = SecretBox.Password.Trim(),
+            ["host_port"] = NumberPort(HostPortBox, 25565),
+            ["join_port"] = NumberPort(JoinPortBox, 25565),
         };
 
     private P2PTunnelConfig BuildP2PConfig()
         => new(
             RelayHostBox.Text.Trim(),
-            P2PUtilities.CleanPort(RelayPortBox.Text, 10721),
+            NumberPort(RelayPortBox, 10721),
             P2PUtilities.CleanRoom(RoomBox.Text),
-            SecretBox.Text.Trim(),
-            P2PUtilities.CleanPort(JoinPortBox.Text),
-            P2PUtilities.CleanPort(HostPortBox.Text));
+            SecretBox.Password.Trim(),
+            NumberPort(JoinPortBox, 25565),
+            NumberPort(HostPortBox, 25565));
 
     private void ApplyCapsuleP2P(JsonObject p2p)
     {
@@ -355,17 +506,53 @@ public sealed partial class ModpacksPage : Page
         }
 
         RelayHostBox.Text = p2p["relay_host"]?.GetValue<string>() ?? RelayHostBox.Text;
-        RelayPortBox.Text = (p2p["relay_port"]?.GetValue<int?>() ?? P2PUtilities.CleanPort(RelayPortBox.Text, 10721)).ToString();
+        RelayPortBox.Value = ClampPort(p2p["relay_port"]?.GetValue<int?>() ?? NumberPort(RelayPortBox, 10721), 10721);
         RoomBox.Text = p2p["room"]?.GetValue<string>() ?? RoomBox.Text;
-        SecretBox.Text = p2p["secret"]?.GetValue<string>() ?? SecretBox.Text;
-        HostPortBox.Text = (p2p["host_port"]?.GetValue<int?>() ?? P2PUtilities.CleanPort(HostPortBox.Text)).ToString();
-        JoinPortBox.Text = (p2p["join_port"]?.GetValue<int?>() ?? P2PUtilities.CleanPort(JoinPortBox.Text)).ToString();
+        SecretBox.Password = p2p["secret"]?.GetValue<string>() ?? SecretBox.Password;
+        HostPortBox.Value = ClampPort(p2p["host_port"]?.GetValue<int?>() ?? NumberPort(HostPortBox, 25565), 25565);
+        JoinPortBox.Value = ClampPort(p2p["join_port"]?.GetValue<int?>() ?? NumberPort(JoinPortBox, 25565), 25565);
+        SaveCapsuleP2PSettings();
+    }
+
+    private void GenerateCapsuleRoom(object sender, RoutedEventArgs e)
+    {
+        RoomBox.Text = P2PUtilities.GenerateRoomCode();
+        PackOutputBox.Text = "已生成胶囊 P2P 房间号。";
+    }
+
+    private void SaveCapsuleP2P(object sender, RoutedEventArgs e)
+    {
+        SaveCapsuleP2PSettings();
+        PackOutputBox.Text = "胶囊 P2P 信息已保存。";
+    }
+
+    private void BuildCapsuleInvite(object sender, RoutedEventArgs e)
+    {
+        var room = P2PUtilities.CleanRoom(RoomBox.Text);
+        if (room.Length == 0)
+        {
+            room = P2PUtilities.GenerateRoomCode();
+            RoomBox.Text = room;
+        }
+
+        SaveCapsuleP2PSettings();
+        PackOutputBox.Text = string.Join(Environment.NewLine, [
+            $"中继：{RelayHostBox.Text.Trim()}:{NumberPort(RelayPortBox, 10721)}",
+            $"房间：{room}",
+            $"口令：{(SecretBox.Password.Trim().Length == 0 ? "无" : SecretBox.Password.Trim())}",
+            $"加入者本地服务器：127.0.0.1:{NumberPort(JoinPortBox, 25565)}",
+            $"胶囊补包房间：{CapsuleFileTransferService.FileRoom(room)}",
+        ]);
+    }
+
+    private void SaveCapsuleP2PSettings()
+    {
         _settings.Config.Set("P2P", "relay_host", RelayHostBox.Text.Trim());
-        _settings.Config.Set("P2P", "relay_port", RelayPortBox.Text.Trim());
+        _settings.Config.Set("P2P", "relay_port", NumberPort(RelayPortBox, 10721).ToString());
         _settings.Config.Set("P2P", "room", P2PUtilities.CleanRoom(RoomBox.Text));
-        _settings.Config.Set("P2P", "secret", SecretBox.Text.Trim());
-        _settings.Config.Set("P2P", "host_port", P2PUtilities.CleanPort(HostPortBox.Text).ToString());
-        _settings.Config.Set("P2P", "join_port", P2PUtilities.CleanPort(JoinPortBox.Text).ToString());
+        _settings.Config.Set("P2P", "secret", SecretBox.Password.Trim());
+        _settings.Config.Set("P2P", "host_port", NumberPort(HostPortBox, 25565).ToString());
+        _settings.Config.Set("P2P", "join_port", NumberPort(JoinPortBox, 25565).ToString());
         _settings.SaveConfig();
     }
 
@@ -424,9 +611,26 @@ public sealed partial class ModpacksPage : Page
             return;
         }
 
-        _capsuleFileHostCts.Cancel();
-        _capsuleFileHostCts.Dispose();
+        var cts = _capsuleFileHostCts;
         _capsuleFileHostCts = null;
+        cts.Cancel();
+        cts.Dispose();
+        StartCapsuleHostButton.IsEnabled = true;
+        StopCapsuleHostButton.IsEnabled = false;
+    }
+
+    private void SetPackBusy(bool busy, string status = "")
+    {
+        ImportModpackButton.IsEnabled = !busy;
+        PackProgressBar.IsIndeterminate = busy;
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            PackStatusText.Text = status;
+        }
+        else if (!busy && PackStatusText.Text.StartsWith("正在", StringComparison.Ordinal))
+        {
+            PackStatusText.Text = "等待操作";
+        }
     }
 
     private void AppendPack(string message)
@@ -475,4 +679,79 @@ public sealed partial class ModpacksPage : Page
 
         return combo.SelectedItem?.ToString() ?? fallback;
     }
+
+    private static int NumberPort(NumberBox box, int fallback)
+    {
+        if (double.IsNaN(box.Value))
+        {
+            return fallback;
+        }
+
+        return ClampPort((int)Math.Round(box.Value), fallback);
+    }
+
+    private static int ClampPort(int value, int fallback)
+        => value is >= 1 and <= 65535 ? value : fallback;
+
+    internal void RunSmokeChecks()
+    {
+        if (ModpackSectionBar.Items.Count != 4)
+        {
+            throw new InvalidOperationException("整合包页缺少任务分段。");
+        }
+
+        foreach (var item in ModpackSectionBar.Items.OfType<SelectorBarItem>())
+        {
+            ModpackSectionBar.SelectedItem = item;
+            var section = item.Tag?.ToString() ?? "";
+            if (ImportPanel.Visibility != (section == "import" ? Visibility.Visible : Visibility.Collapsed)
+                || ExportPanel.Visibility != (section == "export" ? Visibility.Visible : Visibility.Collapsed)
+                || CapsulePanel.Visibility != (section == "capsule" ? Visibility.Visible : Visibility.Collapsed)
+                || CrashPanel.Visibility != (section == "crash" ? Visibility.Visible : Visibility.Collapsed))
+            {
+                throw new InvalidOperationException($"整合包分段 {section} 的可见性不正确。");
+            }
+        }
+
+        ModpackSectionBar.SelectedItem = ModpackSectionBar.Items[0];
+
+        if (SecretBox.GetType() != typeof(PasswordBox))
+        {
+            throw new InvalidOperationException("胶囊口令必须使用 PasswordBox。");
+        }
+
+        if (StartCapsuleHostButton is null || StopCapsuleHostButton is null || PackStatusText is null)
+        {
+            throw new InvalidOperationException("整合包页缺少补包服务状态控件。");
+        }
+    }
+
+    internal void SelectModpackSectionForSmoke(string section)
+    {
+        SelectModpackSection(section);
+        ResponsiveLayoutRoot.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false });
+    }
+
+    internal void OpenTask(string section, string versionId, string runtimeDirectory)
+    {
+        SelectModpackSection(section);
+        if (section == "export" && PackVersionBox.Items.Contains(versionId))
+        {
+            PackVersionBox.SelectedItem = versionId;
+        }
+
+        if (section == "crash")
+        {
+            CrashRuntimeDirBox.Text = runtimeDirectory;
+        }
+
+        ResponsiveLayoutRoot.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false });
+    }
+
+    private void SelectModpackSection(string section)
+    {
+        ModpackSectionBar.SelectedItem = ModpackSectionBar.Items.OfType<SelectorBarItem>()
+            .First(item => string.Equals(item.Tag?.ToString(), section, StringComparison.Ordinal));
+    }
+
 }

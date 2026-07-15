@@ -62,16 +62,19 @@ public sealed class InstallerEngine
         }
     }
 
-    public async Task<InstallResult> InstallFabricAsync(CancellationToken cancellationToken = default)
+    public async Task<InstallResult> InstallFabricAsync(string loaderVersion = "", CancellationToken cancellationToken = default)
     {
         UseBaseMinecraftVersionForLoader("Fabric");
         var versions = await _services.GetFabricLoaderVersionsAsync(MinecraftVersion, MirrorSource, cancellationToken);
-        var selected = versions.OfType<JsonObject>().FirstOrDefault() ?? throw new InvalidOperationException($"未找到适用于 {MinecraftVersion} 的 Fabric Loader。");
-        var loaderVersion = selected["loader"]?["version"]?.GetValue<string>() ?? "";
-        var profileUrl = $"{InstallServices.MirrorRoot(MirrorSource)}/fabric-meta/v2/versions/loader/{MinecraftVersion}/{loaderVersion}/profile/json";
-        StatusCallback?.Invoke($"正在获取 Fabric 安装配置：{MinecraftVersion} / Loader {loaderVersion}");
+        var selected = versions.OfType<JsonObject>()
+                           .FirstOrDefault(item => string.IsNullOrWhiteSpace(loaderVersion) ||
+                                                   string.Equals(item["loader"]?["version"]?.GetValue<string>() ?? "", loaderVersion, StringComparison.OrdinalIgnoreCase))
+                       ?? throw new InvalidOperationException($"未找到适用于 {MinecraftVersion} 的 Fabric Loader。");
+        var selectedLoaderVersion = selected["loader"]?["version"]?.GetValue<string>() ?? "";
+        var profileUrl = $"{InstallServices.MirrorRoot(MirrorSource)}/fabric-meta/v2/versions/loader/{MinecraftVersion}/{selectedLoaderVersion}/profile/json";
+        StatusCallback?.Invoke($"正在获取 Fabric 安装配置：{MinecraftVersion} / Loader {selectedLoaderVersion}");
         var profileJson = await new HttpClient().GetFromJsonAsync<JsonObject>(profileUrl, cancellationToken) ?? [];
-        var versionId = profileJson["id"]?.GetValue<string>() ?? $"fabric-loader-{loaderVersion}-{MinecraftVersion}";
+        var versionId = profileJson["id"]?.GetValue<string>() ?? $"fabric-loader-{selectedLoaderVersion}-{MinecraftVersion}";
         var versionDir = Path.Combine(GameDir, "versions", versionId);
         Directory.CreateDirectory(versionDir);
         AtomicStorage.SaveJsonAtomic(Path.Combine(versionDir, $"{versionId}.json"), profileJson);
@@ -81,7 +84,7 @@ public sealed class InstallerEngine
         }
 
         await _services.DownloadProfileLibrariesAsync(profileJson, GameDir, MirrorSource, ProgressCallback, cancellationToken);
-        return new InstallResult(versionId, $"Fabric {loaderVersion} 已安装", ["fabric"], "fabric");
+        return new InstallResult(versionId, $"Fabric {selectedLoaderVersion} 已安装", ["fabric"], "fabric");
     }
 
     public async Task<InstallResult> InstallFabricApiAsync(CancellationToken cancellationToken = default)
@@ -109,7 +112,7 @@ public sealed class InstallerEngine
         return new InstallResult(fabricVersion, $"Fabric API 已安装：{filename}", ["fabric_api"], "fabric_api");
     }
 
-    public async Task<InstallResult> InstallForgeLikeAsync(string kind, CancellationToken cancellationToken = default)
+    public async Task<InstallResult> InstallForgeLikeAsync(string kind, string requestedVersion = "", CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(JavaPath))
         {
@@ -124,8 +127,15 @@ public sealed class InstallerEngine
         string label;
         if (kind == "forge")
         {
-            var forgeVersion = await _services.GetForgeVersionForMcAsync(MinecraftVersion, MirrorSource, cancellationToken)
-                              ?? throw new InvalidOperationException($"未找到适用于 {MinecraftVersion} 的 Forge 版本。");
+            var forgeVersion = string.IsNullOrWhiteSpace(requestedVersion)
+                ? await _services.GetForgeVersionForMcAsync(MinecraftVersion, MirrorSource, cancellationToken)
+                : requestedVersion;
+            if (string.IsNullOrWhiteSpace(forgeVersion))
+            {
+                throw new InvalidOperationException($"未找到适用于 {MinecraftVersion} 的 Forge 版本。");
+            }
+
+            forgeVersion = forgeVersion.Trim();
             installerUrl = $"{InstallServices.MirrorRoot(MirrorSource)}/maven/net/minecraftforge/forge/{MinecraftVersion}-{forgeVersion}/forge-{MinecraftVersion}-{forgeVersion}-installer.jar";
             label = $"Forge {forgeVersion}";
         }
@@ -133,8 +143,13 @@ public sealed class InstallerEngine
         {
             var versions = await _services.GetNeoForgeListAsync(MinecraftVersion, MirrorSource, cancellationToken);
             var selected = versions.OfType<JsonObject>()
-                .OrderByDescending(item => item["rawVersion"]?.GetValue<string>() ?? "", Comparer<string>.Create(InstallServices.CompareVersionKey))
-                .FirstOrDefault() ?? throw new InvalidOperationException($"未找到适用于 {MinecraftVersion} 的 NeoForge 版本。");
+                               .FirstOrDefault(item => string.IsNullOrWhiteSpace(requestedVersion) ||
+                                                       string.Equals(item["version"]?.GetValue<string>() ?? "", requestedVersion, StringComparison.OrdinalIgnoreCase) ||
+                                                       string.Equals(item["rawVersion"]?.GetValue<string>() ?? "", requestedVersion, StringComparison.OrdinalIgnoreCase))
+                           ?? versions.OfType<JsonObject>()
+                               .OrderByDescending(item => item["rawVersion"]?.GetValue<string>() ?? "", Comparer<string>.Create(InstallServices.CompareVersionKey))
+                               .FirstOrDefault()
+                              ?? throw new InvalidOperationException($"未找到适用于 {MinecraftVersion} 的 NeoForge 版本。");
             var installerPath = selected["installerPath"]?.GetValue<string>() ?? "";
             var selectedVersion = selected["version"]?.GetValue<string>() ?? selected["rawVersion"]?.GetValue<string>() ?? "";
             installerUrl = installerPath.Length > 0
@@ -165,13 +180,15 @@ public sealed class InstallerEngine
         }
     }
 
-    public async Task<InstallResult> InstallOptifineAsync(CancellationToken cancellationToken = default)
+    public async Task<InstallResult> InstallOptifineAsync(string requestedVersion = "", CancellationToken cancellationToken = default)
     {
         UseBaseMinecraftVersionForLoader("OptiFine");
         var baseJson = _launcher.GetVersionJson(GameDir, MinecraftVersion)
                        ?? throw new InvalidOperationException($"请先在当前游戏目录下载原版 Minecraft {MinecraftVersion}，再安装 OptiFine。");
         var versions = await _services.GetOptifineListAsync(MirrorSource, cancellationToken);
-        var selected = InstallServices.SelectOptifineCandidate(versions.OfType<JsonObject>().Where(item => item["mcversion"]?.GetValue<string>() == MinecraftVersion))
+        var candidates = versions.OfType<JsonObject>().Where(item => item["mcversion"]?.GetValue<string>() == MinecraftVersion).ToList();
+        var selected = candidates.FirstOrDefault(item => OptifineVersionKey(item).Equals(requestedVersion, StringComparison.OrdinalIgnoreCase))
+                       ?? InstallServices.SelectOptifineCandidate(candidates)
                        ?? throw new InvalidOperationException($"未找到适用于 {MinecraftVersion} 的 OptiFine。");
         var patch = selected["patch"]?.GetValue<string>() ?? selected["type"]?.GetValue<string>() ?? "";
         var type = selected["type"]?.GetValue<string>() ?? "HD_U";
@@ -197,18 +214,18 @@ public sealed class InstallerEngine
         }
     }
 
-    public async Task<InstallResult> InstallAsync(string installType, CancellationToken cancellationToken = default)
+    public async Task<InstallResult> InstallAsync(string installType, string requestedVersion = "", CancellationToken cancellationToken = default)
         => installType switch
         {
-            "fabric" => await InstallFabricAsync(cancellationToken),
+            "fabric" => await InstallFabricAsync(requestedVersion, cancellationToken),
             "fabric_api" => await InstallFabricApiAsync(cancellationToken),
-            "forge" => await InstallForgeLikeAsync("forge", cancellationToken),
-            "neoforge" => await InstallForgeLikeAsync("neoforge", cancellationToken),
-            "optifine" => await InstallOptifineAsync(cancellationToken),
+            "forge" => await InstallForgeLikeAsync("forge", requestedVersion, cancellationToken),
+            "neoforge" => await InstallForgeLikeAsync("neoforge", requestedVersion, cancellationToken),
+            "optifine" => await InstallOptifineAsync(requestedVersion, cancellationToken),
             _ => throw new InvalidOperationException($"不支持的安装类型：{installType}"),
         };
 
-    public async Task<InstallResult> InstallSequenceAsync(IEnumerable<string> installTypes, CancellationToken cancellationToken = default)
+    public async Task<InstallResult> InstallSequenceAsync(IEnumerable<string> installTypes, IReadOnlyDictionary<string, string>? requestedVersions = null, CancellationToken cancellationToken = default)
     {
         var messages = new List<string>();
         var steps = installTypes.ToList();
@@ -216,7 +233,10 @@ public sealed class InstallerEngine
         foreach (var installType in steps)
         {
             StatusCallback?.Invoke($"正在安装 {installType}");
-            var result = await InstallAsync(installType, cancellationToken);
+            var requestedVersion = requestedVersions is not null && requestedVersions.TryGetValue(installType, out var configuredVersion)
+                ? configuredVersion
+                : "";
+            var result = await InstallAsync(installType, requestedVersion ?? "", cancellationToken);
             messages.Add(result.Message);
             if (!string.IsNullOrWhiteSpace(result.InstalledVersion) && installType != "fabric_api")
             {
@@ -296,6 +316,19 @@ public sealed class InstallerEngine
         }
 
         AtomicStorage.SaveJsonAtomic(Path.Combine(versionDir, $"{versionId}.json"), versionJson, indented: true);
+    }
+
+    private static string OptifineVersionKey(JsonObject item)
+    {
+        var filename = item["filename"]?.GetValue<string>()?.Trim() ?? "";
+        if (filename.Length > 0)
+        {
+            return filename.EndsWith(".jar", StringComparison.OrdinalIgnoreCase) ? filename[..^4] : filename;
+        }
+
+        var type = item["type"]?.GetValue<string>()?.Trim() ?? "";
+        var patch = item["patch"]?.GetValue<string>()?.Trim() ?? "";
+        return string.Join('_', new[] { type, patch }.Where(value => value.Length > 0));
     }
 
     private static async Task<string> RunProcessAsync(string fileName, string arguments, string workingDirectory, Action<string>? status, CancellationToken cancellationToken)

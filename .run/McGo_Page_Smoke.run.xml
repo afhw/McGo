@@ -1,0 +1,19 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="McGo Page Smoke" type="DotNetProject" factoryName=".NET Project">
+    <option name="EXE_PATH" value="" />
+    <option name="PROGRAM_PARAMETERS" value="--smoke-pages --smoke-report=$PROJECT_DIR$/artifacts/rider-page-smoke.txt --smoke-screenshot-dir=$PROJECT_DIR$/artifacts/rider-page-screenshots" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <option name="PASS_PARENT_ENVS" value="1" />
+    <option name="USE_EXTERNAL_CONSOLE" value="0" />
+    <option name="USE_MONO" value="0" />
+    <option name="RUNTIME_ARGUMENTS" value="" />
+    <option name="RUNTIME_TYPE" value="coreclr" />
+    <option name="PROJECT_PATH" value="$PROJECT_DIR$/src/McGo.WinUI/McGo.WinUI.csproj" />
+    <option name="PROJECT_EXE_PATH_TRACKING" value="1" />
+    <option name="REDIRECT_INPUT" value="0" />
+    <option name="REDIRECT_INPUT_PATH" value="" />
+    <method v="2">
+      <option name="Build" />
+    </method>
+  </configuration>
+</component>

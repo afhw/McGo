@@ -11,6 +11,7 @@ using McGo.Core.Downloads;
 using McGo.Core.Formatting;
 using McGo.Core.Installation;
 using McGo.Core.Java;
+using McGo.Core.Logging;
 using McGo.Core.Minecraft;
 using McGo.Core.Modpacks;
 using McGo.Core.Network;
@@ -118,6 +119,158 @@ runner.Add("Atomic storage accepts filename-only paths", () =>
     {
         Directory.SetCurrentDirectory(original);
     }
+});
+
+runner.Add("App log rotates and redacts secrets", () =>
+{
+    using var temp = TempDir.Create();
+    var writer = new AppLogWriter(temp.Path, maxBytes: 1024, backupCount: 2);
+    for (var index = 0; index < 20; index++)
+    {
+        writer.Write("INFO", "Test", new string('x', 100));
+    }
+
+    writer.Write("INFO", "Test", "password=top-secret Bearer abc.def");
+
+    var allText = string.Join("\n", Directory.GetFiles(temp.Path).Select(File.ReadAllText));
+    Assert.Contains("password=[REDACTED]", allText);
+    Assert.True(!allText.Contains("top-secret", StringComparison.Ordinal));
+    Assert.True(!allText.Contains("abc.def", StringComparison.Ordinal));
+    Assert.True(File.Exists(Path.Combine(temp.Path, "mcgo.log.1")));
+});
+
+runner.Add("Active log remains readable while another stream writes", () =>
+{
+    using var temp = TempDir.Create();
+    var path = Path.Combine(temp.Path, "latest.log");
+    using var writer = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+    using var textWriter = new StreamWriter(writer, Encoding.UTF8, leaveOpen: true);
+    textWriter.WriteLine("active log line");
+    textWriter.Flush();
+    var result = LogFileReader.ReadTailAsync(path).GetAwaiter().GetResult();
+    Assert.Contains("active log line", result.Text);
+});
+
+runner.Add("Rotated and compressed logs are discovered and read", () =>
+{
+    using var temp = TempDir.Create();
+    var rotated = Path.Combine(temp.Path, "mcgo.log.1");
+    File.WriteAllText(rotated, "rotated");
+    var compressed = Path.Combine(temp.Path, "latest.log.gz");
+    using (var file = File.Create(compressed))
+    using (var gzip = new GZipStream(file, CompressionLevel.SmallestSize))
+    using (var writer = new StreamWriter(gzip, Encoding.UTF8))
+    {
+        writer.Write("compressed log line");
+    }
+
+    var files = LogFileReader.Enumerate(temp.Path);
+    Assert.True(files.Contains(rotated));
+    Assert.True(files.Contains(compressed));
+    var result = LogFileReader.ReadTailAsync(compressed).GetAwaiter().GetResult();
+    Assert.Contains("compressed log line", result.Text);
+});
+
+runner.Add("Large logs return complete lines from the tail", () =>
+{
+    using var temp = TempDir.Create();
+    var path = Path.Combine(temp.Path, "large.log");
+    File.WriteAllText(path, "first line\n" + new string('a', 2048) + "\nlast line\n");
+    var result = LogFileReader.ReadTailAsync(path, maxBytes: 1024).GetAwaiter().GetResult();
+    Assert.True(result.IsTruncated);
+    Assert.True(!result.Text.Contains("first line", StringComparison.Ordinal));
+    Assert.Contains("last line", result.Text);
+});
+
+runner.Add("Global download manager runs queued tasks serially", () =>
+{
+    var manager = new DownloadTaskManager();
+    var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var order = new List<string>();
+    manager.Enqueue("test", "first", async (_, token) =>
+    {
+        lock (order) order.Add("first-start");
+        await releaseFirst.Task.WaitAsync(token);
+        lock (order) order.Add("first-end");
+        return "first done";
+    });
+    manager.Enqueue("test", "second", (_, _) =>
+    {
+        lock (order) order.Add("second-start");
+        return Task.FromResult("second done");
+    });
+
+    Assert.True(SpinWait.SpinUntil(() => manager.ActiveTitle == "first" && manager.QueuedCount == 1, TimeSpan.FromSeconds(2)));
+    lock (order) Assert.False(order.Contains("second-start"));
+    Assert.Equal("下载任务 0%", manager.NavigationLabel);
+    releaseFirst.SetResult();
+    Assert.True(SpinWait.SpinUntil(() => manager.Records.Count == 2 && manager.Records.All(item => item.Status == "completed"), TimeSpan.FromSeconds(2)));
+    lock (order) Assert.SequenceEqual(new[] { "first-start", "first-end", "second-start" }, order);
+});
+
+runner.Add("Global download manager retries the last failed task", () =>
+{
+    var manager = new DownloadTaskManager();
+    var attempts = 0;
+    manager.Enqueue("test", "retry", (_, _) =>
+    {
+        attempts++;
+        return attempts == 1
+            ? Task.FromException<string>(new InvalidOperationException("first failure"))
+            : Task.FromResult("recovered");
+    });
+
+    Assert.True(SpinWait.SpinUntil(() => manager.Records.Single().Status == "failed", TimeSpan.FromSeconds(2)));
+    Assert.Equal("下载失败 1", manager.NavigationLabel);
+    Assert.True(manager.RetryLastFailed());
+    Assert.True(SpinWait.SpinUntil(() => manager.Records.Single().Status == "completed", TimeSpan.FromSeconds(2)));
+    Assert.Equal(2, attempts);
+});
+
+runner.Add("Global download manager cancels the active task", () =>
+{
+    var manager = new DownloadTaskManager();
+    manager.Enqueue("test", "cancel", async (_, token) =>
+    {
+        await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        return "unreachable";
+    });
+
+    Assert.True(SpinWait.SpinUntil(() => manager.ActiveTitle == "cancel", TimeSpan.FromSeconds(2)));
+    Assert.True(manager.CancelCurrent());
+    Assert.True(SpinWait.SpinUntil(
+        () => manager.Records.Single().Status == "canceled" && manager.ActiveRecord is null,
+        TimeSpan.FromSeconds(2)));
+    Assert.False(manager.HasAttentionRequired);
+});
+
+runner.Add("Global download manager clears queued tasks and keeps 24 finished records", () =>
+{
+    var manager = new DownloadTaskManager();
+    var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    manager.Enqueue("test", "active", async (_, token) =>
+    {
+        await release.Task.WaitAsync(token);
+        return "done";
+    });
+    manager.Enqueue("test", "queued-1", (_, _) => Task.FromResult("unexpected"));
+    manager.Enqueue("test", "queued-2", (_, _) => Task.FromResult("unexpected"));
+    Assert.True(SpinWait.SpinUntil(() => manager.ActiveTitle == "active" && manager.QueuedCount == 2, TimeSpan.FromSeconds(2)));
+    Assert.Equal(2, manager.ClearQueue());
+    Assert.Equal(0, manager.QueuedCount);
+    Assert.Equal(2, manager.Records.Count(item => item.Status == "canceled"));
+    release.SetResult();
+    Assert.True(SpinWait.SpinUntil(() => manager.ActiveRecord is null, TimeSpan.FromSeconds(2)));
+
+    for (var index = 0; index < 30; index++)
+    {
+        manager.Enqueue("test", "finished-" + index, (_, _) => Task.FromResult("done"));
+    }
+
+    Assert.True(SpinWait.SpinUntil(
+        () => manager.ActiveRecord is null && manager.QueuedCount == 0 && manager.Records.All(item => item.Status == "completed"),
+        TimeSpan.FromSeconds(3)));
+    Assert.Equal(24, manager.Records.Count);
 });
 
 runner.Add("Version launch options append quick play", () =>
@@ -482,10 +635,27 @@ runner.Add("Capsule export/import roundtrip manifest", () =>
     var settings = new JsonObject();
     var capsulePath = Path.Combine(temp.Path, "demo.mcgo");
     var service = new CapsuleService();
-    var exported = service.ExportCapsule(gameDir, settings, versionId, capsulePath);
+    var p2p = new JsonObject
+    {
+        ["relay_host"] = "relay.example",
+        ["relay_port"] = 10721,
+        ["room"] = "ROOM1234",
+    };
+    var exported = service.ExportCapsule(gameDir, settings, versionId, capsulePath, p2p);
     Assert.Equal(1, exported.FileCount);
     var manifest = CapsuleService.ReadCapsuleManifest(capsulePath);
     Assert.Equal("mcgo.capsule", manifest["schema"]?.GetValue<string>());
+    Assert.Equal("ROOM1234", manifest["p2p"]?["room"]?.GetValue<string>());
+
+    var importGameDir = Path.Combine(temp.Path, "imported-game");
+    var importedSettings = new JsonObject();
+    var imported = service.ImportCapsule(capsulePath, importGameDir, importedSettings);
+    Assert.Equal(versionId, imported.Version);
+    Assert.Equal("ROOM1234", imported.P2P["room"]?.GetValue<string>());
+    Assert.Equal(1, imported.Files.Count);
+    Assert.Equal(1, imported.MissingFiles.Count);
+    Assert.True(File.Exists(Path.Combine(importGameDir, "versions", imported.Version, $"{imported.Version}.json")));
+    Assert.True(importedSettings[imported.Version]?["use_isolated_directory"]?.GetValue<bool>() == true);
 });
 
 runner.Add("STUN XOR-MAPPED-ADDRESS parses endpoint", () =>
@@ -527,6 +697,26 @@ runner.Add("NAT detection queries STUN server and reports mapped endpoint", () =
         Assert.Equal("203.0.113.9", result.Samples[0].Mapped.Address.ToString());
         Assert.Equal(41234, result.Samples[0].Mapped.Port);
         Assert.Contains("公网映射", result.Details);
+    }
+});
+
+runner.Add("NAT detection continues after a STUN timeout", () =>
+{
+    RunAsync().GetAwaiter().GetResult();
+
+    static async Task RunAsync()
+    {
+        using var silentServer = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        var silentPort = ((IPEndPoint)silentServer.Client.LocalEndPoint!).Port;
+        using var respondingServer = new FakeStunServer(new IPEndPoint(IPAddress.Parse("203.0.113.10"), 42345));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var result = await NatUtils.DetectNatTypeAsync(
+            [new StunServer("127.0.0.1", silentPort), new StunServer("127.0.0.1", respondingServer.Port)],
+            TimeSpan.FromMilliseconds(150),
+            cts.Token);
+        Assert.Equal(1, result.Samples.Count);
+        Assert.Equal("203.0.113.10", result.Samples[0].Mapped.Address.ToString());
+        Assert.Contains($"127.0.0.1:{silentPort}", result.Details);
     }
 });
 
@@ -1008,6 +1198,8 @@ runner.Add("Install services parse Forge promos and NeoForge/OptiFine helpers", 
     var service = new InstallServices(new HttpClient(new JsonHandler(new JsonObject { ["promos"] = promos })));
     var version = service.GetForgeVersionForMcAsync("1.20.1", "official").GetAwaiter().GetResult();
     Assert.Equal("47.2.0", version);
+    var versions = service.GetForgeVersionsForMcAsync("1.20.1", "official").GetAwaiter().GetResult();
+    Assert.SequenceEqual(["47.2.0", "47.2.20"], versions);
     var selected = InstallServices.SelectOptifineCandidate([
         new JsonObject { ["filename"] = "preview_OptiFine_1.20.1_HD_U_I6_pre6.jar" },
         new JsonObject { ["filename"] = "OptiFine_1.20.1_HD_U_I5.jar" },

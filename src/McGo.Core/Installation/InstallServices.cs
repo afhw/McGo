@@ -233,6 +233,12 @@ public sealed class InstallServices
 
     public async Task<string?> GetForgeVersionForMcAsync(string gameVersion, string mirrorSource, CancellationToken cancellationToken = default)
     {
+        var versions = await GetForgeVersionsForMcAsync(gameVersion, mirrorSource, cancellationToken);
+        return versions.FirstOrDefault();
+    }
+
+    public async Task<IReadOnlyList<string>> GetForgeVersionsForMcAsync(string gameVersion, string mirrorSource, CancellationToken cancellationToken = default)
+    {
         var promos = await GetForgePromosAsync(mirrorSource, cancellationToken);
         if (promos is JsonArray array)
         {
@@ -255,16 +261,30 @@ public sealed class InstallServices
             return candidates
                 .OrderByDescending(item => item.Recommended)
                 .ThenByDescending(item => item.Version, Comparer<string>.Create(CompareVersionKey))
-                .FirstOrDefault().Version;
+                .Select(item => item.Version)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
         }
 
         if (promos is JsonObject obj)
         {
-            return obj[$"{gameVersion}-recommended"]?.GetValue<string>()
-                   ?? obj[$"{gameVersion}-latest"]?.GetValue<string>();
+            var versions = new List<string>();
+            var recommended = obj[$"{gameVersion}-recommended"]?.GetValue<string>();
+            var latest = obj[$"{gameVersion}-latest"]?.GetValue<string>();
+            if (!string.IsNullOrWhiteSpace(recommended))
+            {
+                versions.Add(recommended);
+            }
+
+            if (!string.IsNullOrWhiteSpace(latest))
+            {
+                versions.Add(latest);
+            }
+
+            return versions.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }
 
-        return null;
+        return [];
     }
 
     public async Task<JsonArray> GetNeoForgeListAsync(string gameVersion, string mirrorSource, CancellationToken cancellationToken = default)

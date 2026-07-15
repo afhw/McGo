@@ -1,252 +1,194 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
+  Archive,
   ArrowDownToLine,
   BadgeCheck,
   Boxes,
   Cable,
+  Check,
   ChevronRight,
+  Code2,
   Download,
+  FlaskConical,
   Gamepad2,
+  Gauge,
+  Github,
   HardDriveDownload,
   KeyRound,
   Layers3,
-  MonitorDown,
+  Monitor,
   PackageOpen,
-  Play,
   Search,
   Settings2,
   ShieldCheck,
-  Sparkles,
   UserRoundCheck,
-  Zap,
+  Workflow,
 } from 'lucide-react';
 import './styles.css';
 
+const previewDownload = {
+  href: '/download/McGo-CSharp-Preview-x64.zip',
+  name: 'McGo-CSharp-Preview-x64.zip',
+  size: '81.1 MB',
+  version: '1.0.11 Preview',
+};
+
+const stableDownload = {
+  href: '/download/McGo.exe',
+  name: 'McGo.exe',
+  size: '30.9 MB',
+  version: 'Python 稳定版',
+};
+
 const screenshots = [
-  {
-    src: '/screenshots/01-home.png',
-    label: '首页总览',
-    title: '账号、Java、版本状态一屏看清',
-  },
-  {
-    src: '/screenshots/02-launch.png',
-    label: '启动管理',
-    title: '选择账号与版本，快速进入游戏',
-  },
-  {
-    src: '/screenshots/03-download.png',
-    label: '游戏下载',
-    title: '原版、加载器、Fabric API 连续安装',
-  },
-  {
-    src: '/screenshots/04-resources.png',
-    label: '资源市场',
-    title: '搜索 Mod、资源包、光影并一键安装',
-  },
-  {
-    src: '/screenshots/05-accounts.png',
-    label: '账号体系',
-    title: '离线、Microsoft、外置登录统一管理',
-  },
-  {
-    src: '/screenshots/06-online.png',
-    label: '联机工具',
-    title: '轻量 P2P 隧道，局域网世界也能邀请好友',
-  },
+  { src: '/screenshots/01-home.png', label: '首页', title: '实例、账号与运行环境集中呈现' },
+  { src: '/screenshots/02-launch.png', label: '启动', title: '版本选择、启动参数与状态检查' },
+  { src: '/screenshots/03-download.png', label: '下载', title: '原版、加载器与全局任务队列' },
+  { src: '/screenshots/04-resources.png', label: '资源', title: 'Modrinth 资源搜索与依赖安装' },
+  { src: '/screenshots/05-accounts.png', label: '账号', title: '离线、Microsoft 与外置登录' },
+  { src: '/screenshots/06-online.png', label: '联机', title: 'P2P 房间、NAT 检测与胶囊补包' },
 ];
 
 const features = [
   {
     icon: HardDriveDownload,
-    title: '高速下载与补全',
-    text: '支持原版版本下载、文件校验、缺失资源补全，下载失败时自动切换镜像源。',
+    title: '下载与补全',
+    text: '原版文件、资源、Java 和缺失依赖进入同一个全局任务队列。',
   },
   {
     icon: Layers3,
-    title: '加载器连续安装',
-    text: '下载后可继续安装 Fabric、Forge、NeoForge、OptiFine 与 Fabric API。',
+    title: '加载器工作流',
+    text: '连续安装 Fabric、Forge、NeoForge、OptiFine 与 Fabric API。',
   },
   {
     icon: UserRoundCheck,
-    title: '完整账号管理',
-    text: '离线账号、Microsoft 账号、外置登录账号集中保存，启动前自动刷新状态。',
+    title: '账号与启动',
+    text: '离线、Microsoft、外置登录与版本级启动设置统一管理。',
   },
   {
     icon: Boxes,
-    title: '资源市场',
-    text: '整合 Modrinth、CurseForge 和本地资源，支持兼容性验证和依赖安装。',
+    title: '资源管理',
+    text: '搜索 Modrinth 项目，检查版本兼容性并补齐必需前置。',
   },
   {
     icon: PackageOpen,
-    title: '整合包工作流',
-    text: '支持整合包导入导出、本地实例管理和版本独立配置。',
+    title: '整合包与胶囊',
+    text: '导入导出实例，并通过轻量胶囊同步开黑所需文件。',
   },
   {
     icon: Cable,
     title: 'P2P 联机',
-    text: '通过轻量 TCP 中继转发 Minecraft Java 版局域网流量，开房更直接。',
+    text: 'NAT 检测、TCP/UDP 隧道和中继回退组成更短的联机流程。',
   },
 ];
 
-const steps = [
-  ['01', '下载 McGo.exe', '免安装启动，适合 Windows 桌面环境。'],
-  ['02', '添加账号', '选择离线、Microsoft 或外置登录。'],
-  ['03', '下载版本', '选择 Minecraft 版本和需要的加载器。'],
-  ['04', '启动游戏', '选择账号与本地版本，进入你的世界。'],
+const previewHighlights = [
+  'C# / .NET 8 / WinUI 3 原生客户端',
+  'x64 自包含运行环境，解压后启动',
+  '全局下载任务与统一日志已迁移',
+  'Windows 10 1809 或更高版本',
 ];
 
-function useActiveScreenshot() {
+function useScreenshotRotation() {
   const [active, setActive] = useState(0);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
       setActive((value) => (value + 1) % screenshots.length);
-    }, 3200);
+    }, 5000);
     return () => window.clearInterval(timer);
   }, []);
 
   return [active, setActive];
 }
 
-function App() {
-  const [active, setActive] = useActiveScreenshot();
-  const current = screenshots[active];
-  const downloadMeta = useMemo(
-    () => ({
-      href: '/download/McGo.exe',
-      name: 'McGo.exe',
-      size: '30.9 MB',
-      platform: 'Windows',
-    }),
-    [],
+function DownloadButton({ download, children, className = '' }) {
+  return (
+    <a className={`download-button ${className}`.trim()} href={download.href} download>
+      <ArrowDownToLine size={20} />
+      <span>{children}</span>
+    </a>
   );
+}
+
+function App() {
+  const [active, setActive] = useScreenshotRotation();
+  const current = screenshots[active];
 
   return (
-    <main className="page-shell">
+    <main id="top">
       <nav className="topbar" aria-label="主导航">
-        <a className="brand" href="#top">
+        <a className="brand" href="#top" aria-label="McGo 首页">
           <img src="/assets/mcgo-icon.png" alt="" />
           <span>McGo</span>
         </a>
         <div className="nav-links">
-          <a href="#features">功能</a>
-          <a href="#gallery">截图</a>
+          <a href="#product">产品</a>
+          <a href="#gallery">界面</a>
           <a href="#download">下载</a>
         </div>
-        <a className="nav-download" href={downloadMeta.href} download>
-          <Download size={18} />
-          <span>下载</span>
-        </a>
+        <DownloadButton download={previewDownload} className="nav-download">
+          C# 测试版
+        </DownloadButton>
       </nav>
 
-      <section className="hero" id="top">
-        <div className="hero-copy">
-          <div className="eyebrow">
-            <Sparkles size={16} />
-            <span>现代 Minecraft 启动器</span>
-          </div>
-          <h1>McGo</h1>
-          <p className="hero-lede">
-            把账号、版本、加载器、资源市场和联机入口放进一个干净的桌面启动器里。
-          </p>
+      <section className="hero" aria-labelledby="hero-title">
+        <img className="hero-image" src="/screenshots/01-home.png" alt="McGo WinUI 3 首页界面" />
+        <div className="hero-shade" />
+        <div className="hero-content">
+          <div className="preview-label"><FlaskConical size={16} /> C# 测试版现已提供</div>
+          <h1 id="hero-title">McGo</h1>
+          <p>面向 Minecraft Java 版的 Windows 启动器。账号、版本、资源和联机工具都回到一个安静、直接的桌面工作区。</p>
           <div className="hero-actions">
-            <a className="primary-action" href={downloadMeta.href} download>
-              <ArrowDownToLine size={22} />
-              <span>立即下载</span>
-            </a>
-            <a className="secondary-action" href="#features">
-              <Play size={20} />
-              <span>查看功能</span>
+            <DownloadButton download={previewDownload}>下载 C# 测试版</DownloadButton>
+            <a className="secondary-button" href="#gallery">
+              <Monitor size={20} />
+              <span>查看 WinUI 界面</span>
             </a>
           </div>
-          <dl className="download-facts" aria-label="下载信息">
-            <div>
-              <dt>平台</dt>
-              <dd>{downloadMeta.platform}</dd>
-            </div>
-            <div>
-              <dt>文件</dt>
-              <dd>{downloadMeta.name}</dd>
-            </div>
-            <div>
-              <dt>大小</dt>
-              <dd>{downloadMeta.size}</dd>
-            </div>
-          </dl>
-        </div>
-
-        <div className="hero-stage" aria-label="McGo 界面预览">
-          <div className="pulse-ring ring-one" />
-          <div className="pulse-ring ring-two" />
-          <div className="screenshot-frame">
-            <div className="window-bar">
-              <span />
-              <span />
-              <span />
-              <strong>{current.label}</strong>
-            </div>
-            <img src={current.src} alt={current.title} />
-          </div>
-          <div className="floating-panel panel-speed">
-            <Zap size={18} />
-            <span>多线程任务队列</span>
-          </div>
-          <div className="floating-panel panel-safe">
-            <ShieldCheck size={18} />
-            <span>启动前校验</span>
+          <div className="hero-meta" aria-label="测试版信息">
+            <span><Code2 size={16} /> WinUI 3</span>
+            <span><Monitor size={16} /> Windows x64</span>
+            <span><Archive size={16} /> {previewDownload.size}</span>
           </div>
         </div>
       </section>
 
-      <section className="strip" aria-label="核心能力">
-        <div>
-          <strong>原版下载</strong>
-          <span>版本清单和镜像源切换</span>
-        </div>
-        <div>
-          <strong>加载器</strong>
-          <span>Fabric / Forge / NeoForge / OptiFine</span>
-        </div>
-        <div>
-          <strong>资源</strong>
-          <span>Mod、资源包、光影、数据包</span>
-        </div>
-        <div>
-          <strong>联机</strong>
-          <span>P2P 隧道和中继服务</span>
-        </div>
+      <section className="release-bar" aria-label="版本状态">
+        <div><BadgeCheck size={20} /><strong>稳定版继续保留</strong><span>现有 Python 单文件版本仍可下载</span></div>
+        <div><FlaskConical size={20} /><strong>C# 迁移测试</strong><span>WinUI 3 功能与布局持续回归</span></div>
+        <a href="https://github.com/afhw/McGo/tree/codex/winui3-csharp-migration" target="_blank" rel="noreferrer">
+          <Github size={20} /><span>查看迁移分支</span><ChevronRight size={17} />
+        </a>
       </section>
 
-      <section className="section feature-section" id="features">
-        <div className="section-heading">
-          <span className="section-kicker">功能介绍</span>
-          <h2>从下载到开服前联机，常用动作都在一个窗口里完成</h2>
+      <section className="product-section" id="product">
+        <div className="section-intro">
+          <span className="kicker">当前迁移范围</span>
+          <h2>旧版常用能力，正在以 C# 重新落地</h2>
+          <p>测试版已经覆盖启动、下载、账号、资源、整合包、联机、设置和日志。测试状态会明确标出，不与稳定版混淆。</p>
         </div>
-        <div className="feature-grid">
+        <div className="feature-list">
           {features.map((feature) => {
             const Icon = feature.icon;
             return (
-              <article className="feature-card" key={feature.title}>
-                <div className="feature-icon">
-                  <Icon size={23} />
-                </div>
-                <h3>{feature.title}</h3>
-                <p>{feature.text}</p>
+              <article className="feature-row" key={feature.title}>
+                <Icon size={23} />
+                <div><h3>{feature.title}</h3><p>{feature.text}</p></div>
               </article>
             );
           })}
         </div>
       </section>
 
-      <section className="section gallery-section" id="gallery">
-        <div className="gallery-copy">
-          <span className="section-kicker">界面截图</span>
-          <h2>真实界面自动化截图生成</h2>
-          <p>
-            页面展示的截图来自项目运行界面，覆盖首页、启动、下载、资源市场、账号和联机页面。
-          </p>
-          <div className="gallery-tabs" role="tablist" aria-label="截图切换">
+      <section className="gallery-section" id="gallery">
+        <div className="gallery-header">
+          <div>
+            <span className="kicker">真实 WinUI 截图</span>
+            <h2>{current.title}</h2>
+          </div>
+          <div className="gallery-tabs" role="tablist" aria-label="界面截图">
             {screenshots.map((shot, index) => (
               <button
                 className={index === active ? 'active' : ''}
@@ -261,76 +203,74 @@ function App() {
             ))}
           </div>
         </div>
-        <div className="gallery-preview">
-          <div className="gallery-glow" />
+        <figure className="gallery-frame">
           <img src={current.src} alt={current.title} />
-          <div className="caption">
-            <BadgeCheck size={18} />
-            <span>{current.title}</span>
-          </div>
-        </div>
-      </section>
-
-      <section className="section workflow-section">
-        <div className="section-heading">
-          <span className="section-kicker">开始使用</span>
-          <h2>四步进入游戏</h2>
-        </div>
-        <div className="steps">
-          {steps.map(([index, title, text]) => (
-            <article className="step" key={title}>
-              <span className="step-index">{index}</span>
-              <h3>{title}</h3>
-              <p>{text}</p>
-              <ChevronRight size={18} />
-            </article>
-          ))}
-        </div>
+          <figcaption><BadgeCheck size={17} /> 由 WinUI 页面烟测自动生成，1440 x 900</figcaption>
+        </figure>
       </section>
 
       <section className="download-section" id="download">
-        <div className="download-copy">
-          <span className="section-kicker">下载</span>
-          <h2>获取 McGo 桌面版</h2>
-          <p>当前页面内置 Windows 单文件构建产物，下载后可直接运行。</p>
+        <div className="download-heading">
+          <span className="kicker">Windows 下载</span>
+          <h2>选择适合你的版本</h2>
+          <p>C# 版本用于体验和反馈迁移结果；需要成熟单文件体验时，继续使用稳定版。</p>
         </div>
-        <div className="download-box">
-          <div className="download-icon">
-            <MonitorDown size={34} />
-          </div>
-          <div>
-            <strong>{downloadMeta.name}</strong>
-            <span>{downloadMeta.platform} · {downloadMeta.size}</span>
-          </div>
-          <a className="primary-action compact" href={downloadMeta.href} download>
-            <Download size={20} />
-            <span>下载</span>
-          </a>
+        <div className="release-grid">
+          <article className="release-card preview-release">
+            <div className="release-card-head">
+              <span className="release-icon"><FlaskConical size={25} /></span>
+              <span className="status-badge">测试版</span>
+            </div>
+            <h3>C# / WinUI 3</h3>
+            <p className="release-version">{previewDownload.version}</p>
+            <ul>
+              {previewHighlights.map((item) => <li key={item}><Check size={17} />{item}</li>)}
+            </ul>
+            <div className="file-meta"><span>{previewDownload.name}</span><strong>{previewDownload.size}</strong></div>
+            <DownloadButton download={previewDownload}>下载 C# 测试版</DownloadButton>
+            <a className="checksum-link" href="/download/McGo-CSharp-Preview-x64.zip.sha256" download>下载 SHA-256 校验文件</a>
+          </article>
+
+          <article className="release-card stable-release">
+            <div className="release-card-head">
+              <span className="release-icon"><ShieldCheck size={25} /></span>
+              <span className="status-badge stable">稳定版</span>
+            </div>
+            <h3>经典单文件版</h3>
+            <p className="release-version">{stableDownload.version}</p>
+            <ul>
+              <li><Check size={17} />单个 EXE，下载后直接运行</li>
+              <li><Check size={17} />保留原有 Python 版成熟工作流</li>
+              <li><Check size={17} />适合暂不参与迁移测试的用户</li>
+              <li><Check size={17} />Windows x64 桌面环境</li>
+            </ul>
+            <div className="file-meta"><span>{stableDownload.name}</span><strong>{stableDownload.size}</strong></div>
+            <DownloadButton download={stableDownload} className="stable-button">下载稳定版</DownloadButton>
+          </article>
         </div>
       </section>
 
-      <footer className="footer">
-        <div className="brand footer-brand">
-          <img src="/assets/mcgo-icon.png" alt="" />
-          <span>McGo</span>
+      <section className="start-section" aria-labelledby="start-title">
+        <div>
+          <span className="kicker">开始测试</span>
+          <h2 id="start-title">解压，启动，反馈</h2>
         </div>
-        <div className="footer-links">
-          <span>
-            <KeyRound size={16} />
-            多账号
-          </span>
-          <span>
-            <Search size={16} />
-            资源搜索
-          </span>
-          <span>
-            <Settings2 size={16} />
-            版本设置
-          </span>
-          <span>
-            <Gamepad2 size={16} />
-            快速启动
-          </span>
+        <ol className="start-steps">
+          <li><span>01</span><div><strong>完整解压 ZIP</strong><p>保留 DLL、Assets 和 Pages 目录。</p></div></li>
+          <li><span>02</span><div><strong>运行 McGo.WinUI.exe</strong><p>首次启动后配置 Java 与游戏目录。</p></div></li>
+          <li><span>03</span><div><strong>提交迁移反馈</strong><p>附上日志页内容和复现步骤。</p></div></li>
+        </ol>
+      </section>
+
+      <footer className="footer">
+        <div className="brand footer-brand"><img src="/assets/mcgo-icon.png" alt="" /><span>McGo</span></div>
+        <div className="footer-capabilities">
+          <span><Gauge size={16} />全局任务</span>
+          <span><KeyRound size={16} />多账号</span>
+          <span><Search size={16} />资源搜索</span>
+          <span><Workflow size={16} />P2P 联机</span>
+          <span><Settings2 size={16} />版本设置</span>
+          <span><Gamepad2 size={16} />快速启动</span>
         </div>
       </footer>
     </main>
