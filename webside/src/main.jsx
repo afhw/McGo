@@ -42,13 +42,25 @@ const stableDownload = {
 };
 
 const screenshots = [
-  { src: '/screenshots/01-home.png', label: '首页', title: '实例、账号与运行环境集中呈现' },
-  { src: '/screenshots/02-launch.png', label: '启动', title: '版本选择、启动参数与状态检查' },
-  { src: '/screenshots/03-download.png', label: '下载', title: '原版、加载器与全局任务队列' },
-  { src: '/screenshots/04-resources.png', label: '资源', title: 'Modrinth 资源搜索与依赖安装' },
-  { src: '/screenshots/05-accounts.png', label: '账号', title: '离线、Microsoft 与外置登录' },
-  { src: '/screenshots/06-online.png', label: '联机', title: 'P2P 房间、NAT 检测与胶囊补包' },
+  { file: '01-home.png', label: '首页', title: '实例、账号与运行环境集中呈现' },
+  { file: '02-launch.png', label: '启动', title: '版本选择、启动参数与状态检查' },
+  { file: '03-download.png', label: '下载', title: '原版、加载器与全局任务队列' },
+  { file: '04-resources.png', label: '资源', title: 'Modrinth 资源搜索与依赖安装' },
+  { file: '05-accounts.png', label: '账号', title: '离线、Microsoft 与外置登录' },
+  { file: '06-online.png', label: '联机', title: 'P2P 房间、NAT 检测与胶囊补包' },
 ];
+
+const screenshotUrl = (size, file) => `/screenshots/${size}/${file}`;
+
+function ResponsiveScreenshot({ screenshot, className, alt }) {
+  return (
+    <picture className={`${className}-picture`}>
+      <source media="(max-width: 700px)" srcSet={screenshotUrl('820x720', screenshot.file)} />
+      <source media="(min-width: 1500px)" srcSet={screenshotUrl('1920x1080', screenshot.file)} />
+      <img className={className} src={screenshotUrl('1440x900', screenshot.file)} alt={alt} />
+    </picture>
+  );
+}
 
 const features = [
   {
@@ -134,7 +146,7 @@ function App() {
       </nav>
 
       <section className="hero" aria-labelledby="hero-title">
-        <img className="hero-image" src="/screenshots/01-home.png" alt="McGo WinUI 3 首页界面" />
+        <ResponsiveScreenshot screenshot={screenshots[0]} className="hero-image" alt="McGo C# WinUI 3 首页界面" />
         <div className="hero-shade" />
         <div className="hero-content">
           <div className="preview-label"><FlaskConical size={16} /> C# 测试版现已提供</div>
@@ -185,7 +197,7 @@ function App() {
       <section className="gallery-section" id="gallery">
         <div className="gallery-header">
           <div>
-            <span className="kicker">真实 WinUI 截图</span>
+            <span className="kicker">真实 C# WinUI 3 截图</span>
             <h2>{current.title}</h2>
           </div>
           <div className="gallery-tabs" role="tablist" aria-label="界面截图">
@@ -204,8 +216,8 @@ function App() {
           </div>
         </div>
         <figure className="gallery-frame">
-          <img src={current.src} alt={current.title} />
-          <figcaption><BadgeCheck size={17} /> 由 WinUI 页面烟测自动生成，1440 x 900</figcaption>
+          <ResponsiveScreenshot screenshot={current} className="gallery-image" alt={current.title} />
+          <figcaption><BadgeCheck size={17} /> 由当前 C# 客户端自动生成，按视口提供 820 / 1440 / 1920 三种宽度</figcaption>
         </figure>
       </section>
 

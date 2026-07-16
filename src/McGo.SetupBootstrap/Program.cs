@@ -9,6 +9,7 @@ namespace McGo.SetupBootstrap;
 internal static class Program
 {
     private static readonly byte[] FooterMagic = Encoding.ASCII.GetBytes("MCGOSETUPv1!");
+    private static readonly byte[] ZipHeader = [0x50, 0x4b, 0x03, 0x04];
 
     [STAThread]
     private static int Main(string[] args)
@@ -64,24 +65,53 @@ internal static class Program
         var executablePath = Environment.ProcessPath
             ?? throw new InvalidOperationException("无法确定安装程序路径。");
         using var executable = new FileStream(executablePath, FileMode.Open, FileAccess.Read, FileShare.Read);
-        var footerLength = sizeof(long) + FooterMagic.Length;
-        if (executable.Length <= footerLength)
+        var footerOffset = FindPayloadFooter(executable);
+        if (footerOffset < sizeof(long))
         {
             throw new InvalidDataException("安装程序没有有效负载。");
         }
 
-        executable.Position = executable.Length - footerLength;
-        Span<byte> footer = stackalloc byte[footerLength];
-        executable.ReadExactly(footer);
-        var payloadLength = BinaryPrimitives.ReadInt64LittleEndian(footer[..sizeof(long)]);
-        if (!footer[sizeof(long)..].SequenceEqual(FooterMagic) || payloadLength <= 0 || payloadLength > executable.Length - footerLength)
+        executable.Position = footerOffset - sizeof(long);
+        Span<byte> lengthBytes = stackalloc byte[sizeof(long)];
+        executable.ReadExactly(lengthBytes);
+        var payloadLength = BinaryPrimitives.ReadInt64LittleEndian(lengthBytes);
+        var payloadOffset = footerOffset - sizeof(long) - payloadLength;
+        if (payloadLength <= 0 || payloadOffset < 0)
         {
             throw new InvalidDataException("安装程序有效负载校验失败。");
         }
 
-        executable.Position = executable.Length - footerLength - payloadLength;
+        executable.Position = payloadOffset;
+        Span<byte> zipHeader = stackalloc byte[4];
+        executable.ReadExactly(zipHeader);
+        if (!zipHeader.SequenceEqual(ZipHeader))
+        {
+            throw new InvalidDataException("安装程序有效负载格式无效。");
+        }
+
+        executable.Position = payloadOffset;
         using var payload = new FileStream(payloadPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
         CopyExactly(executable, payload, payloadLength);
+    }
+
+    private static long FindPayloadFooter(FileStream executable)
+    {
+        const int searchWindowSize = 16 * 1024 * 1024;
+        var searchLength = (int)Math.Min(searchWindowSize, executable.Length);
+        var searchOffset = executable.Length - searchLength;
+        var tail = new byte[searchLength];
+        executable.Position = searchOffset;
+        executable.ReadExactly(tail);
+
+        for (var index = tail.Length - FooterMagic.Length; index >= sizeof(long); index--)
+        {
+            if (tail.AsSpan(index, FooterMagic.Length).SequenceEqual(FooterMagic))
+            {
+                return searchOffset + index;
+            }
+        }
+
+        throw new InvalidDataException("安装程序没有有效的 McGo 负载页脚。");
     }
 
     private static void CopyExactly(Stream source, Stream destination, long bytesToCopy)
