@@ -30,6 +30,16 @@ public partial class App : Application
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         var commandLine = Environment.GetCommandLineArgs();
+        if (commandLine.Contains("--installer", StringComparer.OrdinalIgnoreCase) ||
+            commandLine.Contains("--uninstall", StringComparer.OrdinalIgnoreCase))
+        {
+            Directory.SetCurrentDirectory(AppContext.BaseDirectory);
+            _window = new InstallerWindow(InstallerLaunchOptions.Parse(commandLine));
+            MainWindow = _window;
+            _window.Activate();
+            return;
+        }
+
         var smokePages = commandLine.Contains("--smoke-pages", StringComparer.OrdinalIgnoreCase);
         if (smokePages)
         {

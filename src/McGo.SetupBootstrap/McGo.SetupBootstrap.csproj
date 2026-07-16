@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationIcon>..\McGo.WinUI\Assets\AppIcon.ico</ApplicationIcon>
+    <AssemblyName>McGo.SetupBootstrap</AssemblyName>
+    <Version>1.0.11</Version>
+    <AssemblyTitle>McGo 安装程序</AssemblyTitle>
+    <Product>McGo</Product>
+    <Description>McGo C# / WinUI 3 安装程序</Description>
+    <Company>McGo</Company>
+  </PropertyGroup>
+</Project>

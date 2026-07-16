@@ -28,9 +28,9 @@ import {
 import './styles.css';
 
 const previewDownload = {
-  href: '/download/McGo-CSharp-Preview-x64.zip',
-  name: 'McGo-CSharp-Preview-x64.zip',
-  size: '81.1 MB',
+  href: '/download/McGo-CSharp-Preview-x64-Setup.exe',
+  name: 'McGo-CSharp-Preview-x64-Setup.exe',
+  size: '81.4 MB',
   version: '1.0.11 Preview',
 };
 
@@ -85,9 +85,9 @@ const features = [
 
 const previewHighlights = [
   'C# / .NET 8 / WinUI 3 原生客户端',
-  'x64 自包含运行环境，解压后启动',
+  '自研 WinUI 3 安装器，支持升级与卸载',
+  'x64 自包含运行环境，仅简体中文资源',
   '全局下载任务与统一日志已迁移',
-  'Windows 10 1809 或更高版本',
 ];
 
 function useScreenshotRotation() {
@@ -213,7 +213,7 @@ function App() {
         <div className="download-heading">
           <span className="kicker">Windows 下载</span>
           <h2>选择适合你的版本</h2>
-          <p>C# 版本用于体验和反馈迁移结果；需要成熟单文件体验时，继续使用稳定版。</p>
+          <p>C# 版本通过 WinUI 3 安装器部署；需要免安装体验时，继续使用稳定版。</p>
         </div>
         <div className="release-grid">
           <article className="release-card preview-release">
@@ -228,7 +228,7 @@ function App() {
             </ul>
             <div className="file-meta"><span>{previewDownload.name}</span><strong>{previewDownload.size}</strong></div>
             <DownloadButton download={previewDownload}>下载 C# 测试版</DownloadButton>
-            <a className="checksum-link" href="/download/McGo-CSharp-Preview-x64.zip.sha256" download>下载 SHA-256 校验文件</a>
+            <a className="checksum-link" href="/download/McGo-CSharp-Preview-x64-Setup.exe.sha256" download>下载 SHA-256 校验文件</a>
           </article>
 
           <article className="release-card stable-release">
@@ -253,11 +253,11 @@ function App() {
       <section className="start-section" aria-labelledby="start-title">
         <div>
           <span className="kicker">开始测试</span>
-          <h2 id="start-title">解压，启动，反馈</h2>
+          <h2 id="start-title">安装，启动，反馈</h2>
         </div>
         <ol className="start-steps">
-          <li><span>01</span><div><strong>完整解压 ZIP</strong><p>保留 DLL、Assets 和 Pages 目录。</p></div></li>
-          <li><span>02</span><div><strong>运行 McGo.WinUI.exe</strong><p>首次启动后配置 Java 与游戏目录。</p></div></li>
+          <li><span>01</span><div><strong>运行安装程序</strong><p>选择安装位置和是否创建桌面快捷方式。</p></div></li>
+          <li><span>02</span><div><strong>启动 McGo</strong><p>首次启动后配置 Java 与游戏目录。</p></div></li>
           <li><span>03</span><div><strong>提交迁移反馈</strong><p>附上日志页内容和复现步骤。</p></div></li>
         </ol>
       </section>

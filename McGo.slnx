@@ -2,6 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/McGo.Core/McGo.Core.csproj" />
     <Project Path="src/McGo.Relay/McGo.Relay.csproj" />
+    <Project Path="src/McGo.SetupBootstrap/McGo.SetupBootstrap.csproj" />
     <Project Path="src/McGo.WinUI/McGo.WinUI.csproj" />
   </Folder>
   <Folder Name="/tests/">
