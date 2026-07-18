@@ -10,6 +10,7 @@ import {
   ChevronRight,
   Code2,
   Download,
+  Eye,
   FlaskConical,
   Gamepad2,
   Gauge,
@@ -23,6 +24,7 @@ import {
   Settings2,
   ShieldCheck,
   UserRoundCheck,
+  Users,
   Workflow,
 } from 'lucide-react';
 import './styles.css';
@@ -124,8 +126,40 @@ function DownloadButton({ download, children, className = '' }) {
   );
 }
 
+function usePublicStats() {
+  const [stats, setStats] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const response = await fetch(`/stats.json?ts=${Date.now()}`, { cache: 'no-store' });
+        if (!response.ok) throw new Error(`Stats request failed: ${response.status}`);
+        const data = await response.json();
+        if (!cancelled) setStats(data);
+      } catch {
+        if (!cancelled) setStats(null);
+      }
+    };
+
+    load();
+    const timer = window.setInterval(load, 5 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  return stats;
+}
+
+function StatValue({ value }) {
+  return Number.isFinite(value) ? new Intl.NumberFormat('zh-CN').format(value) : '--';
+}
+
 function App() {
   const [active, setActive] = useScreenshotRotation();
+  const stats = usePublicStats();
   const current = screenshots[active];
 
   return (
@@ -226,6 +260,15 @@ function App() {
           <span className="kicker">Windows 下载</span>
           <h2>选择适合你的版本</h2>
           <p>C# 版本通过 WinUI 3 安装器部署；需要免安装体验时，继续使用稳定版。</p>
+          <div className="public-stats" aria-label="公开使用统计">
+            <div><Eye size={18} /><strong><StatValue value={stats?.page_views} /></strong><span>页面访问</span></div>
+            <div><Users size={18} /><strong><StatValue value={stats?.unique_visitors} /></strong><span>独立来源</span></div>
+            <div><Download size={18} /><strong><StatValue value={stats?.downloads?.total} /></strong><span>下载请求</span></div>
+          </div>
+          <p className="stats-caption">
+            匿名日志汇总，每 5 分钟更新
+            {Number.isFinite(stats?.downloads?.preview) && ` · C# 安装器 ${new Intl.NumberFormat('zh-CN').format(stats.downloads.preview)} 次`}
+          </p>
         </div>
         <div className="release-grid">
           <article className="release-card preview-release">
