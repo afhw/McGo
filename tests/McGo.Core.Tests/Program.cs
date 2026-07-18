@@ -121,6 +121,65 @@ runner.Add("Atomic storage accepts filename-only paths", () =>
     }
 });
 
+runner.Add("Atomic storage restores JSON backup and quarantines corrupt primary", () =>
+{
+    using var temp = TempDir.Create();
+    var path = Path.Combine(temp.Path, "data.json");
+    AtomicStorage.SaveJsonAtomic(path, new Dictionary<string, string> { ["value"] = "backup" });
+    AtomicStorage.SaveJsonAtomic(path, new Dictionary<string, string> { ["value"] = "current" });
+    File.WriteAllText(path, "{\"value\":");
+
+    var restored = AtomicStorage.LoadJsonFile(path, new Dictionary<string, string>());
+    Assert.Equal("backup", restored["value"]);
+    Assert.Contains("backup", File.ReadAllText(path));
+    Assert.True(Directory.GetFiles(temp.Path, "data.json.corrupt-*").Length == 1);
+});
+
+runner.Add("App settings recover accounts from backup", () =>
+{
+    using var temp = TempDir.Create();
+    var configPath = Path.Combine(temp.Path, "launcher_config.ini");
+    var accountsPath = Path.Combine(temp.Path, "accounts.json");
+    var settings = new AppSettings(configPath, accountsPath);
+    settings.LoadConfig();
+    settings.SaveAccounts([new JsonObject { ["id"] = "backup", ["access_token"] = "secret" }]);
+    settings.SaveAccounts([new JsonObject { ["id"] = "current" }]);
+    File.WriteAllText(accountsPath, "[");
+
+    var accounts = settings.LoadAccounts();
+    Assert.Equal(1, accounts.Count);
+    Assert.Equal("backup", accounts[0]["id"]?.GetValue<string>());
+    Assert.Equal("secret", accounts[0]["access_token"]?.GetValue<string>());
+});
+
+runner.Add("SecureStore ignores malformed protected token", () =>
+{
+    Assert.Equal("", SecureStore.UnprotectSecret("plain64:not-valid-base64"));
+});
+
+runner.Add("INI restores backup after truncated primary", () =>
+{
+    using var temp = TempDir.Create();
+    var path = Path.Combine(temp.Path, "launcher_config.ini");
+    AtomicStorage.AtomicWriteText(path, "[UPDATE]\nmanifest_url = backup\n");
+    AtomicStorage.AtomicWriteText(path, "[UPDATE]\nmanifest_url = current\n");
+    File.WriteAllText(path, "[UPDATE");
+
+    var document = IniDocument.Load(path);
+    Assert.Equal("backup", document.Get("UPDATE", "manifest_url"));
+    Assert.True(Directory.GetFiles(temp.Path, "launcher_config.ini.corrupt-*").Length == 1);
+});
+
+runner.Add("App settings migrate Python update manifest to CSharp manifest", () =>
+{
+    using var temp = TempDir.Create();
+    var configPath = Path.Combine(temp.Path, "launcher_config.ini");
+    File.WriteAllText(configPath, $"[UPDATE]\nmanifest_url = {McGo.Core.App.AppConstants.LegacyUpdateManifestUrl}\n");
+    var settings = new AppSettings(configPath, Path.Combine(temp.Path, "accounts.json"));
+    settings.LoadConfig();
+    Assert.Equal(McGo.Core.App.AppConstants.DefaultUpdateManifestUrl, settings.Config.Get("UPDATE", "manifest_url"));
+});
+
 runner.Add("App log rotates and redacts secrets", () =>
 {
     using var temp = TempDir.Create();
@@ -477,6 +536,73 @@ runner.Add("Updater command uses encoded PowerShell", () =>
     var decoded = Encoding.Unicode.GetString(Convert.FromBase64String(encoded));
     Assert.Contains("Copy-Item -LiteralPath $Source -Destination $Destination -Force", decoded);
     Assert.Contains(@"McGo 1.2.0.exe", decoded);
+});
+
+runner.Add("Installer update ignores same-version executable hash difference", () =>
+{
+    var currentHashRequested = false;
+    var manifest = new JsonObject
+    {
+        ["version"] = "1.0.11",
+        ["url"] = "https://files.example/McGo-Setup.exe",
+        ["sha256"] = new string('a', 64),
+        ["size"] = 123,
+        ["installer"] = true,
+    };
+    var result = new UpdaterService(new HttpClient(new JsonHandler(manifest)))
+        .CheckForUpdateAsync("https://files.example/update-csharp.json", "1.0.11", () =>
+        {
+            currentHashRequested = true;
+            return new string('b', 64);
+        })
+        .GetAwaiter()
+        .GetResult();
+    Assert.False(currentHashRequested);
+    Assert.False(result["build_changed"]!.GetValue<bool>());
+    Assert.False(result["update_available"]!.GetValue<bool>());
+});
+
+runner.Add("Newer installer version reports update", () =>
+{
+    var manifest = new JsonObject
+    {
+        ["version"] = "1.0.12",
+        ["url"] = "https://files.example/McGo-Setup.exe",
+        ["sha256"] = new string('a', 64),
+        ["size"] = 123,
+        ["installer"] = true,
+    };
+    var result = new UpdaterService(new HttpClient(new JsonHandler(manifest)))
+        .CheckForUpdateAsync("https://files.example/update-csharp.json", "1.0.11", () => new string('b', 64))
+        .GetAwaiter()
+        .GetResult();
+    Assert.True(result["update_available"]!.GetValue<bool>());
+    Assert.True(UpdaterService.IsInstallerManifest(result));
+});
+
+runner.Add("Installer launch command waits for client then starts Setup", () =>
+{
+    var command = UpdaterService.BuildInstallerLaunchCommand(@"C:\Temp\McGo Setup.exe", 4321, @"C:\Temp\mcgo-update.log");
+    Assert.Contains("Wait-Process -Id $ParentPid", command);
+    Assert.Contains("Start-Process -FilePath $Installer", command);
+    Assert.Contains(@"McGo Setup.exe", command);
+});
+
+runner.Add("Legacy manifest without explicit mode cannot replace CSharp client", () =>
+{
+    var manifest = new JsonObject
+    {
+        ["version"] = "1.0.12",
+        ["url"] = "https://files.example/McGo.exe",
+        ["sha256"] = new string('a', 64),
+        ["size"] = 123,
+    };
+    var result = new UpdaterService(new HttpClient(new JsonHandler(manifest)))
+        .FetchUpdateManifestAsync("https://files.example/update.json")
+        .GetAwaiter()
+        .GetResult();
+    Assert.False(UpdaterService.IsInstallerManifest(result));
+    Assert.False(UpdaterService.IsExplicitLegacyExecutableManifest(result));
 });
 
 runner.Add("Updater downloads verified executable", () =>

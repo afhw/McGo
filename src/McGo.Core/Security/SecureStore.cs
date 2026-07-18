@@ -27,7 +27,14 @@ public static class SecureStore
             return value;
         }
 
-        return Encoding.UTF8.GetString(Convert.FromBase64String(value[FallbackPrefix.Length..]));
+        try
+        {
+            return Encoding.UTF8.GetString(Convert.FromBase64String(value[FallbackPrefix.Length..]));
+        }
+        catch (FormatException)
+        {
+            return "";
+        }
     }
 
     public static JsonObject HydrateAccountTokens(JsonObject account)

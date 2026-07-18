@@ -75,6 +75,19 @@ public sealed class UpdaterService
         data["url"] = ValidateDownloadUrl(new Uri(new Uri(manifestUrl), downloadUrl).ToString());
         data["sha256"] = ManifestSha256(data["sha256"]?.GetValue<string>());
         data["size"] = ManifestSize(data["size"]?.ToString());
+        var installerSpecified = data["installer"] is not null;
+        bool installer;
+        try
+        {
+            installer = data["installer"]?.GetValue<bool>() ?? false;
+        }
+        catch (InvalidOperationException exc)
+        {
+            throw new InvalidOperationException("更新清单 installer 必须是布尔值。", exc);
+        }
+
+        data["installer"] = installer;
+        data["legacy_executable"] = !installer && installerSpecified;
         data["notes"] = data["notes"]?.GetValue<string>()?.Trim()
                         ?? data["changelog"]?.GetValue<string>()?.Trim()
                         ?? "";
@@ -85,9 +98,12 @@ public sealed class UpdaterService
     {
         var manifest = await FetchUpdateManifestAsync(manifestUrl, cancellationToken);
         manifest["current_version"] = currentVersion;
-        var currentSha256 = currentBuildSha256?.Invoke() ?? CurrentBuildSha256();
+        var currentSha256 = IsInstallerManifest(manifest)
+            ? ""
+            : currentBuildSha256?.Invoke() ?? CurrentBuildSha256();
         var remoteSha256 = manifest["sha256"]?.GetValue<string>() ?? "";
-        var buildChanged = manifest["version"]?.GetValue<string>() == currentVersion
+        var buildChanged = !IsInstallerManifest(manifest)
+                           && manifest["version"]?.GetValue<string>() == currentVersion
                            && currentSha256.Length > 0
                            && remoteSha256.Length > 0
                            && !string.Equals(currentSha256, remoteSha256, StringComparison.OrdinalIgnoreCase);
@@ -96,6 +112,12 @@ public sealed class UpdaterService
         manifest["update_available"] = IsNewerVersion(manifest["version"]?.GetValue<string>() ?? "", currentVersion) || buildChanged;
         return manifest;
     }
+
+    public static bool IsInstallerManifest(JsonObject? manifest)
+        => manifest?["installer"]?.GetValue<bool>() == true;
+
+    public static bool IsExplicitLegacyExecutableManifest(JsonObject? manifest)
+        => manifest?["legacy_executable"]?.GetValue<bool>() == true;
 
     public async Task<JsonObject> DownloadUpdateAsync(JsonObject manifest, string? targetDir = null, IProgress<int>? progress = null, Action<string>? status = null, CancellationToken cancellationToken = default)
     {
@@ -261,6 +283,30 @@ public sealed class UpdaterService
         return new UpdateScheduleResult(needsElevation, logPath);
     }
 
+    public static UpdateScheduleResult ScheduleInstallerLaunch(string installerPath, int? parentPid = null)
+    {
+        installerPath = Path.GetFullPath(installerPath);
+        if (!File.Exists(installerPath) || !installerPath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) || !LooksLikeWindowsExecutable(installerPath))
+        {
+            throw new InvalidOperationException("下载的更新安装器无效。");
+        }
+
+        var logPath = Path.Combine(Path.GetTempPath(), "mcgo-update.log");
+        var command = BuildInstallerLaunchCommand(installerPath, parentPid ?? Environment.ProcessId, logPath);
+        var startInfo = new ProcessStartInfo("powershell.exe")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-EncodedCommand");
+        startInfo.ArgumentList.Add(PowershellEncodedCommand(command));
+        Process.Start(startInfo);
+        return new UpdateScheduleResult(false, logPath);
+    }
+
     public static string PowershellEncodedCommand(string command)
         => Convert.ToBase64String(Encoding.Unicode.GetBytes(command));
 
@@ -277,11 +323,31 @@ public sealed class UpdaterService
             "}",
             "try {",
             "  Wait-Process -Id $ParentPid -Timeout 120 -ErrorAction SilentlyContinue",
+            "  if (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) { throw 'McGo did not exit before the update timeout.' }",
             "  Copy-Item -LiteralPath $Source -Destination $Destination -Force",
             "  Start-Process -FilePath $Destination",
             "  Remove-Item -LiteralPath $Source -Force -ErrorAction SilentlyContinue",
             "} catch {",
             "  Write-UpdateLog (\"update failed: \" + $_.Exception.Message)",
+            "  throw",
+            "}",
+        ]);
+
+    public static string BuildInstallerLaunchCommand(string installerPath, int parentPid, string logPath)
+        => string.Join(Environment.NewLine, [
+            "$Installer = " + PowershellQuote(installerPath),
+            "$ParentPid = " + parentPid,
+            "$LogPath = " + PowershellQuote(logPath),
+            "$ErrorActionPreference = 'Stop'",
+            "function Write-UpdateLog([string]$message) {",
+            "  Add-Content -LiteralPath $LogPath -Value ((Get-Date -Format o) + ' ' + $message) -Encoding UTF8",
+            "}",
+            "try {",
+            "  Wait-Process -Id $ParentPid -Timeout 120 -ErrorAction SilentlyContinue",
+            "  if (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) { throw 'McGo did not exit before the update timeout.' }",
+            "  Start-Process -FilePath $Installer",
+            "} catch {",
+            "  Write-UpdateLog (\"installer launch failed: \" + $_.Exception.Message)",
             "  throw",
             "}",
         ]);

@@ -31,7 +31,7 @@ const previewDownload = {
   href: '/download/McGo-CSharp-Preview-x64-Setup.exe',
   name: 'McGo-CSharp-Preview-x64-Setup.exe',
   size: '81.4 MB',
-  version: '1.0.11 Preview',
+  version: '1.0.12 Preview',
 };
 
 const stableDownload = {

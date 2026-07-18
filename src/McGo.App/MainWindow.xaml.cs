@@ -1799,9 +1799,11 @@ public partial class MainWindow : Window
             _lastUpdateManifest = result;
             _lastUpdatePath = result["path"]?.GetValue<string>();
             UpdateOutputBox.Text = result.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-            StatusText.Text = UpdaterService.CanReplaceCurrentExecutable()
-                ? "更新已下载，可点击“应用更新”。"
-                : "更新已下载；当前不是打包后的 McGo.exe，无法自动替换。";
+            StatusText.Text = UpdaterService.IsInstallerManifest(result)
+                ? "安装器已下载，可点击“应用更新”。"
+                : UpdaterService.IsExplicitLegacyExecutableManifest(result) && UpdaterService.CanReplaceCurrentExecutable()
+                    ? "更新已下载，可点击“应用更新”。"
+                    : "更新已下载，但清单未声明受支持的应用方式。";
         }
         catch (Exception exc)
         {
@@ -1820,21 +1822,30 @@ public partial class MainWindow : Window
                 return;
             }
 
-            if (!UpdaterService.CanReplaceCurrentExecutable())
+            var installerUpdate = UpdaterService.IsInstallerManifest(_lastUpdateManifest);
+            var legacyExecutableUpdate = UpdaterService.IsExplicitLegacyExecutableManifest(_lastUpdateManifest);
+            if (!installerUpdate && (!legacyExecutableUpdate || !UpdaterService.CanReplaceCurrentExecutable()))
             {
-                UpdateOutputBox.Text = $"更新文件已下载：{_lastUpdatePath}{Environment.NewLine}当前运行目标不是打包后的 McGo.exe，无法自动替换。";
-                StatusText.Text = "当前运行模式不支持自动应用更新。";
+                UpdateOutputBox.Text = $"更新文件已下载：{_lastUpdatePath}{Environment.NewLine}清单未声明安装器更新或显式旧式可执行文件更新。";
+                StatusText.Text = "此更新清单不支持自动应用。";
                 return;
             }
 
-            var answer = MessageBox.Show(this, "应用更新需要关闭 McGo，并在替换完成后重新启动。是否继续？", "应用更新", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            var prompt = installerUpdate
+                ? "应用更新需要关闭 McGo，然后启动新版安装器。是否继续？"
+                : "应用更新需要关闭 McGo，并在替换完成后重新启动。是否继续？";
+            var answer = MessageBox.Show(this, prompt, "应用更新", MessageBoxButton.YesNo, MessageBoxImage.Question);
             if (answer != MessageBoxResult.Yes)
             {
                 return;
             }
 
-            var result = UpdaterService.ScheduleWindowsReplaceAndRestart(_lastUpdatePath);
-            UpdateOutputBox.Text = $"已安排更新替换。日志：{result.LogPath}{Environment.NewLine}需要管理员权限：{(result.Elevated ? "是" : "否")}";
+            var result = installerUpdate
+                ? UpdaterService.ScheduleInstallerLaunch(_lastUpdatePath)
+                : UpdaterService.ScheduleWindowsReplaceAndRestart(_lastUpdatePath);
+            UpdateOutputBox.Text = installerUpdate
+                ? $"已安排启动更新安装器。日志：{result.LogPath}"
+                : $"已安排更新替换。日志：{result.LogPath}{Environment.NewLine}需要管理员权限：{(result.Elevated ? "是" : "否")}";
             StatusText.Text = "正在关闭 McGo 以应用更新。";
             Application.Current.Shutdown();
         }

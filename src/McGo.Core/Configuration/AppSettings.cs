@@ -22,6 +22,14 @@ public sealed class AppSettings
     {
         Config = IniDocument.Load(ConfigPath);
         Config.EnsureDefaults(DefaultSections);
+        if (string.Equals(
+                Config.Get("UPDATE", "manifest_url"),
+                AppConstants.LegacyUpdateManifestUrl,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            Config.Set("UPDATE", "manifest_url", AppConstants.DefaultUpdateManifestUrl);
+        }
+
         SaveConfig();
     }
 
@@ -74,11 +82,14 @@ public sealed class AppSettings
     {
         if (File.Exists(AccountsPath))
         {
-            var node = JsonNode.Parse(File.ReadAllText(AccountsPath));
-            var accounts = node?.AsArray()
-                .OfType<JsonObject>()
+            var accounts = AtomicStorage.LoadJsonFile(AccountsPath, new List<JsonObject>())
                 .Select(SecureStore.HydrateAccountTokens)
-                .ToList() ?? [];
+                .ToList();
+            if (!File.Exists(AccountsPath))
+            {
+                SaveAccounts(accounts);
+            }
+
             return accounts;
         }
 

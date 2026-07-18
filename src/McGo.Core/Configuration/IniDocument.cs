@@ -9,15 +9,19 @@ public sealed class IniDocument
     public IReadOnlyDictionary<string, Dictionary<string, string>> Sections => _sections;
 
     public static IniDocument Load(string path)
+        => Storage.AtomicStorage.LoadRecoverable(path, Parse, new IniDocument());
+
+    private static IniDocument Parse(string text)
     {
         var document = new IniDocument();
-        if (!File.Exists(path))
+        if (string.IsNullOrWhiteSpace(text))
         {
-            return document;
+            throw new InvalidDataException("INI file is empty.");
         }
 
         var section = "";
-        foreach (var rawLine in File.ReadLines(path, Encoding.UTF8))
+        using var reader = new StringReader(text);
+        while (reader.ReadLine() is { } rawLine)
         {
             var line = rawLine.Trim();
             if (line.Length == 0 || line.StartsWith(';') || line.StartsWith('#'))
@@ -25,9 +29,19 @@ public sealed class IniDocument
                 continue;
             }
 
-            if (line.StartsWith('[') && line.EndsWith(']'))
+            if (line.StartsWith('[') || line.EndsWith(']'))
             {
+                if (!line.StartsWith('[') || !line.EndsWith(']') || line.Length <= 2)
+                {
+                    throw new InvalidDataException($"Invalid INI section: {line}");
+                }
+
                 section = line[1..^1].Trim();
+                if (section.Length == 0)
+                {
+                    throw new InvalidDataException("INI section name cannot be empty.");
+                }
+
                 document.EnsureSection(section);
                 continue;
             }
@@ -40,10 +54,21 @@ public sealed class IniDocument
 
             if (separator < 0)
             {
-                continue;
+                throw new InvalidDataException($"Invalid INI entry: {line}");
             }
 
-            document.Set(section, line[..separator].Trim(), line[(separator + 1)..].Trim());
+            var key = line[..separator].Trim();
+            if (section.Length == 0 || key.Length == 0)
+            {
+                throw new InvalidDataException($"Invalid INI entry: {line}");
+            }
+
+            document.Set(section, key, line[(separator + 1)..].Trim());
+        }
+
+        if (document._sections.Count == 0)
+        {
+            throw new InvalidDataException("INI file contains no sections.");
         }
 
         return document;
