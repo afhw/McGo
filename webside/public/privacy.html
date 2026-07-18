@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="McGo 隐私政策" />
+    <title>隐私政策 | McGo</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif; background: #101513; color: #f3f7f4; }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #101513; }
+      header { border-bottom: 1px solid #2b3430; }
+      nav, main, footer { width: min(100% - 32px, 880px); margin: 0 auto; }
+      nav { display: flex; min-height: 68px; align-items: center; justify-content: space-between; }
+      a { color: #6ee7ad; text-underline-offset: 3px; }
+      .brand { color: #fff; font-size: 20px; font-weight: 800; text-decoration: none; }
+      main { padding: 64px 0 72px; }
+      h1 { margin: 0; font-size: 44px; letter-spacing: 0; }
+      .updated { margin: 12px 0 48px; color: #9da9a3; }
+      section { padding: 28px 0; border-top: 1px solid #2b3430; }
+      h2 { margin: 0 0 14px; font-size: 22px; letter-spacing: 0; }
+      p, li { color: #cbd4cf; line-height: 1.75; }
+      ul { margin: 12px 0 0; padding-left: 21px; }
+      footer { padding: 28px 0 44px; border-top: 1px solid #2b3430; color: #9da9a3; font-size: 13px; }
+      @media (max-width: 600px) { main { padding-top: 42px; } h1 { font-size: 36px; } }
+    </style>
+  </head>
+  <body>
+    <header><nav><a class="brand" href="/">McGo</a><a href="/#download">返回下载页</a></nav></header>
+    <main>
+      <h1>隐私政策</h1>
+      <p class="updated">最后更新：2026 年 7 月 18 日</p>
+
+      <section>
+        <h2>适用范围</h2>
+        <p>本政策说明 McGo 启动器及官方网站如何处理与用户有关的信息。McGo 是开源软件，不出售用户数据，也不包含自有的广告或行为分析系统。</p>
+      </section>
+
+      <section>
+        <h2>本地数据</h2>
+        <p>为了提供启动和账号管理功能，McGo 会在用户设备本地保存启动器设置、游戏目录、账号显示名称、账号标识以及登录令牌。登录令牌仅用于用户主动选择的认证和启动流程。卸载时选择删除用户数据，或手动删除安装目录中的配置文件，即可移除这些数据。</p>
+      </section>
+
+      <section>
+        <h2>网络请求与第三方服务</h2>
+        <p>当用户主动使用相关功能时，McGo 可能连接以下服务：</p>
+        <ul>
+          <li>Microsoft、Xbox 和 Minecraft 认证服务，用于 Microsoft 账号登录。</li>
+          <li>用户自行配置的外置登录服务器，用于第三方认证。</li>
+          <li>Mojang、BMCLAPI、Modrinth 等内容服务，用于获取游戏、运行库和资源。</li>
+          <li>用户配置或 McGo 提供的联机中继服务，用于房间发现和网络连接。</li>
+        </ul>
+        <p>这些服务会按照各自的隐私政策处理网络地址、请求内容和账号数据。McGo 不会将登录令牌发送给与相应登录流程无关的服务。</p>
+      </section>
+
+      <section>
+        <h2>联机功能</h2>
+        <p>使用联机功能时，房间标识、网络地址、端口和必要的连接状态可能发送至中继或 STUN 服务。点对点连接会向对方参与者暴露建立连接所需的网络地址。用户可以不使用联机功能。</p>
+      </section>
+
+      <section>
+        <h2>网站日志</h2>
+        <p>官方网站服务器可能为安全、故障排查和容量统计保留常规访问日志，包括访问时间、请求路径、网络地址和浏览器标识。日志不会用于广告画像，并会按照服务器运维需要定期清理。</p>
+      </section>
+
+      <section>
+        <h2>安全与开源审计</h2>
+        <p>McGo 的源代码和构建流程公开在 GitHub。正式 Windows 版本计划通过 SignPath Foundation 提供的证书进行代码签名，并同时发布 SHA-256 校验值。任何安全问题都可以通过项目仓库报告。</p>
+      </section>
+
+      <section>
+        <h2>联系与请求</h2>
+        <p>如需报告隐私或安全问题、请求协助删除数据，或询问本政策，请通过 <a href="https://github.com/afhw/McGo/issues">McGo GitHub Issues</a> 联系维护者。</p>
+      </section>
+    </main>
+    <footer>McGo open-source Minecraft launcher</footer>
+  </body>
+</html>

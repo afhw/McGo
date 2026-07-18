@@ -259,6 +259,14 @@ function App() {
             <div className="file-meta"><span>{stableDownload.name}</span><strong>{stableDownload.size}</strong></div>
             <DownloadButton download={stableDownload} className="stable-button">下载稳定版</DownloadButton>
           </article>
+          <p className="signing-note">
+            <ShieldCheck size={19} />
+            <span>
+              免费代码签名由 <a href="https://signpath.io/" target="_blank" rel="noreferrer">SignPath.io</a> 提供，
+              证书由 <a href="https://signpath.org/" target="_blank" rel="noreferrer">SignPath Foundation</a> 提供。
+              基金会审批前发布的测试版本可能尚未签名，请同时核对 Windows 数字签名与 SHA-256。
+            </span>
+          </p>
         </div>
       </section>
 
@@ -283,6 +291,7 @@ function App() {
           <span><Workflow size={16} />P2P 联机</span>
           <span><Settings2 size={16} />版本设置</span>
           <span><Gamepad2 size={16} />快速启动</span>
+          <a href="/privacy.html">隐私政策</a>
         </div>
       </footer>
     </main>

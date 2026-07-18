@@ -142,6 +142,10 @@ button { font: inherit; }
 .stable-button { color: #10202a; background: var(--cyan); }
 .checksum-link { margin-top: 13px; color: var(--muted); font-size: 12px; text-align: center; text-decoration: underline; text-underline-offset: 3px; }
 .checksum-link:hover { color: #fff; }
+.signing-note { display: flex; grid-column: 1 / -1; gap: 10px; align-items: flex-start; margin: 4px 0 0; padding: 15px 0 0; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; line-height: 1.65; }
+.signing-note svg { flex: 0 0 auto; margin-top: 1px; color: var(--green); }
+.signing-note a, .footer a { color: #dce5df; text-decoration: underline; text-underline-offset: 3px; }
+.signing-note a:hover, .footer a:hover { color: #fff; }
 
 .start-section { display: grid; grid-template-columns: .65fr 1.35fr; gap: 52px; padding: 92px 0; border-top: 1px solid var(--line); }
 .start-steps { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
@@ -153,6 +157,7 @@ button { font: inherit; }
 .footer { display: flex; align-items: center; justify-content: space-between; gap: 30px; padding: 36px 0 48px; border-top: 1px solid var(--line); color: var(--muted); }
 .footer-capabilities { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 16px; font-size: 13px; }
 .footer-capabilities span { display: inline-flex; align-items: center; gap: 6px; }
+.footer-capabilities a { display: inline-flex; align-items: center; }
 
 @media (max-width: 980px) {
   .release-bar { grid-template-columns: 1fr 1fr; }
