@@ -568,6 +568,18 @@ runner.Add("Java runtime download extracts archive and finds executable", () =>
     Assert.Contains(Path.Combine("bin", executable), result.JavaPath);
 });
 
+runner.Add("Java version parser handles legacy and modern output", () =>
+{
+    // 旧式 HotSpot 输出 1.8.0_392，主版本应解析为 8。
+    Assert.Equal(8, JavaRuntimeService.ParseJavaMajorVersion("java version \"1.8.0_392\"\nJava(TM) SE Runtime Environment"));
+    // 新式输出 17.0.9 / 21，主版本分别为 17 与 21。
+    Assert.Equal(17, JavaRuntimeService.ParseJavaMajorVersion("openjdk version \"17.0.9\" 2023-10-17"));
+    Assert.Equal(21, JavaRuntimeService.ParseJavaMajorVersion("openjdk version \"21\" 2023-09-19 LTS"));
+    // 无法识别的输出返回 0。
+    Assert.Equal(0, JavaRuntimeService.ParseJavaMajorVersion(""));
+    Assert.Equal(0, JavaRuntimeService.ParseJavaMajorVersion("no version here"));
+});
+
 runner.Add("Updater compares semver", () =>
 {
     Assert.True(UpdaterService.IsNewerVersion("1.10.0", "1.9.9"));

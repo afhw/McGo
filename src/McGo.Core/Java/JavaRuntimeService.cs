@@ -135,15 +135,18 @@ public static class JavaRuntimeService
     }
 
     public static int GetJavaMajorVersion(string javaPath)
+        => ParseJavaMajorVersion(RunJavaVersion(javaPath));
+
+    // 从 `java -version` 输出解析主版本号：兼容旧式 1.8.0（返回 8）与新式 17.0.1（返回 17）。
+    public static int ParseJavaMajorVersion(string output)
     {
-        var output = RunJavaVersion(javaPath);
-        var match = Regex.Match(output, @"version \""(?:(?<legacy>1)\.)?(?<major>\d+)");
-        if (!match.Success)
+        if (string.IsNullOrWhiteSpace(output))
         {
             return 0;
         }
 
-        return int.Parse(match.Groups["major"].Value);
+        var match = Regex.Match(output, @"version \""(?:(?<legacy>1)\.)?(?<major>\d+)");
+        return match.Success ? int.Parse(match.Groups["major"].Value) : 0;
     }
 
     private static string RunJavaVersion(string javaPath)
@@ -163,8 +166,36 @@ public static class JavaRuntimeService
                 return "";
             }
 
-            process.WaitForExit(5000);
-            return process.StandardError.ReadToEnd() + process.StandardOutput.ReadToEnd();
+            // 先异步读取两路输出，避免管道缓冲区写满导致的死锁；
+            // 若进程在超时后仍未退出，强制结束以保证 5 秒上限真正生效。
+            var stderrTask = process.StandardError.ReadToEndAsync();
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+            if (!process.WaitForExit(5000))
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch
+                {
+                }
+
+                process.WaitForExit(1000);
+            }
+
+            return SafeResult(stderrTask) + SafeResult(stdoutTask);
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    private static string SafeResult(Task<string> task)
+    {
+        try
+        {
+            return task.Wait(1000) ? task.Result : "";
         }
         catch
         {
