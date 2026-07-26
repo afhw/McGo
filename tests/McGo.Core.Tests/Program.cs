@@ -413,6 +413,33 @@ runner.Add("Launcher infers manifest java version", () =>
     Assert.Equal(17, new LauncherService().InferRequiredJavaVersion(temp.Path, "1.20.1"));
 });
 
+runner.Add("Launcher infers Java baseline by Minecraft generation", () =>
+{
+    using var temp = TempDir.Create();
+    // 1.16.5 官方使用 Java 8：即便清单声明 8，也不能被启发式基线抬到 17。
+    WriteVersion(temp.Path, "1.16.5", new JsonObject
+    {
+        ["javaVersion"] = new JsonObject { ["majorVersion"] = 8 },
+        ["libraries"] = new JsonArray(),
+        ["mainClass"] = "net.minecraft.client.main.Main",
+    });
+    WriteVersion(temp.Path, "1.17.1", new JsonObject
+    {
+        ["libraries"] = new JsonArray(),
+        ["mainClass"] = "net.minecraft.client.main.Main",
+    });
+    WriteVersion(temp.Path, "1.21", new JsonObject
+    {
+        ["libraries"] = new JsonArray(),
+        ["mainClass"] = "net.minecraft.client.main.Main",
+    });
+
+    var launcher = new LauncherService();
+    Assert.Equal(8, launcher.InferRequiredJavaVersion(temp.Path, "1.16.5"));
+    Assert.Equal(17, launcher.InferRequiredJavaVersion(temp.Path, "1.17.1"));
+    Assert.Equal(21, launcher.InferRequiredJavaVersion(temp.Path, "1.21"));
+});
+
 runner.Add("Launcher builds command with runtime and memory", () =>
 {
     using var temp = TempDir.Create();

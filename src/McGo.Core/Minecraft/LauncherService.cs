@@ -150,7 +150,8 @@ public sealed class LauncherService
         {
             var major = int.Parse(match.Groups[1].Value);
             var minor = int.Parse(match.Groups[2].Value);
-            baseline = major > 1 || minor >= 21 ? 21 : minor >= 16 ? 17 : 8;
+            // Java 需求门槛：1.17+ 需要 Java 17，1.21+ 需要 Java 21，1.16 及更早使用 Java 8。
+            baseline = major > 1 || minor >= 21 ? 21 : minor >= 17 ? 17 : 8;
         }
 
         int? highestDeclared = null;
