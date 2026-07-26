@@ -305,9 +305,8 @@ function App() {
           <p className="signing-note">
             <ShieldCheck size={19} />
             <span>
-              免费代码签名由 <a href="https://signpath.io/" target="_blank" rel="noreferrer">SignPath.io</a> 提供，
-              证书由 <a href="https://signpath.org/" target="_blank" rel="noreferrer">SignPath Foundation</a> 提供。
-              基金会审批前发布的测试版本可能尚未签名，请同时核对 Windows 数字签名与 SHA-256。
+              测试版本可能尚未进行代码签名。为确保下载完整、未被篡改，
+              请在运行前核对文件的 SHA-256 校验值是否与发布页公布的一致。
             </span>
           </p>
         </div>

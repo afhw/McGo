@@ -28,6 +28,6 @@
 
 - [ ] 按 [WinUI 3 功能迁移清单](docs/winui-migration.md) 将旧版能力逐项迁移到 WinUI 3。
 - [ ] 为 WinUI 3 窗口补充自动化 UI 冒烟测试。
-- [~] 更新清单生成：`UpdaterService.BuildUpdateManifest/WriteUpdateManifest` 生成与消费端一致的清单，`build_release.ps1 -ReleaseVersion -DownloadUrl` 可直接产出 `dist/update.json`（含往返测试）；签名发布步骤仍待补充。
+- [~] 更新清单生成：`UpdaterService.BuildUpdateManifest/WriteUpdateManifest` 生成与消费端一致的清单，`build_release.ps1 -ReleaseVersion -DownloadUrl` 可直接产出 `dist/update.json`（含往返测试）。发布仅提供 SHA-256 校验，不做代码签名。
 - [~] 崩溃日志分析：已扩展到 14 类常见崩溃，附带处理建议与关键错误行提取（见 `docs/troubleshooting.md`），并新增核心测试覆盖；后续可继续补充规则。
 - [ ] 继续扩展资源市场源。
