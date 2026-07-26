@@ -41,6 +41,7 @@ public sealed class InstallServices
         {
             var replacements = new Dictionary<string, string>
             {
+                ["https://piston-meta.mojang.com"] = mirror,
                 ["https://piston-data.mojang.com"] = mirror,
                 ["https://launcher.mojang.com"] = mirror,
                 ["https://libraries.minecraft.net"] = mirror + "/maven",

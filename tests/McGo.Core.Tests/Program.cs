@@ -1092,6 +1092,8 @@ runner.Add("Install services rewrite mirrors and build OptiFine ids", () =>
 {
     Assert.Equal("bmclapi", InstallServices.FallbackMirrorSource("official"));
     Assert.Equal("https://bmclapi2.bangbang93.com/maven/com/example/demo.jar", InstallServices.RewriteDownloadUrlForMirror("https://libraries.minecraft.net/com/example/demo.jar", "bmclapi"));
+    // 版本元数据（piston-meta）在 bmclapi 源下也必须改写，否则会直连 Mojang 失去镜像加速。
+    Assert.Equal("https://bmclapi2.bangbang93.com/v1/packages/abc/1.20.1.json", InstallServices.RewriteDownloadUrlForMirror("https://piston-meta.mojang.com/v1/packages/abc/1.20.1.json", "bmclapi"));
     var selected = new JsonObject { ["filename"] = "preview_OptiFine_1.20.1_HD_U_I6_pre6.jar", ["type"] = "HD_U", ["patch"] = "I6_pre6" };
     Assert.Equal("1.20.1-OptiFine_HD_U_I6_pre6", InstallServices.BuildOptifineVersionId("1.20.1", selected));
     Assert.Equal("1.20.1_HD_U_I6_pre6", InstallServices.BuildOptifineLibraryVersion(selected));
