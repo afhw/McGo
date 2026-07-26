@@ -258,15 +258,34 @@ public sealed class ExternalAuthService
             return;
         }
 
-        var detail = "";
+        var body = "";
         try
         {
-            var data = await response.Content.ReadFromJsonAsync<JsonObject>(cancellationToken);
-            detail = data?["errorMessage"]?.GetValue<string>() ?? data?["error"]?.GetValue<string>() ?? "";
+            body = await response.Content.ReadAsStringAsync(cancellationToken);
         }
         catch
         {
-            detail = (await response.Content.ReadAsStringAsync(cancellationToken))[..Math.Min(300, (await response.Content.ReadAsStringAsync(cancellationToken)).Length)].Trim();
+            // 响应体不可读时保持空字符串，后续按状态码给出通用提示。
+        }
+
+        var detail = "";
+        if (!string.IsNullOrWhiteSpace(body))
+        {
+            try
+            {
+                var data = JsonNode.Parse(body) as JsonObject;
+                detail = data?["errorMessage"]?.GetValue<string>() ?? data?["error"]?.GetValue<string>() ?? "";
+            }
+            catch
+            {
+                detail = "";
+            }
+
+            if (detail.Length == 0)
+            {
+                var trimmed = body.Trim();
+                detail = trimmed[..Math.Min(300, trimmed.Length)];
+            }
         }
 
         throw new InvalidOperationException(ExternalAuthError(response, action, detail));

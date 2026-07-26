@@ -1008,6 +1008,21 @@ runner.Add("Authlib injector args require external account and existing jar", ()
     Assert.Contains($"-javaagent:{jar}=https://auth.example/yggdrasil", args);
 });
 
+runner.Add("External auth surfaces server errorMessage on failure", () =>
+{
+    var routes = new Dictionary<string, HttpResponseMessage>
+    {
+        ["/authserver/authenticate"] = new HttpResponseMessage(HttpStatusCode.Forbidden)
+        {
+            Content = new StringContent(new JsonObject { ["errorMessage"] = "无效的凭证" }.ToJsonString(), Encoding.UTF8, "application/json"),
+        },
+    };
+    var service = new ExternalAuthService(new HttpClient(new RoutingHandler(routes)));
+    var error = Assert.Throws<InvalidOperationException>(() =>
+        service.AuthenticateExternalAccountAsync("https://auth.example", "steve", "pw").GetAwaiter().GetResult());
+    Assert.Contains("无效的凭证", error.Message);
+});
+
 runner.Add("Install services rewrite mirrors and build OptiFine ids", () =>
 {
     Assert.Equal("bmclapi", InstallServices.FallbackMirrorSource("official"));
@@ -1746,6 +1761,24 @@ internal static class Assert
         }
 
         throw new InvalidOperationException("Expected exception.");
+    }
+
+    public static TException Throws<TException>(Action action) where TException : Exception
+    {
+        try
+        {
+            action();
+        }
+        catch (TException expected)
+        {
+            return expected;
+        }
+        catch (Exception other)
+        {
+            throw new InvalidOperationException($"Expected {typeof(TException).Name}, got {other.GetType().Name}: {other.Message}");
+        }
+
+        throw new InvalidOperationException($"Expected {typeof(TException).Name}.");
     }
 }
 
