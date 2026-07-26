@@ -98,48 +98,57 @@ public sealed class CapsuleFileTransferService
                 var target = CapsuleService.CapsuleTargetPath(runtimeDir, relative);
                 var tempTarget = target + ".mcgo-download";
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                await using (var output = File.Create(tempTarget))
-                using (var client = await ConnectWithRetryAsync(IPAddress.Loopback, joinPort, TimeSpan.FromSeconds(12), cancellationToken))
+                try
                 {
-                    var stream = client.GetStream();
-                    await WriteJsonLineAsync(stream, new JsonObject
+                    await using (var output = File.Create(tempTarget))
+                    using (var client = await ConnectWithRetryAsync(IPAddress.Loopback, joinPort, TimeSpan.FromSeconds(12), cancellationToken))
                     {
-                        ["type"] = "get",
-                        ["path"] = relative,
-                        ["sha256"] = expectedSha256,
-                    }, cancellationToken);
-
-                    var response = await ReadJsonLineAsync(stream, cancellationToken);
-                    if (response["type"]?.GetValue<string>() != "ok")
-                    {
-                        throw new InvalidOperationException(response["message"]?.GetValue<string>() ?? $"补包失败：{relative}");
-                    }
-
-                    var size = response["size"]?.GetValue<long>() ?? 0;
-                    var remaining = size;
-                    var buffer = new byte[BufferSize];
-                    while (remaining > 0)
-                    {
-                        var read = await stream.ReadAsync(buffer.AsMemory(0, (int)Math.Min(BufferSize, remaining)), cancellationToken);
-                        if (read <= 0)
+                        var stream = client.GetStream();
+                        await WriteJsonLineAsync(stream, new JsonObject
                         {
-                            throw new IOException("补包连接中断：" + relative);
+                            ["type"] = "get",
+                            ["path"] = relative,
+                            ["sha256"] = expectedSha256,
+                        }, cancellationToken);
+
+                        var response = await ReadJsonLineAsync(stream, cancellationToken);
+                        if (response["type"]?.GetValue<string>() != "ok")
+                        {
+                            throw new InvalidOperationException(response["message"]?.GetValue<string>() ?? $"补包失败：{relative}");
                         }
 
-                        await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
-                        remaining -= read;
-                        totalBytes += read;
+                        var size = response["size"]?.GetValue<long>() ?? 0;
+                        var remaining = size;
+                        var buffer = new byte[BufferSize];
+                        while (remaining > 0)
+                        {
+                            var read = await stream.ReadAsync(buffer.AsMemory(0, (int)Math.Min(BufferSize, remaining)), cancellationToken);
+                            if (read <= 0)
+                            {
+                                throw new IOException("补包连接中断：" + relative);
+                            }
+
+                            await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                            remaining -= read;
+                            totalBytes += read;
+                        }
                     }
-                }
 
-                var actualSha256 = FileUtilities.Sha256File(tempTarget);
-                if (!string.IsNullOrWhiteSpace(expectedSha256) && !actualSha256.Equals(expectedSha256, StringComparison.OrdinalIgnoreCase))
+                    var actualSha256 = FileUtilities.Sha256File(tempTarget);
+                    if (!string.IsNullOrWhiteSpace(expectedSha256) && !actualSha256.Equals(expectedSha256, StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidOperationException("补包文件校验失败：" + relative);
+                    }
+
+                    File.Move(tempTarget, target, overwrite: true);
+                }
+                catch
                 {
-                    File.Delete(tempTarget);
-                    throw new InvalidOperationException("补包文件校验失败：" + relative);
+                    // 任意失败（连接中断、校验不符、取消）都清理半成品，避免遗留 .mcgo-download 垃圾文件。
+                    TryDeleteFile(tempTarget);
+                    throw;
                 }
 
-                File.Move(tempTarget, target, overwrite: true);
                 downloaded++;
                 progress?.Report((int)Math.Round((index + 1) * 100.0 / missing.Count));
             }
@@ -270,6 +279,20 @@ public sealed class CapsuleFileTransferService
         try
         {
             await task;
+        }
+        catch
+        {
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
         }
         catch
         {

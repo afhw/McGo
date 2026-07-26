@@ -967,6 +967,31 @@ runner.Add("Capsule export/import roundtrip manifest", () =>
     Assert.True(importedSettings[imported.Version]?["use_isolated_directory"]?.GetValue<bool>() == true);
 });
 
+runner.Add("Capsule target path rejects traversal outside runtime dir", () =>
+{
+    using var temp = TempDir.Create();
+    var runtimeDir = Path.Combine(temp.Path, "versions", "capsule");
+    Directory.CreateDirectory(runtimeDir);
+
+    // 合法路径应落在运行目录内部。
+    var safe = CapsuleService.CapsuleTargetPath(runtimeDir, "mods/demo.jar");
+    Assert.True(safe.StartsWith(Path.GetFullPath(runtimeDir), StringComparison.OrdinalIgnoreCase));
+
+    // 对端/清单提供的越权路径必须被拒绝（P2P 主机与访客都以此为边界）。
+    Assert.Throws<InvalidOperationException>(() => CapsuleService.CapsuleTargetPath(runtimeDir, "mods/../../../evil.txt"));
+    Assert.Throws<InvalidOperationException>(() => CapsuleService.CapsuleTargetPath(runtimeDir, "../evil.txt"));
+
+    // 非白名单根目录同样被拒绝。
+    Assert.Throws<InvalidOperationException>(() => CapsuleService.CapsuleTargetPath(runtimeDir, "secrets/passwd"));
+
+    // 含越权段的清单条目不会计入缺失列表，避免拉取到运行目录之外。
+    var files = new JsonArray
+    {
+        new JsonObject { ["path"] = "mods/../../../evil.txt", ["sha256"] = "" },
+    };
+    Assert.Equal(0, CapsuleService.CapsuleMissingFiles(runtimeDir, files).Count);
+});
+
 runner.Add("STUN XOR-MAPPED-ADDRESS parses endpoint", () =>
 {
     var tx = Enumerable.Range(1, 12).Select(i => (byte)i).ToArray();

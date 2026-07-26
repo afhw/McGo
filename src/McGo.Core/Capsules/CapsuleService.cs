@@ -50,7 +50,7 @@ public sealed class CapsuleService
             return false;
         }
 
-        if (parts.Any(part => SkipDirs.Contains(part)))
+        if (parts.Any(part => part is "." or ".." || SkipDirs.Contains(part)))
         {
             return false;
         }
