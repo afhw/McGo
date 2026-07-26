@@ -440,6 +440,35 @@ runner.Add("Launcher infers Java baseline by Minecraft generation", () =>
     Assert.Equal(21, launcher.InferRequiredJavaVersion(temp.Path, "1.21"));
 });
 
+runner.Add("Launcher rule evaluation honors os name, arch and override order", () =>
+{
+    var noFeatures = new Dictionary<string, bool>();
+    // 仅 allow osx：Windows 不匹配应排除，osx 匹配应包含。
+    var osxOnly = new JsonArray(new JsonObject { ["action"] = "allow", ["os"] = new JsonObject { ["name"] = "osx" } });
+    Assert.False(LauncherService.RulesAllow(osxOnly, noFeatures, "windows", "x86_64"));
+    Assert.True(LauncherService.RulesAllow(osxOnly, noFeatures, "osx", "x86_64"));
+
+    // allow 全部，再 disallow osx：osx 上应最终排除，windows 上应包含（顺序覆盖语义）。
+    var allowExceptOsx = new JsonArray(
+        new JsonObject { ["action"] = "allow" },
+        new JsonObject { ["action"] = "disallow", ["os"] = new JsonObject { ["name"] = "osx" } });
+    Assert.True(LauncherService.RulesAllow(allowExceptOsx, noFeatures, "windows", "x86_64"));
+    Assert.False(LauncherService.RulesAllow(allowExceptOsx, noFeatures, "osx", "x86_64"));
+
+    // 默认 disallow：无匹配规则时不包含。
+    var armOnly = new JsonArray(new JsonObject { ["action"] = "allow", ["os"] = new JsonObject { ["arch"] = "arm64" } });
+    Assert.False(LauncherService.RulesAllow(armOnly, noFeatures, "windows", "x86_64"));
+    Assert.True(LauncherService.RulesAllow(armOnly, noFeatures, "windows", "arm64"));
+
+    // features 规则仍生效。
+    var demoRule = new JsonArray(new JsonObject { ["action"] = "allow", ["features"] = new JsonObject { ["is_demo_user"] = true } });
+    Assert.False(LauncherService.RulesAllow(demoRule, new Dictionary<string, bool> { ["is_demo_user"] = false }, "windows", "x86_64"));
+    Assert.True(LauncherService.RulesAllow(demoRule, new Dictionary<string, bool> { ["is_demo_user"] = true }, "windows", "x86_64"));
+
+    // null 规则表示无限制。
+    Assert.True(LauncherService.RulesAllow(null, noFeatures, "windows", "x86_64"));
+});
+
 runner.Add("Launcher ignores loader prefix when inferring Java baseline", () =>
 {
     using var temp = TempDir.Create();

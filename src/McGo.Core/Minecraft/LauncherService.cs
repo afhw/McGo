@@ -404,7 +404,7 @@ public sealed class LauncherService
                 continue;
             }
 
-            if (obj["rules"] is JsonArray rules && !rules.OfType<JsonObject>().Any(rule => RuleAllows(rule, features)))
+            if (obj["rules"] is JsonArray rules && !RulesAllow(rules, features, CurrentMojangOsName(), CurrentMojangOsArch()))
             {
                 continue;
             }
@@ -426,7 +426,30 @@ public sealed class LauncherService
     private static string Substitute(string value, IReadOnlyDictionary<string, string> context)
         => Regex.Replace(value, @"\$\{([^}]+)\}", match => context.TryGetValue(match.Groups[1].Value, out var replacement) ? replacement : match.Value);
 
-    private static bool RuleAllows(JsonObject rule, IReadOnlyDictionary<string, bool> features)
+    // Mojang 规则语义：默认 disallow，按顺序遍历，命中（os+features 均匹配）的规则用其 action 覆盖结果。
+    // 之前仅用 Any(action!=disallow) 且忽略 os，会在 Windows 上错误放行 osx 专属库/参数。
+    public static bool RulesAllow(JsonArray? rules, IReadOnlyDictionary<string, bool> features, string osName, string osArch)
+    {
+        if (rules is null)
+        {
+            return true;
+        }
+
+        var allowed = false;
+        foreach (var rule in rules.OfType<JsonObject>())
+        {
+            if (!RuleMatches(rule, features, osName, osArch))
+            {
+                continue;
+            }
+
+            allowed = !string.Equals(rule["action"]?.GetValue<string>(), "disallow", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return allowed;
+    }
+
+    private static bool RuleMatches(JsonObject rule, IReadOnlyDictionary<string, bool> features, string osName, string osArch)
     {
         if (rule["features"] is JsonObject requiredFeatures)
         {
@@ -440,14 +463,58 @@ public sealed class LauncherService
             }
         }
 
-        return !string.Equals(rule["action"]?.GetValue<string>(), "disallow", StringComparison.OrdinalIgnoreCase);
+        if (rule["os"] is JsonObject os)
+        {
+            var name = os["name"]?.GetValue<string>();
+            if (!string.IsNullOrWhiteSpace(name) && !string.Equals(name, osName, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            var arch = os["arch"]?.GetValue<string>();
+            if (!string.IsNullOrWhiteSpace(arch) && !string.Equals(arch, osArch, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            var version = os["version"]?.GetValue<string>();
+            if (!string.IsNullOrWhiteSpace(version) && !OsVersionMatches(version))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
-    private static bool LibraryAllowed(JsonObject library, Dictionary<string, bool> features)
+    private static bool OsVersionMatches(string pattern)
     {
-        var rules = library["rules"] as JsonArray;
-        return rules is null || rules.OfType<JsonObject>().Any(rule => RuleAllows(rule, features));
+        try
+        {
+            return Regex.IsMatch(Environment.OSVersion.Version.ToString(), pattern);
+        }
+        catch (ArgumentException)
+        {
+            // 无效正则视为匹配，避免因清单错误而误排除。
+            return true;
+        }
     }
+
+    internal static string CurrentMojangOsName()
+        => OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "osx" : "linux";
+
+    internal static string CurrentMojangOsArch()
+        => System.Runtime.InteropServices.RuntimeInformation.OSArchitecture switch
+        {
+            System.Runtime.InteropServices.Architecture.X86 => "x86",
+            System.Runtime.InteropServices.Architecture.X64 => "x86_64",
+            System.Runtime.InteropServices.Architecture.Arm64 => "arm64",
+            System.Runtime.InteropServices.Architecture.Arm => "arm32",
+            var other => other.ToString().ToLowerInvariant(),
+        };
+
+    private static bool LibraryAllowed(JsonObject library, Dictionary<string, bool> features)
+        => RulesAllow(library["rules"] as JsonArray, features, CurrentMojangOsName(), CurrentMojangOsArch());
 
     public static string? MavenLibraryPath(string name)
     {
