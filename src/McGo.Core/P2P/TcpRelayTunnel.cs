@@ -72,11 +72,24 @@ public sealed class TcpRelayTunnel
     {
         var client = new TcpClient();
         await client.ConnectAsync(relayHost, relayPort, cancellationToken);
-        var stream = client.GetStream();
-        using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
-        await using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
+        try
+        {
+            await PerformRelayHandshakeAsync(client.GetStream(), room, secret, role, cancellationToken);
+            return client;
+        }
+        catch
+        {
+            client.Dispose();
+            throw;
+        }
+    }
 
-        await reader.ReadLineAsync(cancellationToken); // hello
+    // 握手必须逐行读取,禁止使用带内部缓冲的 StreamReader:StreamReader 会预读
+    // 并缓存 "paired" 之后紧跟到达的隧道原始字节,握手结束丢弃 reader 时这些字节
+    // 会一并丢失,导致联机流开头被截断/损坏。这里按字节读到换行为止,只消费握手行。
+    public static async Task PerformRelayHandshakeAsync(Stream stream, string room, string secret, string role, CancellationToken cancellationToken = default)
+    {
+        await ReadLineRawAsync(stream, cancellationToken); // hello
         var payload = new JsonObject
         {
             ["type"] = "stream",
@@ -84,16 +97,47 @@ public sealed class TcpRelayTunnel
             ["secret"] = secret,
             ["role"] = role,
         };
-        await writer.WriteLineAsync(payload.ToJsonString());
-        var responseLine = await reader.ReadLineAsync(cancellationToken);
+        var requestBytes = Encoding.UTF8.GetBytes(payload.ToJsonString() + "\n");
+        await stream.WriteAsync(requestBytes, cancellationToken);
+        await stream.FlushAsync(cancellationToken);
+
+        var responseLine = await ReadLineRawAsync(stream, cancellationToken);
         var response = JsonNode.Parse(responseLine ?? "{}") as JsonObject ?? [];
         if (response["type"]?.GetValue<string>() != "paired")
         {
-            client.Dispose();
             throw new InvalidOperationException(response["message"]?.GetValue<string>() ?? "中继未能建立配对连接。");
         }
+    }
 
-        return client;
+    private static async Task<string> ReadLineRawAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        var buffer = new List<byte>(128);
+        var one = new byte[1];
+        while (true)
+        {
+            var read = await stream.ReadAsync(one, cancellationToken);
+            if (read <= 0)
+            {
+                break;
+            }
+
+            if (one[0] == (byte)'\n')
+            {
+                break;
+            }
+
+            if (one[0] != (byte)'\r')
+            {
+                buffer.Add(one[0]);
+            }
+
+            if (buffer.Count > 64 * 1024)
+            {
+                throw new InvalidOperationException("中继握手响应过长。");
+            }
+        }
+
+        return Encoding.UTF8.GetString(buffer.ToArray());
     }
 
     public static async Task CopyBidirectionalAsync(Stream left, Stream right, CancellationToken cancellationToken = default)

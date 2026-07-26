@@ -1601,6 +1601,41 @@ runner.Add("P2P bidirectional copy carries bytes", () =>
     copy.GetAwaiter().GetResult();
 });
 
+runner.Add("Relay handshake keeps tunnel bytes that follow the paired response", () =>
+{
+    // 服务器在 paired 响应之后立即紧跟发送隧道原始字节;握手不得吞掉这些字节。
+    var incoming = new MemoryStream();
+    var pairedJson = new JsonObject { ["type"] = "paired" }.ToJsonString();
+    var writer = new List<byte>();
+    writer.AddRange(Encoding.UTF8.GetBytes("hello\n"));
+    writer.AddRange(Encoding.UTF8.GetBytes(pairedJson + "\n"));
+    writer.AddRange(Encoding.UTF8.GetBytes("RAW-TUNNEL-DATA"));
+    incoming = new MemoryStream(writer.ToArray());
+    var outgoing = new MemoryStream();
+    var duplex = new SplitDuplexStream(incoming, outgoing);
+
+    TcpRelayTunnel.PerformRelayHandshakeAsync(duplex, "Room-1234", "sekret", "join").GetAwaiter().GetResult();
+
+    // 握手后原始隧道数据必须仍可读取(旧的 StreamReader 实现会预读丢弃这些字节)。
+    var rest = new byte[64];
+    var read = duplex.Read(rest, 0, rest.Length);
+    Assert.Equal("RAW-TUNNEL-DATA", Encoding.UTF8.GetString(rest, 0, read));
+
+    // 客户端应发出携带清洗后房间号与角色的 stream 请求。
+    var request = JsonNode.Parse(Encoding.UTF8.GetString(outgoing.ToArray()).Trim())!.AsObject();
+    Assert.Equal("stream", request["type"]?.GetValue<string>());
+    Assert.Equal("ROOM1234", request["room"]?.GetValue<string>());
+    Assert.Equal("join", request["role"]?.GetValue<string>());
+});
+
+runner.Add("Relay handshake throws when relay does not pair", () =>
+{
+    var incoming = new MemoryStream(Encoding.UTF8.GetBytes("hello\n" + new JsonObject { ["type"] = "error", ["message"] = "房间已满" }.ToJsonString() + "\n"));
+    var duplex = new SplitDuplexStream(incoming, new MemoryStream());
+    Assert.Throws<InvalidOperationException>(() =>
+        TcpRelayTunnel.PerformRelayHandshakeAsync(duplex, "room", "secret", "host").GetAwaiter().GetResult());
+});
+
 runner.Add("UDP frame pack and unpack preserves header fields", () =>
 {
     var token = Encoding.ASCII.GetBytes("12345678");
@@ -2102,6 +2137,42 @@ internal sealed class TempDir : IDisposable
         {
         }
     }
+}
+
+internal sealed class SplitDuplexStream : Stream
+{
+    private readonly Stream _input;
+    private readonly Stream _output;
+
+    public SplitDuplexStream(Stream input, Stream output)
+    {
+        _input = input;
+        _output = output;
+    }
+
+    public override bool CanRead => true;
+    public override bool CanWrite => true;
+    public override bool CanSeek => false;
+    public override long Length => throw new NotSupportedException();
+    public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+    public override int Read(byte[] buffer, int offset, int count) => _input.Read(buffer, offset, count);
+
+    public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        => _input.ReadAsync(buffer, cancellationToken);
+
+    public override void Write(byte[] buffer, int offset, int count) => _output.Write(buffer, offset, count);
+
+    public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        => _output.WriteAsync(buffer, cancellationToken);
+
+    public override void Flush() => _output.Flush();
+
+    public override Task FlushAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+    public override void SetLength(long value) => throw new NotSupportedException();
 }
 
 internal sealed class JsonHandler : HttpMessageHandler
