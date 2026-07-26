@@ -1647,6 +1647,34 @@ runner.Add("Resource market installs Modrinth resource with required dependency"
     Assert.SequenceEqual(["dep.jar"], result.DependenciesInstalled);
 });
 
+runner.Add("Resource market leaves no partial file on mid-download failure", () =>
+{
+    using var temp = TempDir.Create();
+    var routes = new Dictionary<string, HttpResponseMessage>
+    {
+        ["/v2/project/main/version?game_versions=%5B%221.20.1%22%5D&loaders=%5B%22fabric%22%5D"] = JsonResponse(new JsonArray(new JsonObject
+        {
+            ["version_type"] = "release",
+            ["version_number"] = "1.0.0",
+            ["game_versions"] = new JsonArray("1.20.1"),
+            ["loaders"] = new JsonArray("fabric"),
+            ["dependencies"] = new JsonArray(),
+            ["files"] = new JsonArray(new JsonObject
+            {
+                ["primary"] = true,
+                ["url"] = "https://files.example/main.jar",
+                ["filename"] = "main.jar",
+                ["hashes"] = new JsonObject { ["sha1"] = Sha1(Encoding.UTF8.GetBytes("whatever")) },
+            }),
+        })),
+    };
+    var handler = new MidStreamFailureHandler(routes, "https://files.example/main.jar");
+    var service = new ResourceMarketService(new HttpClient(handler)) { ModrinthApiBase = "https://api.example/v2" };
+    Assert.Throws(() => service.InstallModrinthResourceAsync("main", "mod", "1.20.1", "fabric", temp.Path).GetAwaiter().GetResult());
+    Assert.False(File.Exists(Path.Combine(temp.Path, "main.jar")));
+    Assert.False(File.Exists(Path.Combine(temp.Path, "main.jar.part")));
+});
+
 runner.Add("Resource market removes corrupt file when checksum mismatches", () =>
 {
     using var temp = TempDir.Create();
@@ -2019,6 +2047,72 @@ internal sealed class FlakyHandler : HttpMessageHandler
             Content = new ByteArrayContent(_successBytes),
             RequestMessage = request,
         });
+    }
+}
+
+internal sealed class MidStreamFailureHandler : HttpMessageHandler
+{
+    private readonly IReadOnlyDictionary<string, HttpResponseMessage> _routes;
+    private readonly string _failUrl;
+
+    public MidStreamFailureHandler(IReadOnlyDictionary<string, HttpResponseMessage> routes, string failUrl)
+    {
+        _routes = routes;
+        _failUrl = failUrl;
+    }
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        var url = request.RequestUri!.ToString();
+        if (url == _failUrl)
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(new ThrowingStream()),
+                RequestMessage = request,
+            };
+            return Task.FromResult(response);
+        }
+
+        var key = request.RequestUri!.Host == "files.example" ? url : request.RequestUri!.PathAndQuery;
+        if (!_routes.TryGetValue(key, out var route))
+        {
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound) { RequestMessage = request });
+        }
+
+        var bytes = route.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult();
+        return Task.FromResult(new HttpResponseMessage(route.StatusCode)
+        {
+            Content = new ByteArrayContent(bytes),
+            RequestMessage = request,
+        });
+    }
+
+    private sealed class ThrowingStream : Stream
+    {
+        private int _emitted;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => 0; set => throw new NotSupportedException(); }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            if (_emitted == 0)
+            {
+                _emitted = Math.Min(4, count);
+                return _emitted;
+            }
+
+            throw new IOException("模拟网络中断");
+        }
+
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }
 

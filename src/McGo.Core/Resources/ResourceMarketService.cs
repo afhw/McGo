@@ -780,15 +780,29 @@ public sealed class ResourceMarketService
         response.EnsureSuccessStatusCode();
         var total = response.Content.Headers.ContentLength ?? 0;
         long downloaded = 0;
-        await using var input = await response.Content.ReadAsStreamAsync(cancellationToken);
-        await using var output = File.Create(filePath);
-        var buffer = new byte[128 * 1024];
-        int read;
-        while ((read = await input.ReadAsync(buffer, cancellationToken)) > 0)
+        // 先写临时文件，完成后再原子移动，避免网络中断残留半截文件（截图缓存也会因此误判为有效）。
+        var tempPath = filePath + ".part";
+        try
         {
-            await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
-            downloaded += read;
-            progress?.Report(new ResourceDownloadProgress(total > 0 ? Math.Min(1, (double)downloaded / total) : 0, phase, Path.GetFileName(filePath)));
+            await using (var input = await response.Content.ReadAsStreamAsync(cancellationToken))
+            await using (var output = File.Create(tempPath))
+            {
+                var buffer = new byte[128 * 1024];
+                int read;
+                while ((read = await input.ReadAsync(buffer, cancellationToken)) > 0)
+                {
+                    await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                    downloaded += read;
+                    progress?.Report(new ResourceDownloadProgress(total > 0 ? Math.Min(1, (double)downloaded / total) : 0, phase, Path.GetFileName(filePath)));
+                }
+            }
+
+            File.Move(tempPath, filePath, overwrite: true);
+        }
+        catch
+        {
+            TryDeleteFile(tempPath);
+            throw;
         }
 
         progress?.Report(new ResourceDownloadProgress(1, phase, Path.GetFileName(filePath)));
