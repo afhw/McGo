@@ -225,6 +225,38 @@ public sealed class ModpackService
             conflicts);
     }
 
+    private static readonly (string Title, string[] Keywords, string Advice)[] CrashRules =
+    [
+        ("Java 版本不兼容", ["unsupported class file major version", "has been compiled by a more recent version", "java.lang.unsupportedclassversionerror"],
+            "该整合包/Mod 需要不同的 Java 版本，请在 Java 管理页切换到匹配的版本后重试。"),
+        ("Mod 缺少依赖", ["mod requires", "requires version", "missing dependencies", "modresolutionexception", "requires mod", "requires the mod"],
+            "根据日志补齐缺失的前置 Mod，或在资源市场自动解析依赖后重新安装。"),
+        ("Mod 冲突或加载失败", ["failed to load mod", "mod loading has failed", "exception loading mod", "broken mod"],
+            "逐个禁用可疑 Mod 定位冲突项，确认所有 Mod 与当前游戏/加载器版本匹配。"),
+        ("Mixin 注入失败", ["mixin apply failed", "invalidmixinexception", "mixintransformererror", "mixinapplyerror"],
+            "通常由 Mod 版本不匹配或冲突引起，更新相关 Mod 或核对加载器版本。"),
+        ("重复或不兼容的 Mod", ["duplicate mod", "found a duplicate mod", "incompatiblemodset", "conflicting mod"],
+            "删除重复的 Mod jar，同一个 Mod 只保留一个版本。"),
+        ("显卡驱动 / OpenGL 问题", ["opengl", "glfw error", "pixel format not accelerated", "failed to create window", "lwjgl"],
+            "更新显卡驱动，安装/更新 Sodium 或 OptiFine，必要时关闭光影或降低画质。"),
+        ("原生库加载失败", ["unsatisfiedlinkerror", "failed to locate library", "no lwjgl in java.library.path", "openal"],
+            "在下载页对该版本执行“修复文件”，确认 natives 已正确解压。"),
+        ("内存不足", ["outofmemoryerror", "java heap space", "unable to allocate", "gc overhead limit"],
+            "在版本设置中增大最大内存(-Xmx)，或减少 Mod 数量与区块加载距离。"),
+        ("Java 位数或堆设置错误", ["could not reserve enough space for", "invalid maximum heap size", "32-bit"],
+            "改用 64 位 Java，或把最大内存调整到系统可分配的范围内。"),
+        ("认证或网络问题", ["invalid session", "connection timed out", "unknownhostexception", "failed to verify username", "authentication failed"],
+            "重新登录账号刷新令牌，检查网络连通性或下载镜像设置。"),
+        ("端口被占用", ["address already in use", "bindexception"],
+            "关闭占用该端口的程序，或更换服务器/联机端口后重试。"),
+        ("磁盘空间不足", ["no space left on device", "not enough space", "enospc"],
+            "清理磁盘空间后重试。"),
+        ("资源包或配置损坏", ["malformed", "jsonparseexception", "invalid byte", "could not parse", "unexpected character"],
+            "删除损坏的配置或资源包文件，或从整合包重新导入覆盖。"),
+        ("存档或世界损坏", ["failed to load level", "corrupted chunk", "leveldbexception"],
+            "先备份存档再尝试修复，可用区域文件工具排查损坏的区块。"),
+    ];
+
     public static string AnalyzeCrashLogs(string gameDir, string versionId, string runtimeDir)
     {
         var candidates = new List<string>();
@@ -239,25 +271,73 @@ public sealed class ModpackService
             }
         }
 
-        var unique = candidates.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var unique = candidates
+            .Select(Path.GetFullPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .ToList();
         if (unique.Count == 0) return "未找到 latest.log 或 crash-reports。";
-        var text = string.Join('\n', unique.Take(4).Select(path => File.ReadAllText(path)[^Math.Min(120000, File.ReadAllText(path).Length)..]));
-        var lowered = text.ToLowerInvariant();
-        var findings = new List<string>();
-        var patterns = new Dictionary<string, string[]>
+
+        var segments = new List<string>();
+        foreach (var path in unique.Take(4))
         {
-            ["Java 版本不兼容"] = ["unsupported class file major version", "has been compiled by a more recent version", "java.lang.unsupportedclassversionerror"],
-            ["Mod 缺少依赖"] = ["mod requires", "requires version", "missing dependencies", "modresolutionexception"],
-            ["Mod 冲突或加载失败"] = ["failed to load mod", "mod loading has failed", "exception loading mod", "mixin apply failed"],
-            ["显卡驱动/OpenGL 问题"] = ["opengl", "glfw error", "pixel format not accelerated", "lwjgl"],
-            ["内存不足"] = ["outofmemoryerror", "java heap space", "unable to allocate"],
-            ["认证或网络问题"] = ["authentication", "invalid session", "connection timed out", "unknownhostexception"],
-            ["资源包或配置损坏"] = ["malformed", "jsonparseexception", "invalid byte", "could not parse"],
-        };
-        findings.AddRange(patterns.Where(item => item.Value.Any(lowered.Contains)).Select(item => item.Key));
-        var result = new List<string> { $"分析文件：{unique.Count} 个", findings.Count > 0 ? "可能原因：" + string.Join("；", findings) : "未匹配到常见崩溃类型，请查看下方关键行。" };
+            try
+            {
+                var content = File.ReadAllText(path);
+                if (content.Length > 120000) content = content[^120000..];
+                segments.Add(content);
+            }
+            catch (Exception exc)
+            {
+                segments.Add($"[无法读取 {path}: {exc.Message}]");
+            }
+        }
+
+        var text = string.Join('\n', segments);
+        var lowered = text.ToLowerInvariant();
+        var findings = CrashRules.Where(rule => rule.Keywords.Any(lowered.Contains)).ToList();
+        var keyLines = ExtractKeyCrashLines(text);
+
+        var result = new List<string> { $"分析文件：{unique.Count} 个" };
+        if (findings.Count > 0)
+        {
+            result.Add("可能原因：" + string.Join("；", findings.Select(item => item.Title)));
+            result.Add("建议处理：");
+            result.AddRange(findings.Select(item => $"  - {item.Title}：{item.Advice}"));
+        }
+        else
+        {
+            result.Add("未匹配到常见崩溃类型，请查看下方关键行。");
+        }
+
+        if (keyLines.Count > 0)
+        {
+            result.Add("关键行：");
+            result.AddRange(keyLines.Select(line => "  " + line));
+        }
+
         result.Add($"最新文件：{unique[0]}");
         return string.Join('\n', result);
+    }
+
+    private static List<string> ExtractKeyCrashLines(string text)
+    {
+        var keyLines = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var raw in text.Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.Length is 0 or > 400) continue;
+            var isKey = line.StartsWith("Description:", StringComparison.OrdinalIgnoreCase)
+                || line.StartsWith("Caused by:", StringComparison.OrdinalIgnoreCase)
+                || line.StartsWith("Exception in thread", StringComparison.OrdinalIgnoreCase)
+                || Regex.IsMatch(line, @"(?:[a-z0-9_]+\.)+[A-Za-z0-9_$]*(?:Exception|Error)\b");
+            if (!isKey) continue;
+            if (seen.Add(line)) keyLines.Add(line);
+            if (keyLines.Count >= 6) break;
+        }
+
+        return keyLines;
     }
 
     private static (string Loader, string Version)? MatchLoader(string text, string key)

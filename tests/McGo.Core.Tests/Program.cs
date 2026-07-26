@@ -1046,6 +1046,45 @@ runner.Add("Modpack import preview reports overwrite conflicts", () =>
     Assert.Contains("config/demo.toml", preview.Conflicts);
 });
 
+runner.Add("Crash log analysis identifies causes, advice, and key lines", () =>
+{
+    using var temp = TempDir.Create();
+    var logsDir = Path.Combine(temp.Path, "logs");
+    Directory.CreateDirectory(logsDir);
+    File.WriteAllText(Path.Combine(logsDir, "latest.log"),
+        "[12:00:00] [main/INFO]: Starting game\n" +
+        "Exception in thread \"main\" java.lang.OutOfMemoryError: Java heap space\n" +
+        "\tat net.minecraft.client.main.Main.main(Main.java:1)\n" +
+        "Caused by: java.lang.OutOfMemoryError: Java heap space\n");
+
+    var report = ModpackService.AnalyzeCrashLogs(temp.Path, "1.20.1", "");
+    Assert.Contains("分析文件：1 个", report);
+    Assert.Contains("内存不足", report);
+    Assert.Contains("建议处理：", report);
+    Assert.Contains("最大内存", report);
+    Assert.Contains("关键行：", report);
+    Assert.Contains("java.lang.OutOfMemoryError", report);
+});
+
+runner.Add("Crash log analysis reports unknown crash gracefully", () =>
+{
+    using var temp = TempDir.Create();
+    var crashDir = Path.Combine(temp.Path, "crash-reports");
+    Directory.CreateDirectory(crashDir);
+    File.WriteAllText(Path.Combine(crashDir, "crash-2026.txt"),
+        "Description: Rendering screen overlay\nOnly ordinary log content here\n");
+
+    var report = ModpackService.AnalyzeCrashLogs(temp.Path, "1.20.1", "");
+    Assert.Contains("未匹配到常见崩溃类型", report);
+    Assert.Contains("Description: Rendering screen overlay", report);
+});
+
+runner.Add("Crash log analysis handles no logs", () =>
+{
+    using var temp = TempDir.Create();
+    Assert.Equal("未找到 latest.log 或 crash-reports。", ModpackService.AnalyzeCrashLogs(temp.Path, "1.20.1", ""));
+});
+
 runner.Add("Resource market dependency plan finds missing required dependencies", () =>
 {
     using var temp = TempDir.Create();
