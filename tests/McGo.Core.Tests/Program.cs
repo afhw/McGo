@@ -1647,6 +1647,34 @@ runner.Add("Resource market installs Modrinth resource with required dependency"
     Assert.SequenceEqual(["dep.jar"], result.DependenciesInstalled);
 });
 
+runner.Add("Resource market removes corrupt file when checksum mismatches", () =>
+{
+    using var temp = TempDir.Create();
+    // 声明的 sha1 与实际下载字节不符，安装应失败且不留下损坏文件。
+    var routes = new Dictionary<string, HttpResponseMessage>
+    {
+        ["/v2/project/main/version?game_versions=%5B%221.20.1%22%5D&loaders=%5B%22fabric%22%5D"] = JsonResponse(new JsonArray(new JsonObject
+        {
+            ["version_type"] = "release",
+            ["version_number"] = "1.0.0",
+            ["game_versions"] = new JsonArray("1.20.1"),
+            ["loaders"] = new JsonArray("fabric"),
+            ["dependencies"] = new JsonArray(),
+            ["files"] = new JsonArray(new JsonObject
+            {
+                ["primary"] = true,
+                ["url"] = "https://files.example/main.jar",
+                ["filename"] = "main.jar",
+                ["hashes"] = new JsonObject { ["sha1"] = Sha1(Encoding.UTF8.GetBytes("expected")) },
+            }),
+        })),
+        ["https://files.example/main.jar"] = BytesResponse(Encoding.UTF8.GetBytes("actual-different")),
+    };
+    var service = new ResourceMarketService(new HttpClient(new RoutingHandler(routes))) { ModrinthApiBase = "https://api.example/v2" };
+    Assert.Throws(() => service.InstallModrinthResourceAsync("main", "mod", "1.20.1", "fabric", temp.Path).GetAwaiter().GetResult());
+    Assert.False(File.Exists(Path.Combine(temp.Path, "main.jar")));
+});
+
 return runner.Run();
 
 static void WriteVersion(string root, string versionId, JsonObject data, bool jar = true)

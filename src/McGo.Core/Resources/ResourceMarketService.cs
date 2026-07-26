@@ -433,6 +433,8 @@ public sealed class ResourceMarketService
         var expectedSha1 = primary?["hashes"]?["sha1"]?.GetValue<string>() ?? "";
         if (!string.IsNullOrWhiteSpace(expectedSha1) && !FileUtilities.Sha1File(targetPath).Equals(expectedSha1, StringComparison.OrdinalIgnoreCase))
         {
+            // 校验失败必须删除损坏文件，否则残留在 mods 目录会污染下次启动或被误判为已安装。
+            TryDeleteFile(targetPath);
             throw new InvalidOperationException("资源文件 SHA1 校验失败。");
         }
 
@@ -790,6 +792,21 @@ public sealed class ResourceMarketService
         }
 
         progress?.Report(new ResourceDownloadProgress(1, phase, Path.GetFileName(filePath)));
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+            // 尽力清理，删除失败不应掩盖原始的校验失败异常。
+        }
     }
 }
 
