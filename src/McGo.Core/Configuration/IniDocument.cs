@@ -29,9 +29,9 @@ public sealed class IniDocument
                 continue;
             }
 
-            if (line.StartsWith('[') || line.EndsWith(']'))
+            if (line.StartsWith('['))
             {
-                if (!line.StartsWith('[') || !line.EndsWith(']') || line.Length <= 2)
+                if (!line.EndsWith(']') || line.Length <= 2)
                 {
                     throw new InvalidDataException($"Invalid INI section: {line}");
                 }

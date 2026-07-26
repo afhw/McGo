@@ -170,6 +170,18 @@ runner.Add("INI restores backup after truncated primary", () =>
     Assert.True(Directory.GetFiles(temp.Path, "launcher_config.ini.corrupt-*").Length == 1);
 });
 
+runner.Add("INI preserves values that contain or end with brackets", () =>
+{
+    using var temp = TempDir.Create();
+    var path = Path.Combine(temp.Path, "launcher_config.ini");
+    // 值中含等号且以 ']' 结尾:不应被误判为节头而导致整份配置被隔离。
+    File.WriteAllText(path, "[GAME]\njvm_args = -Dfoo=[bar]\nname = value]\n");
+
+    var document = IniDocument.Load(path);
+    Assert.Equal("-Dfoo=[bar]", document.Get("GAME", "jvm_args"));
+    Assert.Equal("value]", document.Get("GAME", "name"));
+});
+
 runner.Add("App settings migrate Python update manifest to CSharp manifest", () =>
 {
     using var temp = TempDir.Create();
