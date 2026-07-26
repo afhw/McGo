@@ -1182,6 +1182,42 @@ runner.Add("Modpack import reads mrpack overrides and downloads declared files",
     Assert.True(settings[result.Version]?["use_isolated_directory"]?.GetValue<bool>() == true);
 });
 
+runner.Add("Modpack import rejects path traversal in declared files", () =>
+{
+    using var temp = TempDir.Create();
+    var gameDir = Path.Combine(temp.Path, "game");
+    Directory.CreateDirectory(gameDir);
+    var packPath = Path.Combine(temp.Path, "evil.mrpack");
+    using (var archive = ZipFile.Open(packPath, ZipArchiveMode.Create))
+    {
+        var indexEntry = archive.CreateEntry("modrinth.index.json");
+        using var writer = new StreamWriter(indexEntry.Open());
+        writer.Write(new JsonObject
+        {
+            ["name"] = "Evil Pack",
+            ["dependencies"] = new JsonObject { ["minecraft"] = "1.20.1" },
+            // 越界路径应被 SafeJoin 拦截，记入缺失报告而非写到运行目录之外。
+            ["files"] = new JsonArray(new JsonObject
+            {
+                ["path"] = "../../evil.txt",
+                ["downloads"] = new JsonArray("https://files.example/evil.txt"),
+            }),
+        }.ToJsonString());
+    }
+
+    var routes = new Dictionary<string, HttpResponseMessage>
+    {
+        ["https://files.example/evil.txt"] = BytesResponse(Encoding.UTF8.GetBytes("pwned")),
+    };
+    var service = new ModpackService(httpClient: new HttpClient(new RoutingHandler(routes)));
+    var result = service.ImportModpackAsync(packPath, gameDir, new JsonObject()).GetAwaiter().GetResult();
+
+    Assert.Equal(0, result.FilesDownloaded);
+    Assert.Equal(1, result.MissingFiles);
+    Assert.False(File.Exists(Path.Combine(temp.Path, "evil.txt")));
+    Assert.False(File.Exists(Path.GetFullPath(Path.Combine(gameDir, "..", "..", "evil.txt"))));
+});
+
 runner.Add("Modpack import preview reports overwrite conflicts", () =>
 {
     using var temp = TempDir.Create();
