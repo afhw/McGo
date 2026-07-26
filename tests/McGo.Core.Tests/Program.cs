@@ -1029,6 +1029,27 @@ runner.Add("External auth downloads authlib injector and verifies sha256", () =>
     Assert.Equal("authlib", File.ReadAllText(result.Path));
 });
 
+runner.Add("External auth leaves no file when authlib injector sha256 mismatches", () =>
+{
+    using var temp = TempDir.Create();
+    var jarBytes = Encoding.UTF8.GetBytes("authlib");
+    var routes = new Dictionary<string, HttpResponseMessage>
+    {
+        ["/artifact/latest.json"] = JsonResponse(new JsonObject
+        {
+            ["version"] = "1.2.3",
+            ["download_url"] = "https://files.example/authlib.jar",
+            ["fileName"] = "authlib-injector.jar",
+            // 声明与实际不符的哈希，下载应失败且不留下 jar 或 .part 文件。
+            ["checksums"] = new JsonObject { ["sha256"] = Sha256(Encoding.UTF8.GetBytes("other")) },
+        }),
+        ["https://files.example/authlib.jar"] = BytesResponse(jarBytes),
+    };
+    var service = new ExternalAuthService(new HttpClient(new RoutingHandler(routes)));
+    Assert.Throws(() => service.DownloadAuthlibInjectorAsync(temp.Path).GetAwaiter().GetResult());
+    Assert.Equal(0, Directory.GetFiles(temp.Path).Length);
+});
+
 runner.Add("External auth refresh updates token and profile fields", () =>
 {
     var routes = new Dictionary<string, HttpResponseMessage>

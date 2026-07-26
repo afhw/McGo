@@ -208,22 +208,36 @@ public sealed class ExternalAuthService
         }
 
         var targetPath = Path.Combine(targetDir, filename);
-        using var response = await _httpClient.GetAsync(metadata.Url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        response.EnsureSuccessStatusCode();
-        await using (var input = await response.Content.ReadAsStreamAsync(cancellationToken))
-        await using (var output = File.Create(targetPath))
+        // 先写临时文件并校验，确认无误后再移动到目标，避免网络中断或校验失败残留损坏 jar。
+        var tempPath = targetPath + ".part";
+        try
         {
-            await input.CopyToAsync(output, cancellationToken);
-        }
-
-        if (!string.IsNullOrWhiteSpace(metadata.Sha256))
-        {
-            await using var file = File.OpenRead(targetPath);
-            var actual = Convert.ToHexString(await SHA256.HashDataAsync(file, cancellationToken)).ToLowerInvariant();
-            if (!actual.Equals(metadata.Sha256, StringComparison.OrdinalIgnoreCase))
+            using var response = await _httpClient.GetAsync(metadata.Url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            response.EnsureSuccessStatusCode();
+            await using (var input = await response.Content.ReadAsStreamAsync(cancellationToken))
+            await using (var output = File.Create(tempPath))
             {
-                throw new InvalidOperationException("authlib-injector SHA256 校验失败。");
+                await input.CopyToAsync(output, cancellationToken);
             }
+
+            if (!string.IsNullOrWhiteSpace(metadata.Sha256))
+            {
+                await using (var file = File.OpenRead(tempPath))
+                {
+                    var actual = Convert.ToHexString(await SHA256.HashDataAsync(file, cancellationToken)).ToLowerInvariant();
+                    if (!actual.Equals(metadata.Sha256, StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidOperationException("authlib-injector SHA256 校验失败。");
+                    }
+                }
+            }
+
+            File.Move(tempPath, targetPath, overwrite: true);
+        }
+        catch
+        {
+            TryDeleteFile(tempPath);
+            throw;
         }
 
         return new AuthlibInjectorDownloadResult(targetPath, metadata.Url, metadata.Sha256);
@@ -249,6 +263,21 @@ public sealed class ExternalAuthService
         }
 
         return [$"-javaagent:{injectorPath}={server}", $"-Dauthlibinjector.yggdrasil.prefetched={server}"];
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+            // 尽力清理，删除失败不应掩盖原始异常。
+        }
     }
 
     private static async Task RaiseForExternalAuthAsync(HttpResponseMessage response, string action, CancellationToken cancellationToken)
