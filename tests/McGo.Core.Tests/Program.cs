@@ -708,6 +708,25 @@ runner.Add("Downloader rewrites BMCLAPI maven urls", () =>
     Assert.Contains("https://bmclapi2.bangbang93.com/maven", rewritten);
 });
 
+runner.Add("Downloader rewrites all BMCLAPI mirror hosts", () =>
+{
+    // client.jar / assets index 走 piston-data，是镜像最需要覆盖的大文件。
+    Assert.Equal("https://bmclapi2.bangbang93.com/v1/objects/abc/client.jar",
+        DownloaderService.RewriteUrl("https://piston-data.mojang.com/v1/objects/abc/client.jar", "bmclapi"));
+    Assert.Equal("https://bmclapi2.bangbang93.com/mc/game/version_manifest_v2.json",
+        DownloaderService.RewriteUrl("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json", "bmclapi"));
+    Assert.Equal("https://bmclapi2.bangbang93.com/mc/launcher.json",
+        DownloaderService.RewriteUrl("https://launchermeta.mojang.com/mc/launcher.json", "bmclapi"));
+    Assert.Equal("https://bmclapi2.bangbang93.com/v1/objects/def/server.jar",
+        DownloaderService.RewriteUrl("https://launcher.mojang.com/v1/objects/def/server.jar", "bmclapi"));
+    Assert.Equal("https://bmclapi2.bangbang93.com/assets/ab/abcdef",
+        DownloaderService.RewriteUrl("https://resources.download.minecraft.net/ab/abcdef", "bmclapi"));
+    // launchermeta 不应被 launcher.mojang.com 规则误伤。
+    Assert.Equal("https://bmclapi2.bangbang93.com/x", DownloaderService.RewriteUrl("https://launchermeta.mojang.com/x", "bmclapi"));
+    // 非 bmclapi 源保持原样。
+    Assert.Equal("https://piston-data.mojang.com/a", DownloaderService.RewriteUrl("https://piston-data.mojang.com/a", "official"));
+});
+
 runner.Add("Downloader repair fills missing files and extracts natives", () =>
 {
     using var temp = TempDir.Create();
