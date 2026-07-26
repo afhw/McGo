@@ -605,6 +605,49 @@ runner.Add("Legacy manifest without explicit mode cannot replace CSharp client",
     Assert.False(UpdaterService.IsExplicitLegacyExecutableManifest(result));
 });
 
+runner.Add("Update manifest generation round-trips through fetch", () =>
+{
+    using var temp = TempDir.Create();
+    var artifact = Path.Combine(temp.Path, "McGo.exe");
+    File.WriteAllBytes(artifact, Encoding.ASCII.GetBytes("MZMcGo release artifact bytes"));
+    var expectedSha = UpdaterService.FileSha256(artifact);
+    var expectedSize = new FileInfo(artifact).Length;
+
+    var manifest = UpdaterService.BuildUpdateManifest(artifact, "2.1.0", "https://files.example/McGo.exe", installer: false, notes: "  首个发布  ");
+    Assert.Equal("2.1.0", manifest["version"]!.GetValue<string>());
+    Assert.Equal("https://files.example/McGo.exe", manifest["url"]!.GetValue<string>());
+    Assert.Equal(expectedSha, manifest["sha256"]!.GetValue<string>());
+    Assert.Equal(expectedSize, manifest["size"]!.GetValue<long>());
+    Assert.False(manifest["installer"]!.GetValue<bool>());
+    Assert.Equal("首个发布", manifest["notes"]!.GetValue<string>());
+
+    var fetched = new UpdaterService(new HttpClient(new JsonHandler(manifest)))
+        .FetchUpdateManifestAsync("https://files.example/update.json")
+        .GetAwaiter()
+        .GetResult();
+    Assert.Equal("2.1.0", fetched["version"]!.GetValue<string>());
+    Assert.Equal("https://files.example/McGo.exe", fetched["url"]!.GetValue<string>());
+    Assert.Equal(expectedSha, fetched["sha256"]!.GetValue<string>());
+    Assert.False(UpdaterService.IsInstallerManifest(fetched));
+
+    var outputPath = Path.Combine(temp.Path, "update.json");
+    var written = UpdaterService.WriteUpdateManifest(outputPath, artifact, "2.1.0", "https://files.example/McGo.exe", installer: true, notes: "");
+    Assert.True(File.Exists(written));
+    var reread = JsonNode.Parse(File.ReadAllText(written))!.AsObject();
+    Assert.True(reread["installer"]!.GetValue<bool>());
+    Assert.Equal(expectedSha, reread["sha256"]!.GetValue<string>());
+});
+
+runner.Add("Update manifest generation rejects invalid input", () =>
+{
+    using var temp = TempDir.Create();
+    var artifact = Path.Combine(temp.Path, "McGo.exe");
+    File.WriteAllText(artifact, "payload");
+    Assert.Throws(() => UpdaterService.BuildUpdateManifest(artifact, "", "https://files.example/McGo.exe"));
+    Assert.Throws(() => UpdaterService.BuildUpdateManifest(artifact, "1.0.0", "ftp://files.example/McGo.exe"));
+    Assert.Throws(() => UpdaterService.BuildUpdateManifest(Path.Combine(temp.Path, "missing.exe"), "1.0.0", "https://files.example/McGo.exe"));
+});
+
 runner.Add("Updater downloads verified executable", () =>
 {
     using var temp = TempDir.Create();

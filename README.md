@@ -23,6 +23,14 @@ dotnet run --project tests/McGo.Core.Tests/McGo.Core.Tests.csproj
 .\scripts\build_release.ps1
 ```
 
+发布并生成自更新清单 `dist/update.json`（供客户端“检查更新”消费）：
+
+```powershell
+.\scripts\build_release.ps1 -ReleaseVersion "2.1.0" -DownloadUrl "https://example.com/downloads/McGo.WinUI.exe" -ReleaseNotes "本次更新说明"
+```
+
+若下载地址指向安装器而非可直接替换的 exe，追加 `-Installer` 开关。清单包含 `version`、`url`、`sha256`、`size`、`installer`、`notes` 字段，与 `McGo.Core.Updates.UpdaterService` 的生成/消费逻辑一致。
+
 ## 文档导航
 
 - [快速开始与界面概览](docs/getting-started.md)

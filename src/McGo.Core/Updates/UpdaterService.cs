@@ -94,6 +94,56 @@ public sealed class UpdaterService
         return data;
     }
 
+    /// <summary>
+    /// 依据发布产物生成更新清单对象，字段与 <see cref="FetchUpdateManifestAsync"/> 消费的格式一致，
+    /// 供发布流程写出 <c>update.json</c>。会计算 SHA256、文件大小并校验下载地址。
+    /// </summary>
+    public static JsonObject BuildUpdateManifest(string artifactPath, string version, string downloadUrl, bool installer = false, string? notes = null)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+        {
+            throw new InvalidOperationException("生成更新清单需要 version。");
+        }
+
+        if (string.IsNullOrWhiteSpace(artifactPath) || !File.Exists(artifactPath))
+        {
+            throw new FileNotFoundException("找不到用于生成更新清单的发布文件。", artifactPath ?? "");
+        }
+
+        ValidateDownloadUrl(downloadUrl?.Trim() ?? "");
+        var size = new FileInfo(artifactPath).Length;
+        if (size <= 0)
+        {
+            throw new InvalidOperationException("发布文件为空，无法生成更新清单。");
+        }
+
+        return new JsonObject
+        {
+            ["version"] = version.Trim(),
+            ["url"] = downloadUrl!.Trim(),
+            ["sha256"] = FileSha256(artifactPath),
+            ["size"] = size,
+            ["installer"] = installer,
+            ["notes"] = (notes ?? "").Trim(),
+        };
+    }
+
+    /// <summary>
+    /// 生成更新清单并写入磁盘（UTF-8，无 BOM），返回写出的完整路径。
+    /// </summary>
+    public static string WriteUpdateManifest(string outputPath, string artifactPath, string version, string downloadUrl, bool installer = false, string? notes = null)
+    {
+        var manifest = BuildUpdateManifest(artifactPath, version, downloadUrl, installer, notes);
+        var directory = Path.GetDirectoryName(Path.GetFullPath(outputPath));
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        File.WriteAllText(outputPath, manifest.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+        return Path.GetFullPath(outputPath);
+    }
+
     public async Task<JsonObject> CheckForUpdateAsync(string manifestUrl, string currentVersion, Func<string>? currentBuildSha256 = null, CancellationToken cancellationToken = default)
     {
         var manifest = await FetchUpdateManifestAsync(manifestUrl, cancellationToken);
