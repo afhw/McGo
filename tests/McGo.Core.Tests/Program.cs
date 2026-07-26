@@ -863,6 +863,39 @@ runner.Add("Downloader repair fills missing files and extracts natives", () =>
     Assert.Equal(0, DownloaderService.CollectMissingGameFiles(versionJson, gameDir, versionId).Count);
 });
 
+runner.Add("Downloader retries transient failures before succeeding", () =>
+{
+    using var temp = TempDir.Create();
+    var payload = Encoding.UTF8.GetBytes("payload-bytes");
+    var targetPath = Path.Combine(temp.Path, "sub", "demo.bin");
+    // 前两次返回 503，第三次成功；下载应通过重试完成。
+    var handler = new FlakyHandler(failuresBeforeSuccess: 2, BytesResponse(payload));
+    var service = new DownloaderService(new HttpClient(handler));
+    var job = new DownloadJob("https://files.example/demo.bin", targetPath, Sha1(payload), payload.Length, "asset");
+    var summary = service.DownloadJobsAsync([job]).GetAwaiter().GetResult();
+
+    Assert.Equal(1, summary.CompletedJobs);
+    Assert.Equal(3, handler.Attempts);
+    Assert.True(File.Exists(targetPath));
+    Assert.Equal(Sha1(payload), McGo.Core.Utilities.FileUtilities.Sha1File(targetPath));
+    Assert.False(File.Exists(targetPath + ".download"));
+});
+
+runner.Add("Downloader gives up after exhausting retries", () =>
+{
+    using var temp = TempDir.Create();
+    var payload = Encoding.UTF8.GetBytes("never-served");
+    var targetPath = Path.Combine(temp.Path, "demo.bin");
+    // 一直返回 503，重试耗尽后应抛出且不留下临时文件。
+    var handler = new FlakyHandler(failuresBeforeSuccess: 99, BytesResponse(payload));
+    var service = new DownloaderService(new HttpClient(handler));
+    var job = new DownloadJob("https://files.example/demo.bin", targetPath, Sha1(payload), payload.Length, "asset");
+    Assert.Throws(() => service.DownloadJobsAsync([job]).GetAwaiter().GetResult());
+    Assert.Equal(3, handler.Attempts);
+    Assert.False(File.Exists(targetPath));
+    Assert.False(File.Exists(targetPath + ".download"));
+});
+
 runner.Add("Capsule file filter excludes sensitive files", () =>
 {
     Assert.True(CapsuleService.ShouldIncludeCapsuleFile("mods/demo.jar"));
@@ -1888,6 +1921,40 @@ internal sealed class RoutingHandler : HttpMessageHandler
         }
 
         return clone;
+    }
+}
+
+internal sealed class FlakyHandler : HttpMessageHandler
+{
+    private readonly int _failuresBeforeSuccess;
+    private readonly byte[] _successBytes;
+    private int _attempts;
+
+    public FlakyHandler(int failuresBeforeSuccess, HttpResponseMessage success)
+    {
+        _failuresBeforeSuccess = failuresBeforeSuccess;
+        _successBytes = success.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult();
+    }
+
+    public int Attempts => _attempts;
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        var attempt = Interlocked.Increment(ref _attempts);
+        if (attempt <= _failuresBeforeSuccess)
+        {
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+            {
+                Content = new StringContent("temporarily unavailable"),
+                RequestMessage = request,
+            });
+        }
+
+        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(_successBytes),
+            RequestMessage = request,
+        });
     }
 }
 

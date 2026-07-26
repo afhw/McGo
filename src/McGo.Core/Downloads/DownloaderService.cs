@@ -203,12 +203,30 @@ public sealed class DownloaderService
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(job.TargetPath) ?? ".");
-            using var response = await _httpClient.GetAsync(job.Url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-            response.EnsureSuccessStatusCode();
-            await using var input = await response.Content.ReadAsStreamAsync(cancellationToken);
-            var tempPath = job.TargetPath + ".download";
+            var jobBytes = await DownloadSingleJobAsync(job, cancellationToken);
+            downloadedBytes += jobBytes;
+            completed++;
+            progress?.Report(new DownloadProgress(completed, list.Count, reused, downloadedBytes, job.TargetPath, job.Kind, list.Count == 0 ? 1 : (double)completed / list.Count));
+        }
+
+        return new DownloadSummary(list.Count, completed, reused, downloadedBytes);
+    }
+
+    // 单个下载任务：失败时按有限次数重试，返回本任务成功写入的字节数。
+    // 取消不重试；瞬时网络/IO 错误与校验失败均可重试，最后一次仍失败则抛出。
+    private async Task<long> DownloadSingleJobAsync(DownloadJob job, CancellationToken cancellationToken)
+    {
+        const int maxAttempts = 3;
+        var tempPath = job.TargetPath + ".download";
+        for (var attempt = 1; ; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var jobBytes = 0L;
             try
             {
+                using var response = await _httpClient.GetAsync(job.Url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                response.EnsureSuccessStatusCode();
+                await using (var input = await response.Content.ReadAsStreamAsync(cancellationToken))
                 await using (var output = File.Create(tempPath))
                 {
                     var buffer = new byte[128 * 1024];
@@ -216,7 +234,7 @@ public sealed class DownloaderService
                     while ((read = await input.ReadAsync(buffer, cancellationToken)) > 0)
                     {
                         await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
-                        downloadedBytes += read;
+                        jobBytes += read;
                     }
                 }
 
@@ -226,18 +244,24 @@ public sealed class DownloaderService
                 }
 
                 File.Move(tempPath, job.TargetPath, overwrite: true);
+                return jobBytes;
+            }
+            catch (OperationCanceledException)
+            {
+                TryDelete(tempPath);
+                throw;
+            }
+            catch when (attempt < maxAttempts)
+            {
+                TryDelete(tempPath);
+                await Task.Delay(TimeSpan.FromMilliseconds(300 * attempt), cancellationToken);
             }
             catch
             {
                 TryDelete(tempPath);
                 throw;
             }
-
-            completed++;
-            progress?.Report(new DownloadProgress(completed, list.Count, reused, downloadedBytes, job.TargetPath, job.Kind, list.Count == 0 ? 1 : (double)completed / list.Count));
         }
-
-        return new DownloadSummary(list.Count, completed, reused, downloadedBytes);
     }
 
     public async Task<DownloadSummary> DownloadGameFilesAsync(JsonObject versionJson, string gameDirectory, string versionId, string mirrorSource, bool includeAssets = true, IProgress<DownloadProgress>? progress = null, CancellationToken cancellationToken = default)
