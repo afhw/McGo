@@ -29,6 +29,22 @@ public sealed class ResourceMarketService
         _httpClient = httpClient ?? new HttpClient();
     }
 
+    // 将单/复数别名归一到 Modrinth 的规范 project_type，
+    // 与 ResourceExtensions、ResourceDirectoryForType 接受的取值保持一致。
+    public static string NormalizeResourceType(string resourceType)
+        => (resourceType ?? "").Trim().ToLowerInvariant() switch
+        {
+            "mod" or "mods" => "mod",
+            "resourcepack" or "resourcepacks" => "resourcepack",
+            "shader" or "shaderpack" or "shaderpacks" => "shader",
+            "datapack" or "datapacks" => "datapack",
+            var other => other,
+        };
+
+    // Mod 是唯一按加载器筛选的资源类型。
+    private static bool IsModResourceType(string resourceType)
+        => NormalizeResourceType(resourceType) == "mod";
+
     public string ModrinthApiUrl(string path)
         => $"{ModrinthApiBase.TrimEnd('/')}/{path.TrimStart('/')}";
 
@@ -104,7 +120,7 @@ public sealed class ResourceMarketService
         var facets = new List<string>();
         if (!string.IsNullOrWhiteSpace(resourceType))
         {
-            facets.Add($"[\"project_type:{resourceType}\"]");
+            facets.Add($"[\"project_type:{NormalizeResourceType(resourceType)}\"]");
         }
 
         if (!string.IsNullOrWhiteSpace(gameVersion))
@@ -112,7 +128,7 @@ public sealed class ResourceMarketService
             facets.Add($"[\"versions:{gameVersion}\"]");
         }
 
-        if (resourceType == "mod" && !string.IsNullOrWhiteSpace(loader))
+        if (IsModResourceType(resourceType) && !string.IsNullOrWhiteSpace(loader))
         {
             facets.Add($"[\"categories:{loader}\"]");
         }
@@ -141,7 +157,7 @@ public sealed class ResourceMarketService
             query.Add("game_versions=" + Uri.EscapeDataString("[\"" + gameVersion + "\"]"));
         }
 
-        if (resourceType == "mod" && !string.IsNullOrWhiteSpace(loader))
+        if (IsModResourceType(resourceType) && !string.IsNullOrWhiteSpace(loader))
         {
             query.Add("loaders=" + Uri.EscapeDataString("[\"" + loader + "\"]"));
         }
@@ -168,7 +184,7 @@ public sealed class ResourceMarketService
             return false;
         }
 
-        if (resourceType == "mod" && !string.IsNullOrWhiteSpace(loader) && !loaders.Contains(loader.ToLowerInvariant()))
+        if (IsModResourceType(resourceType) && !string.IsNullOrWhiteSpace(loader) && !loaders.Contains(loader.ToLowerInvariant()))
         {
             return false;
         }
@@ -189,7 +205,7 @@ public sealed class ResourceMarketService
             }
         }
 
-        if (resourceType == "mod" && !string.IsNullOrWhiteSpace(loader))
+        if (IsModResourceType(resourceType) && !string.IsNullOrWhiteSpace(loader))
         {
             var categories = hit["categories"]?.AsArray()
                 .Select(item => item?.GetValue<string>()?.ToLowerInvariant() ?? "")
@@ -255,7 +271,7 @@ public sealed class ResourceMarketService
         }
 
         var target = string.IsNullOrWhiteSpace(gameVersion) ? "当前 Minecraft 版本" : $"Minecraft {gameVersion}";
-        if (resourceType == "mod" && !string.IsNullOrWhiteSpace(loader))
+        if (IsModResourceType(resourceType) && !string.IsNullOrWhiteSpace(loader))
         {
             target += $" / {loader}";
         }

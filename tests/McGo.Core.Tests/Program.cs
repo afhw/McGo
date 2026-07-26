@@ -1175,6 +1175,26 @@ runner.Add("Resource market applies Modrinth API and CDN bases", () =>
     Assert.Equal("https://files.example/file.jar", service.RewriteModrinthDownloadUrl("https://files.example/file.jar"));
 });
 
+runner.Add("Resource market normalizes plural type and keeps loader facet", () =>
+{
+    Assert.Equal("mod", ResourceMarketService.NormalizeResourceType("mods"));
+    Assert.Equal("resourcepack", ResourceMarketService.NormalizeResourceType("resourcepacks"));
+    Assert.Equal("shader", ResourceMarketService.NormalizeResourceType("shaderpacks"));
+    Assert.Equal("datapack", ResourceMarketService.NormalizeResourceType("datapacks"));
+
+    // 复数 "mods" 必须归一为 Modrinth 规范 project_type:mod，同时仍应用 categories:fabric 加载器 facet。
+    var routes = new Dictionary<string, HttpResponseMessage>
+    {
+        ["/v2/search?query=sodium&limit=25&index=relevance&facets=%5B%5B%22project_type%3Amod%22%5D%2C%5B%22categories%3Afabric%22%5D%5D"] = JsonResponse(new JsonObject
+        {
+            ["hits"] = new JsonArray(new JsonObject { ["project_id"] = "sodium" }),
+        }),
+    };
+    var service = new ResourceMarketService(new HttpClient(new RoutingHandler(routes)));
+    var hits = service.SearchModrinthResourcesStrictAsync("sodium", "mods", "", "fabric").GetAwaiter().GetResult();
+    Assert.Equal("sodium", hits[0]?["project_id"]?.GetValue<string>());
+});
+
 runner.Add("Resource market loads Modrinth detail and compatibility", () =>
 {
     var screenshotBytes = Encoding.UTF8.GetBytes("fake image");
