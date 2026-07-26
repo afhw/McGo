@@ -1716,6 +1716,32 @@ runner.Add("Install services parse Forge promos and NeoForge/OptiFine helpers", 
     Assert.Equal("OptiFine_1.20.1_HD_U_I5.jar", selected?["filename"]?.GetValue<string>());
 });
 
+runner.Add("Install services resolve maven library path with classifier and extension", () =>
+{
+    var sep = Path.DirectorySeparatorChar;
+
+    // 三段坐标:与旧实现一致。
+    Assert.Equal(
+        string.Join(sep, "com", "example", "demo", "1.0", "demo-1.0.jar"),
+        InstallServices.LibraryRelativePath("com.example:demo:1.0"));
+
+    // 带 classifier 的坐标(Forge/NeoForge 安装器常见):旧实现返回 null 会被静默跳过,
+    // 现应解析为 artifact-version-classifier.jar,且与启动侧解析保持一致。
+    var classified = InstallServices.LibraryRelativePath("net.minecraftforge:forge:1.20.1-47.2.0:universal");
+    Assert.Equal(
+        string.Join(sep, "net", "minecraftforge", "forge", "1.20.1-47.2.0", "forge-1.20.1-47.2.0-universal.jar"),
+        classified);
+    Assert.Equal(McGo.Core.Minecraft.LauncherService.MavenLibraryPath("net.minecraftforge:forge:1.20.1-47.2.0:universal"), classified);
+
+    // 带扩展名的坐标(第五段)也应被支持。
+    Assert.Equal(
+        string.Join(sep, "de", "oceanlabs", "mcp", "mcp_config", "1.20.1", "mcp_config-1.20.1-mappings.txt"),
+        InstallServices.LibraryRelativePath("de.oceanlabs.mcp:mcp_config:1.20.1:mappings:txt"));
+
+    // 非法坐标仍返回 null。
+    Assert.True(InstallServices.LibraryRelativePath("invalid-coordinate") is null);
+});
+
 runner.Add("Resource market installs Modrinth resource with required dependency", () =>
 {
     using var temp = TempDir.Create();

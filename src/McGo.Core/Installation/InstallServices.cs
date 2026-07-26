@@ -177,11 +177,10 @@ public sealed class InstallServices
     }
 
     public static string? LibraryRelativePath(string libraryName)
-    {
-        var parts = libraryName.Split(':');
-        if (parts.Length != 3) return null;
-        return Path.Combine([.. parts[0].Split('.'), parts[1], parts[2], $"{parts[1]}-{parts[2]}.jar"]);
-    }
+        // 复用启动/下载侧同一份 Maven 坐标解析,支持 classifier 与扩展名
+        // (如 group:artifact:version:universal),避免带 classifier 的
+        // 安装器依赖被判为 null 而在安装时被静默跳过,导致模组加载器缺库。
+        => McGo.Core.Minecraft.LauncherService.MavenLibraryPath(libraryName);
 
     public static string MirrorLibraryBase(string libraryUrl, string mirrorSource)
     {
