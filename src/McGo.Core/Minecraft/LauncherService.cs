@@ -317,8 +317,11 @@ public sealed class LauncherService
         {
             foreach (var library in versionJson["libraries"]?.AsArray().OfType<JsonObject>() ?? [])
             {
-                var key = library["name"]?.GetValue<string>()
-                          ?? library["downloads"]?["artifact"]?["path"]?.GetValue<string>();
+                // 以模块标识(group:artifact[:classifier],不含版本)去重,使加载器提升的
+                // 依赖版本覆盖父级(原版)的旧版本;否则同一库的两个版本会同时进入 classpath,
+                // 且原版旧版排在前面被 JVM 优先加载,导致 NoSuchMethodError 之类的启动崩溃。
+                // natives 等带 classifier 的构件因保留 classifier 而不会被误合并。
+                var key = LibraryModuleKey(library);
                 if (!string.IsNullOrWhiteSpace(key))
                 {
                     libraries[key] = JsonNode.Parse(library.ToJsonString())!.AsObject();
@@ -351,6 +354,28 @@ public sealed class LauncherService
 
         resolved["libraries"] = new JsonArray(libraries.Values.Select(item => JsonNode.Parse(item.ToJsonString())).ToArray());
         return resolved;
+    }
+
+    // 计算库的去重键:优先按 Maven 模块标识(group:artifact[:classifier],剔除版本与扩展名),
+    // 无 name 时退回 downloads.artifact.path,坐标非常规时退回原始 name。
+    private static string? LibraryModuleKey(JsonObject library)
+    {
+        var name = library["name"]?.GetValue<string>();
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            var at = name.IndexOf('@');
+            var core = at >= 0 ? name[..at] : name;
+            var parts = core.Split(':');
+            if (parts.Length >= 3)
+            {
+                var key = $"{parts[0]}:{parts[1]}";
+                return parts.Length >= 4 ? $"{key}:{parts[3]}" : key;
+            }
+
+            return name;
+        }
+
+        return library["downloads"]?["artifact"]?["path"]?.GetValue<string>();
     }
 
     private static void AppendArray(JsonArray target, JsonArray? source)

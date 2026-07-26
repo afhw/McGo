@@ -531,6 +531,53 @@ runner.Add("Launcher builds command with runtime and memory", () =>
     Assert.Contains(string.Join(Path.PathSeparator, [libraryPath, Path.Combine(temp.Path, "versions", "1.20.1", "1.20.1.jar")]), command);
 });
 
+runner.Add("Launcher dedupes inherited libraries by module and keeps loader version", () =>
+{
+    using var temp = TempDir.Create();
+
+    string MakeJar(string relative)
+    {
+        var path = Path.Combine(temp.Path, "libraries", relative.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllBytes(path, [1]);
+        return path;
+    }
+
+    // 父级(原版)带旧版 guava 与一个 windows natives;子级(加载器)提升 guava 版本。
+    var vanillaGuava = MakeJar("com/google/guava/guava/21.0/guava-21.0.jar");
+    var loaderGuava = MakeJar("com/google/guava/guava/31.1/guava-31.1.jar");
+    var nativeJar = MakeJar("org/lwjgl/lwjgl/3.3.1/lwjgl-3.3.1-natives-windows.jar");
+
+    WriteVersion(temp.Path, "1.20.1", new JsonObject
+    {
+        ["mainClass"] = "net.minecraft.client.main.Main",
+        ["assetIndex"] = new JsonObject { ["id"] = "1" },
+        ["libraries"] = new JsonArray
+        {
+            new JsonObject { ["name"] = "com.google.guava:guava:21.0" },
+            new JsonObject { ["name"] = "org.lwjgl:lwjgl:3.3.1:natives-windows" },
+        },
+    }, jar: true);
+    WriteVersion(temp.Path, "fabric-loader-1.20.1", new JsonObject
+    {
+        ["inheritsFrom"] = "1.20.1",
+        ["mainClass"] = "net.fabricmc.loader.impl.launch.knot.KnotClient",
+        ["libraries"] = new JsonArray
+        {
+            new JsonObject { ["name"] = "com.google.guava:guava:31.1" },
+        },
+    }, jar: false);
+
+    var command = new LauncherService().BuildLaunchCommand(new LaunchOptions("java", "fabric-loader-1.20.1", temp.Path));
+    var classpath = command[command.IndexOf("-cp") + 1];
+
+    // 加载器提升的 guava 31.1 应在 classpath 中,原版旧版 guava 21.0 不应出现。
+    Assert.True(classpath.Contains(loaderGuava, StringComparison.Ordinal));
+    Assert.False(classpath.Contains(vanillaGuava, StringComparison.Ordinal));
+    // 带 classifier 的 natives 构件不会被误合并,仍应保留。
+    Assert.True(classpath.Contains(nativeJar, StringComparison.Ordinal));
+});
+
 runner.Add("Launch script quotes command and sanitizes filename", () =>
 {
     var script = LaunchScriptService.BuildWindowsBatchScript(
