@@ -615,11 +615,40 @@ public sealed class ModpackService
     private async Task DownloadFileAsync(string url, string targetPath, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
-        using var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        response.EnsureSuccessStatusCode();
-        await using var input = await response.Content.ReadAsStreamAsync(cancellationToken);
-        await using var output = File.Create(targetPath);
-        await input.CopyToAsync(output, cancellationToken);
+        // 先写临时文件再原子移动，避免下载失败在整合包目录残留半截文件。
+        var tempPath = targetPath + ".part";
+        try
+        {
+            using var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            response.EnsureSuccessStatusCode();
+            await using (var input = await response.Content.ReadAsStreamAsync(cancellationToken))
+            await using (var output = File.Create(tempPath))
+            {
+                await input.CopyToAsync(output, cancellationToken);
+            }
+
+            File.Move(tempPath, targetPath, overwrite: true);
+        }
+        catch
+        {
+            TryDeleteFile(tempPath);
+            throw;
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+            // 尽力清理，删除失败不应掩盖原始异常。
+        }
     }
 
     private static string WriteMissingReport(string gameDir, string versionId, JsonArray missing)

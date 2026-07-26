@@ -1205,6 +1205,36 @@ runner.Add("Modpack import reads mrpack overrides and downloads declared files",
     Assert.True(settings[result.Version]?["use_isolated_directory"]?.GetValue<bool>() == true);
 });
 
+runner.Add("Modpack import leaves no partial file when declared download fails", () =>
+{
+    using var temp = TempDir.Create();
+    var gameDir = Path.Combine(temp.Path, "game");
+    Directory.CreateDirectory(gameDir);
+    var packPath = Path.Combine(temp.Path, "demo.mrpack");
+    using (var archive = ZipFile.Open(packPath, ZipArchiveMode.Create))
+    {
+        var indexEntry = archive.CreateEntry("modrinth.index.json");
+        using var writer = new StreamWriter(indexEntry.Open());
+        writer.Write(new JsonObject
+        {
+            ["name"] = "Demo Pack",
+            ["dependencies"] = new JsonObject { ["minecraft"] = "1.20.1" },
+            // 下载地址未在路由表中，会返回 404 触发失败：应记入缺失且不残留 .part。
+            ["files"] = new JsonArray(new JsonObject
+            {
+                ["path"] = "mods/demo.jar",
+                ["downloads"] = new JsonArray("https://files.example/missing.jar"),
+            }),
+        }.ToJsonString());
+    }
+
+    var service = new ModpackService(httpClient: new HttpClient(new RoutingHandler(new Dictionary<string, HttpResponseMessage>())));
+    var result = service.ImportModpackAsync(packPath, gameDir, new JsonObject()).GetAwaiter().GetResult();
+    Assert.Equal(0, result.FilesDownloaded);
+    Assert.Equal(1, result.MissingFiles);
+    Assert.Equal(0, Directory.EnumerateFiles(gameDir, "*.part", SearchOption.AllDirectories).Count());
+});
+
 runner.Add("Modpack import rejects path traversal in declared files", () =>
 {
     using var temp = TempDir.Create();
