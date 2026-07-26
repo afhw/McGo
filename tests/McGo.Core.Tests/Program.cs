@@ -440,6 +440,26 @@ runner.Add("Launcher infers Java baseline by Minecraft generation", () =>
     Assert.Equal(21, launcher.InferRequiredJavaVersion(temp.Path, "1.21"));
 });
 
+runner.Add("Launcher ignores loader prefix when inferring Java baseline", () =>
+{
+    using var temp = TempDir.Create();
+    // fabric-loader-0.16.0-1.21.1 的前缀 0.16 不能被当成 MC 版本，否则会误判为 Java 8。
+    WriteVersion(temp.Path, "fabric-loader-0.16.0-1.21.1", new JsonObject
+    {
+        ["libraries"] = new JsonArray(),
+        ["mainClass"] = "net.fabricmc.loader.impl.launch.knot.KnotClient",
+    });
+    WriteVersion(temp.Path, "1.20.1-forge-47.2.0", new JsonObject
+    {
+        ["libraries"] = new JsonArray(),
+        ["mainClass"] = "cpw.mods.bootstraplauncher.BootstrapLauncher",
+    });
+
+    var launcher = new LauncherService();
+    Assert.Equal(21, launcher.InferRequiredJavaVersion(temp.Path, "fabric-loader-0.16.0-1.21.1"));
+    Assert.Equal(17, launcher.InferRequiredJavaVersion(temp.Path, "1.20.1-forge-47.2.0"));
+});
+
 runner.Add("Launcher builds command with runtime and memory", () =>
 {
     using var temp = TempDir.Create();

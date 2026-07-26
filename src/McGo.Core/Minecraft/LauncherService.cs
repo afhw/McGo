@@ -145,13 +145,14 @@ public sealed class LauncherService
     public int InferRequiredJavaVersion(string gameDirectory, string versionId)
     {
         var baseline = 17;
-        var match = Regex.Match(versionId.ToLowerInvariant(), @"(\d+)\.(\d+)");
-        if (match.Success)
+        // 只匹配形如 1.20 / 1.20.1 的 Minecraft 版本号，避免被 loader 版本号误导，
+        // 例如 fabric-loader-0.16.0-1.20.1 不能被前缀的 0.16 当成 MC 版本。
+        var matches = Regex.Matches(versionId.ToLowerInvariant(), @"1\.(\d+)(?:\.\d+)?");
+        if (matches.Count > 0)
         {
-            var major = int.Parse(match.Groups[1].Value);
-            var minor = int.Parse(match.Groups[2].Value);
+            var minor = matches.Cast<Match>().Max(item => int.Parse(item.Groups[1].Value));
             // Java 需求门槛：1.17+ 需要 Java 17，1.21+ 需要 Java 21，1.16 及更早使用 Java 8。
-            baseline = major > 1 || minor >= 21 ? 21 : minor >= 17 ? 17 : 8;
+            baseline = minor >= 21 ? 21 : minor >= 17 ? 17 : 8;
         }
 
         int? highestDeclared = null;
