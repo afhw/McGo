@@ -1,8 +1,8 @@
 ﻿{
   "version": "1.1.1",
   "url": "/download/McGo-CSharp-Preview-x64-Setup.exe",
-  "size": 85333666,
-  "sha256": "ef5ea625d6c2ea58665e19a4001892dc78dba36293eb99934d9563f5ff23a01b",
+  "size": 87821862,
+  "sha256": "5295d6dde9140f87db59ee4ab6b0e19201a6ca2dcfbd73ca1f9908c5b53e821e",
   "installer": true,
   "product": "mcgo-winui",
   "notes": "McGo C# WinUI 3 preview"

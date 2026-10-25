@@ -16,6 +16,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <Version>1.1.1</Version>
+    <!-- 显式指定：仅设 Version 不会把 FileVersion/AssemblyVersion 带进 exe 属性 -->
+    <AssemblyVersion>1.1.1.0</AssemblyVersion>
+    <FileVersion>1.1.1.0</FileVersion>
+    <ProductVersion>1.1.1</ProductVersion>
+    <InformationalVersion>1.1.1</InformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>
