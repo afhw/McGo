@@ -7,218 +7,469 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     NavigationCacheMode="Required"
     mc:Ignorable="d">
-    <ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled" HorizontalContentAlignment="Stretch">
-        <StackPanel x:Name="ResponsiveLayoutRoot" Padding="24,18,24,24" Spacing="16" MaxWidth="1160" HorizontalAlignment="Stretch">
-            <StackPanel Spacing="4">
-                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="下载" />
-                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="选择一个下载任务，完成游戏、加载器和资源安装。" TextWrapping="Wrap" />
+    <ScrollViewer
+        HorizontalScrollBarVisibility="Disabled"
+        HorizontalContentAlignment="Stretch"
+        HorizontalScrollMode="Disabled"
+        VerticalContentAlignment="Top"
+        VerticalScrollBarVisibility="Auto"
+        VerticalScrollMode="Auto">
+        <Grid
+            x:Name="ResponsiveLayoutRoot"
+            HorizontalAlignment="Stretch"
+            Padding="24,20,24,28"
+            ColumnSpacing="18"
+            RowSpacing="16"
+            SizeChanged="DownloadRootSizeChanged">
+
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition x:Name="DownloadPrimaryColumn" Width="*" />
+                <ColumnDefinition x:Name="DownloadSideColumn" Width="320" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <StackPanel x:Name="DownloadPageHeader" Spacing="3">
+                <TextBlock Style="{StaticResource McgoPageTitleStyle}" Text="下载" />
+                <TextBlock Style="{StaticResource McgoPageSubtitleStyle}" Text="选一个版本装下来，加载器可以顺手一起装。" />
             </StackPanel>
 
-            <StackPanel Spacing="8">
-                <StackPanel Spacing="3">
-                    <TextBlock Text="下载任务" FontSize="22" FontWeight="SemiBold" />
-                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="一次只处理一种任务；资源和整合包会进入对应工作区。" TextWrapping="Wrap" />
-                </StackPanel>
-                <SelectorBar x:Name="DownloadSectionBar" SelectionChanged="DownloadSectionChanged">
-                    <SelectorBarItem Text="下载原版" Tag="vanilla" />
-                    <SelectorBarItem Text="安装扩展" Tag="addons" />
-                    <SelectorBarItem Text="资源市场" Tag="resources" />
-                    <SelectorBarItem Text="导入整合包" Tag="modpacks" />
-                    <SelectorBarItem Text="任务管理" Tag="tasks" />
-                </SelectorBar>
+            <SelectorBar
+                x:Name="DownloadSectionBar"
+                Grid.Row="1"
+                Grid.ColumnSpan="2"
+                Margin="0,10,0,0"
+                SelectionChanged="DownloadSectionChanged">
+                <SelectorBarItem Text="下载游戏" Tag="vanilla" />
+                <SelectorBarItem Text="安装扩展" Tag="addons" />
+                <SelectorBarItem Text="资源市场" Tag="resources" />
+                <SelectorBarItem Text="导入整合包" Tag="modpacks" />
+                <SelectorBarItem Text="任务管理" Tag="tasks" />
+            </SelectorBar>
+
+            <!--  ==================== 下载原版 ====================  -->
+            <StackPanel
+                x:Name="DownloadVanillaPanel"
+                Grid.Row="2"
+                Grid.Column="0"
+                Spacing="14">
+
+                <!--  主操作卡：版本 + 装什么 + 一个按钮  -->
+                <Border Padding="22" Style="{StaticResource McgoCardStyle}">
+                    <StackPanel Spacing="16">
+                        <StackPanel Spacing="2">
+                            <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="选择要安装的版本" />
+                            <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="版本列表会自动加载，选好后直接下载。" />
+                        </StackPanel>
+
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <ComboBox
+                                x:Name="RemoteVersionsBox"
+                                HorizontalAlignment="Stretch"
+                                MinHeight="38"
+                                PlaceholderText="正在获取版本列表…"
+                                SelectionChanged="RemoteVersionChanged" />
+                            <Button
+                                Grid.Column="1"
+                                Click="RefreshRemoteVersions"
+                                Style="{StaticResource McgoSecondaryButtonStyle}"
+                                VerticalAlignment="Stretch">
+                                <StackPanel Orientation="Horizontal" Spacing="7">
+                                    <SymbolIcon Symbol="Refresh" />
+                                    <TextBlock Text="刷新" />
+                                </StackPanel>
+                            </Button>
+                        </Grid>
+
+                        <!--  装什么：原版 / 加载器，用两个下拉说清  -->
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="5">
+                                <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="同时安装" />
+                                <ComboBox
+                                    x:Name="InstallTypeBox"
+                                    HorizontalAlignment="Stretch"
+                                    SelectionChanged="InstallTypeChanged">
+                                    <ComboBoxItem Content="只装原版" Tag="" />
+                                    <ComboBoxItem Content="Fabric" Tag="fabric" />
+                                    <ComboBoxItem Content="Forge" Tag="forge" />
+                                    <ComboBoxItem Content="NeoForge" Tag="neoforge" />
+                                    <ComboBoxItem Content="OptiFine" Tag="optifine" />
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel x:Name="InstallVersionPanel" Grid.Column="1" Spacing="5" Visibility="Collapsed">
+                                <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="加载器版本" />
+                                <Grid ColumnSpacing="6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <ComboBox x:Name="InstallVersionBox" HorizontalAlignment="Stretch" />
+                                    <Button
+                                        Grid.Column="1"
+                                        Click="RefreshInstallVersions"
+                                        Style="{StaticResource McgoSecondaryButtonStyle}"
+                                        ToolTipService.ToolTip="刷新安装器版本">
+                                        <SymbolIcon Symbol="Refresh" />
+                                    </Button>
+                                </Grid>
+                            </StackPanel>
+                        </Grid>
+
+                        <!--  唯一的主按钮：把将要做的事写在按钮上  -->
+                        <Button
+                            x:Name="DownloadButton"
+                            MinHeight="52"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Stretch"
+                            Click="DownloadSelectedVersion"
+                            Style="{StaticResource McgoPrimaryButtonStyle}">
+                            <StackPanel HorizontalAlignment="Center" Spacing="1">
+                                <StackPanel HorizontalAlignment="Center" Orientation="Horizontal" Spacing="8">
+                                    <SymbolIcon Symbol="Download" />
+                                    <!--  文字必须能缩：版本列表加载中时按钮文案会换，NoWrap 会被直接截断  -->
+                                    <TextBlock
+                                        x:Name="DownloadButtonText"
+                                        FontSize="16"
+                                        FontWeight="SemiBold"
+                                        Text="下载所选版本"
+                                        TextTrimming="CharacterEllipsis"
+                                        TextWrapping="NoWrap" />
+                                </StackPanel>
+                                <TextBlock
+                                    x:Name="DownloadButtonSubText"
+                                    HorizontalAlignment="Center"
+                                    FontSize="11.5"
+                                    Opacity="0.85"
+                                    Text="先获取版本列表"
+                                    TextTrimming="CharacterEllipsis"
+                                    TextWrapping="NoWrap" />
+                            </StackPanel>
+                        </Button>
+
+                        <Grid x:Name="InstallExtrasPanel" ColumnSpacing="16">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <CheckBox x:Name="IncludeAssetsCheckBox" Content="包含 assets" IsChecked="True" />
+                            <CheckBox
+                                x:Name="InstallFabricApiCheckBox"
+                                Grid.Column="1"
+                                Content="安装 Fabric API" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <!--  设置收进折叠面板：默认不干扰主流程  -->
+                <Expander HorizontalAlignment="Stretch" IsExpanded="False">
+                    <Expander.Header>
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <SymbolIcon Symbol="Setting" Style="{StaticResource McgoIconGlyphStyle}" />
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="1">
+                                <TextBlock Text="下载设置" FontWeight="SemiBold" />
+                                <TextBlock x:Name="DownloadSettingsSummary" Style="{StaticResource McgoStatLabelStyle}" Text="官方源 · 均衡 · .minecraft" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                            </StackPanel>
+                        </Grid>
+                    </Expander.Header>
+                    <StackPanel Padding="0,10,0,0" Spacing="12">
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="5">
+                                <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="下载源" />
+                                <ComboBox x:Name="MirrorBox" HorizontalAlignment="Stretch" SelectedIndex="0">
+                                    <ComboBoxItem Content="official" />
+                                    <ComboBoxItem Content="bmclapi" />
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Spacing="5">
+                                <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="版本类型" />
+                                <ComboBox x:Name="VersionTypeBox" HorizontalAlignment="Stretch" SelectedIndex="0">
+                                    <ComboBoxItem Content="release" />
+                                    <ComboBoxItem Content="snapshot" />
+                                    <ComboBoxItem Content="old_beta" />
+                                    <ComboBoxItem Content="old_alpha" />
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" Spacing="5">
+                                <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="下载预设" />
+                                <ComboBox x:Name="DownloadPresetBox" HorizontalAlignment="Stretch" SelectionChanged="DownloadPresetChanged">
+                                    <ComboBoxItem Content="稳定" />
+                                    <ComboBoxItem Content="均衡" />
+                                    <ComboBoxItem Content="极速" />
+                                </ComboBox>
+                            </StackPanel>
+                        </Grid>
+                        <TextBox x:Name="GameDirectoryBox" Header="游戏目录" />
+                        <TextBox x:Name="JavaPathBox" Header="Java 路径" />
+
+                        <StackPanel x:Name="AdvancedDownloadSettingsPanel" Spacing="10" Visibility="Collapsed">
+                            <Border Style="{StaticResource McgoDividerStyle}" />
+                            <TextBlock FontWeight="SemiBold" Text="下载调优" />
+                            <Grid ColumnSpacing="10" RowSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <StackPanel Spacing="5">
+                                    <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="缓存策略" />
+                                    <ComboBox x:Name="CacheStrategyBox" HorizontalAlignment="Stretch">
+                                        <ComboBoxItem Content="reuse" />
+                                        <ComboBoxItem Content="network_only" />
+                                    </ComboBox>
+                                </StackPanel>
+                                <NumberBox
+                                    x:Name="SpeedLimitBox"
+                                    Grid.Column="1"
+                                    Header="限速 KB/s（0 不限）"
+                                    LargeChange="1024"
+                                    Maximum="1048576"
+                                    Minimum="0"
+                                    SmallChange="256"
+                                    SpinButtonPlacementMode="Compact" />
+                                <NumberBox
+                                    x:Name="CoreThreadsBox"
+                                    Grid.Row="1"
+                                    Header="核心文件并发"
+                                    LargeChange="4"
+                                    Maximum="64"
+                                    Minimum="1"
+                                    SmallChange="1"
+                                    SpinButtonPlacementMode="Compact" />
+                                <NumberBox
+                                    x:Name="AssetThreadsBox"
+                                    Grid.Row="1"
+                                    Grid.Column="1"
+                                    Header="资源文件并发"
+                                    LargeChange="8"
+                                    Maximum="96"
+                                    Minimum="1"
+                                    SmallChange="1"
+                                    SpinButtonPlacementMode="Compact" />
+                            </Grid>
+                        </StackPanel>
+                    </StackPanel>
+                </Expander>
             </StackPanel>
 
-            <Border x:Name="DownloadVanillaPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+            <!--  ==================== 右侧：进度与结果 ====================  -->
+            <StackPanel
+                x:Name="DownloadSidePanel"
+                Grid.Row="2"
+                Grid.Column="1"
+                Spacing="12">
+
+                <Border Padding="18" Style="{StaticResource McgoCardStyle}">
+                    <StackPanel Spacing="10">
+                        <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="进度" />
+                        <ProgressBar x:Name="DownloadProgressBar" Height="6" Maximum="100" Minimum="0" />
+                        <TextBlock x:Name="CurrentTaskText" TextWrapping="Wrap" Text="当前任务：无" />
+                        <TextBlock x:Name="DownloadMetricsText" Style="{StaticResource McgoStatLabelStyle}" Text="等待下载" />
+                        <TextBlock x:Name="TaskQueueText" Style="{StaticResource McgoStatLabelStyle}" Text="队列：0 | 下一个：无" />
+                        <TextBlock x:Name="DownloadQueueSummaryText" Style="{StaticResource McgoStatLabelStyle}" Text="任务队列：空" />
+                        <Border Style="{StaticResource McgoDividerStyle}" />
+                        <Grid ColumnSpacing="6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Button
+                                x:Name="CancelTaskButton"
+                                HorizontalAlignment="Stretch"
+                                Click="CancelCurrentTask"
+                                Content="取消"
+                                IsEnabled="False"
+                                Style="{StaticResource McgoSecondaryButtonStyle}" />
+                            <Button
+                                x:Name="RetryTaskButton"
+                                Grid.Column="1"
+                                HorizontalAlignment="Stretch"
+                                Click="RetryFailedTask"
+                                Content="重试"
+                                IsEnabled="False"
+                                Style="{StaticResource McgoSecondaryButtonStyle}" />
+                            <Button
+                                x:Name="ClearQueueButton"
+                                Grid.Column="2"
+                                HorizontalAlignment="Stretch"
+                                Click="ClearDownloadQueue"
+                                Content="清空"
+                                IsEnabled="False"
+                                Style="{StaticResource McgoSecondaryButtonStyle}" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <!--  日志：内容必须能横向撑满并自己滚动。
+                      展开后内容若还跟着父宽度走，窄栏里会被挤成一条只能显示一两个字的窄条。  -->
+                <Expander
+                    x:Name="DownloadLogExpander"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Stretch"
+                    IsExpanded="False">
+                    <Expander.Header>
+                        <TextBlock FontSize="13" Text="日志" />
+                    </Expander.Header>
+                    <TextBox
+                        x:Name="DownloadLogBox"
+                        Margin="0,8,0,0"
+                        MaxHeight="260"
+                        MinHeight="120"
+                        HorizontalAlignment="Stretch"
+                        Style="{StaticResource McgoLogBoxStyle}"
+                        TextWrapping="Wrap" />
+                </Expander>
+            </StackPanel>
+
+            <!--  ==================== 安装扩展 ====================  -->
+            <Border
+                x:Name="DownloadAddonPanel"
+                Grid.Row="2"
+                Grid.Column="0"
+                Padding="22"
+                Style="{StaticResource McgoCardStyle}"
+                Visibility="Collapsed">
                 <StackPanel Spacing="14">
-                    <StackPanel Spacing="3">
-                        <TextBlock Text="下载原版 + 模组适配" FontSize="20" FontWeight="SemiBold" />
-                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="选择原版后可安装一个加载器；Fabric API 会随 Fabric 单独控制。" TextWrapping="Wrap" />
+                    <StackPanel Spacing="2">
+                        <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="给已有版本装加载器" />
+                        <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="选一个本地版本，再选要装的加载器；不用重新下载游戏。" />
                     </StackPanel>
 
-                    <Grid ColumnSpacing="12">
+                    <Grid ColumnSpacing="10">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <TextBox x:Name="GameDirectoryBox" Header="游戏目录" />
-                        <TextBox x:Name="JavaPathBox" Grid.Column="1" Header="Java 路径" />
-                    </Grid>
-
-                    <Grid ColumnSpacing="12">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <ComboBox x:Name="MirrorBox" Header="下载源" SelectedIndex="0" HorizontalAlignment="Stretch">
-                            <ComboBoxItem Content="official" />
-                            <ComboBoxItem Content="bmclapi" />
-                        </ComboBox>
-                        <ComboBox x:Name="VersionTypeBox" Grid.Column="1" Header="版本类型" SelectedIndex="0" HorizontalAlignment="Stretch">
-                            <ComboBoxItem Content="release" />
-                            <ComboBoxItem Content="snapshot" />
-                            <ComboBoxItem Content="old_beta" />
-                            <ComboBoxItem Content="old_alpha" />
-                        </ComboBox>
-                        <ComboBox x:Name="DownloadPresetBox" Grid.Column="2" Header="下载预设" SelectionChanged="DownloadPresetChanged" HorizontalAlignment="Stretch">
-                            <ComboBoxItem Content="稳定" />
-                            <ComboBoxItem Content="均衡" />
-                            <ComboBoxItem Content="极速" />
-                        </ComboBox>
-                    </Grid>
-
-                    <Grid ColumnSpacing="12">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="1.45*" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <Grid ColumnSpacing="8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <ComboBox x:Name="RemoteVersionsBox" Header="远程版本" HorizontalAlignment="Stretch" />
-                            <Button Grid.Column="1" Content="刷新远程版本" Click="RefreshRemoteVersions" VerticalAlignment="Bottom" />
-                        </Grid>
-                        <ComboBox x:Name="InstallTypeBox" Grid.Column="1" Header="模组加载器 / 适配" SelectionChanged="InstallTypeChanged" HorizontalAlignment="Stretch">
-                            <ComboBoxItem Content="不安装" Tag="" />
-                            <ComboBoxItem Content="fabric" Tag="fabric" />
-                            <ComboBoxItem Content="forge" Tag="forge" />
-                            <ComboBoxItem Content="neoforge" Tag="neoforge" />
-                            <ComboBoxItem Content="optifine" Tag="optifine" />
-                        </ComboBox>
-                    </Grid>
-
-                    <Grid x:Name="InstallOptionsGrid" ColumnSpacing="12">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="1.45*" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <Grid x:Name="InstallVersionPanel" ColumnSpacing="8" Visibility="Collapsed">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <ComboBox x:Name="InstallVersionBox" Header="安装器版本" HorizontalAlignment="Stretch" />
-                            <Button Grid.Column="1" Content="刷新" Click="RefreshInstallVersions" VerticalAlignment="Bottom" />
-                        </Grid>
-                        <StackPanel x:Name="InstallExtrasPanel" Grid.Column="1" Orientation="Horizontal" Spacing="18" VerticalAlignment="Center">
-                            <CheckBox x:Name="IncludeAssetsCheckBox" Content="包含 assets" IsChecked="True" />
-                            <CheckBox x:Name="InstallFabricApiCheckBox" Content="安装 Fabric API" />
+                        <StackPanel Spacing="5">
+                            <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="装到哪个版本" />
+                            <Grid ColumnSpacing="6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <ComboBox
+                                    x:Name="InstallTargetVersionBox"
+                                    HorizontalAlignment="Stretch"
+                                    SelectionChanged="InstallTargetVersionChanged" />
+                                <Button
+                                    Grid.Column="1"
+                                    Click="RefreshLocalInstallVersions"
+                                    Style="{StaticResource McgoSecondaryButtonStyle}"
+                                    ToolTipService.ToolTip="刷新本地版本">
+                                    <SymbolIcon Symbol="Refresh" />
+                                </Button>
+                            </Grid>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Spacing="5">
+                            <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="装什么" />
+                            <ComboBox
+                                x:Name="AddonInstallTypeBox"
+                                HorizontalAlignment="Stretch"
+                                SelectedIndex="0"
+                                SelectionChanged="AddonInstallTypeChanged">
+                                <ComboBoxItem Content="fabric" />
+                                <ComboBoxItem Content="forge" />
+                                <ComboBoxItem Content="neoforge" />
+                                <ComboBoxItem Content="optifine" />
+                                <ComboBoxItem Content="fabric_api" />
+                            </ComboBox>
                         </StackPanel>
                     </Grid>
 
-                    <StackPanel x:Name="AdvancedDownloadSettingsPanel" Spacing="10" Visibility="Collapsed">
-                        <TextBlock Text="下载调优" FontSize="16" FontWeight="SemiBold" />
-                        <Grid ColumnSpacing="12" RowSpacing="10">
+                    <StackPanel Spacing="5">
+                        <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="加载器版本" />
+                        <Grid ColumnSpacing="6">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                            </Grid.RowDefinitions>
-                            <ComboBox x:Name="CacheStrategyBox" Header="缓存策略" HorizontalAlignment="Stretch">
-                                <ComboBoxItem Content="reuse" />
-                                <ComboBoxItem Content="network_only" />
-                            </ComboBox>
-                            <NumberBox x:Name="SpeedLimitBox" Grid.Column="1" Header="限速 KB/s（0 为不限）" Minimum="0" Maximum="1048576" SmallChange="256" LargeChange="1024" SpinButtonPlacementMode="Compact" />
-                            <NumberBox x:Name="CoreThreadsBox" Grid.Row="1" Header="核心文件并发" Minimum="1" Maximum="64" SmallChange="1" LargeChange="4" SpinButtonPlacementMode="Compact" />
-                            <NumberBox x:Name="AssetThreadsBox" Grid.Row="1" Grid.Column="1" Header="资源文件并发" Minimum="1" Maximum="96" SmallChange="1" LargeChange="8" SpinButtonPlacementMode="Compact" />
+                            <ComboBox x:Name="AddonInstallVersionBox" HorizontalAlignment="Stretch" />
+                            <Button
+                                Grid.Column="1"
+                                Click="RefreshAddonInstallVersions"
+                                Style="{StaticResource McgoSecondaryButtonStyle}"
+                                ToolTipService.ToolTip="刷新安装器版本">
+                                <SymbolIcon Symbol="Refresh" />
+                            </Button>
                         </Grid>
                     </StackPanel>
 
-                    <Button x:Name="DownloadButton" Style="{StaticResource AccentButtonStyle}" Content="下载所选版本" Click="DownloadSelectedVersion" HorizontalAlignment="Left" />
+                    <Button
+                        x:Name="InstallAddonButton"
+                        MinHeight="48"
+                        HorizontalAlignment="Stretch"
+                        Click="InstallAddonToLocalVersion"
+                        Style="{StaticResource McgoPrimaryButtonStyle}">
+                        <StackPanel HorizontalAlignment="Center" Orientation="Horizontal" Spacing="8">
+                            <SymbolIcon Symbol="Add" />
+                            <TextBlock x:Name="AddonButtonText" FontSize="15" FontWeight="SemiBold" Text="开始安装" />
+                        </StackPanel>
+                    </Button>
+
+                    <Border Style="{StaticResource McgoDividerStyle}" />
+                    <TextBlock x:Name="InstallStatusText" TextWrapping="Wrap" Text="等待安装任务" />
+                    <TextBlock x:Name="InstallMetricsText" Style="{StaticResource McgoStatLabelStyle}" Text="尚未开始安装" />
                 </StackPanel>
             </Border>
 
-            <Border x:Name="DownloadAddonPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" Visibility="Collapsed">
+            <!--  ==================== 任务管理 ====================  -->
+            <!--  只占主列：横跨两列会盖住右侧的「进度」和「日志」，
+                   日志 Expander 被压在任务卡下面，用户点了当然看不到内容。  -->
+            <Border
+                x:Name="DownloadTasksPanel"
+                Grid.Row="2"
+                Grid.Column="0"
+                Padding="22"
+                Style="{StaticResource McgoCardStyle}"
+                Visibility="Collapsed">
                 <StackPanel Spacing="12">
-                    <StackPanel Spacing="3">
-                        <TextBlock Text="安装扩展" FontSize="20" FontWeight="SemiBold" />
-                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="为已经存在的本地版本单独安装加载器或 Fabric API。" TextWrapping="Wrap" />
+                    <StackPanel Spacing="2">
+                        <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="所有下载任务" />
+                        <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="运行中、等待中、失败和已完成的任务都在这里。" />
                     </StackPanel>
-                    <ComboBox x:Name="AddonInstallTypeBox" Header="安装类型" SelectionChanged="AddonInstallTypeChanged" SelectedIndex="0">
-                        <ComboBoxItem Content="fabric" />
-                        <ComboBoxItem Content="forge" />
-                        <ComboBoxItem Content="neoforge" />
-                        <ComboBoxItem Content="optifine" />
-                        <ComboBoxItem Content="fabric_api" />
-                    </ComboBox>
-                    <Grid ColumnSpacing="8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <ComboBox x:Name="InstallTargetVersionBox" Header="目标版本" />
-                        <Button Grid.Column="1" Content="同步本地版本" Click="RefreshLocalInstallVersions" VerticalAlignment="Bottom" />
-                    </Grid>
-                    <Grid ColumnSpacing="8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <ComboBox x:Name="AddonInstallVersionBox" Header="安装器版本" />
-                        <Button Grid.Column="1" Content="刷新" Click="RefreshAddonInstallVersions" VerticalAlignment="Bottom" />
-                    </Grid>
-                    <Button x:Name="InstallAddonButton" Style="{StaticResource AccentButtonStyle}" Content="开始安装" Click="InstallAddonToLocalVersion" HorizontalAlignment="Left" />
-                    <TextBlock x:Name="InstallStatusText" Text="等待安装任务" TextWrapping="Wrap" />
-                    <TextBlock x:Name="InstallMetricsText" Text="尚未开始安装" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
-                </StackPanel>
-            </Border>
-
-            <Border x:Name="DownloadTasksPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" Visibility="Collapsed">
-                <StackPanel Spacing="10">
-                    <StackPanel Spacing="3">
-                        <TextBlock Text="统一下载任务" FontSize="20" FontWeight="SemiBold" />
-                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="运行中、等待中、失败和已完成的任务集中显示在这里。" TextWrapping="Wrap" />
-                    </StackPanel>
-                    <ListView x:Name="TaskRecordsList" MinHeight="220" MaxHeight="420" SelectionMode="None">
+                    <!--  HorizontalContentAlignment 必须有：ListViewItem 默认按内容宽度撑开，
+                          Wrap 文本在无宽度约束下会按整行单行测量，超长任务行就会横向冲出卡片。  -->
+                    <ListView
+                        x:Name="TaskRecordsList"
+                        MaxHeight="460"
+                        MinHeight="220"
+                        HorizontalContentAlignment="Stretch"
+                        SelectionMode="None">
                         <ListView.ItemTemplate>
                             <DataTemplate>
-                                <TextBlock Text="{Binding}" TextWrapping="Wrap" Margin="4,6" />
+                                <TextBlock
+                                    Margin="4,6"
+                                    Text="{Binding}"
+                                    TextWrapping="Wrap" />
                             </DataTemplate>
                         </ListView.ItemTemplate>
                     </ListView>
                 </StackPanel>
             </Border>
-
-            <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                <Grid RowSpacing="12">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-                    <StackPanel Spacing="8">
-                        <StackPanel Spacing="3">
-                            <TextBlock Text="任务进度" FontSize="20" FontWeight="SemiBold" />
-                            <TextBlock x:Name="CurrentTaskText" Text="当前任务：无" TextWrapping="Wrap" />
-                        </StackPanel>
-                        <ProgressBar x:Name="DownloadProgressBar" Minimum="0" Maximum="100" Height="6" />
-                        <TextBlock x:Name="DownloadMetricsText" Text="等待下载" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
-                        <TextBlock x:Name="TaskQueueText" Text="队列：0 | 下一个：无" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
-                        <TextBlock x:Name="DownloadQueueSummaryText" Text="任务队列：空" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
-                    </StackPanel>
-                    <Grid Grid.Row="1" ColumnSpacing="8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <Button x:Name="CancelTaskButton" Content="取消当前任务" Click="CancelCurrentTask" IsEnabled="False" HorizontalAlignment="Stretch" />
-                        <Button x:Name="RetryTaskButton" Grid.Column="1" Content="重试失败任务" Click="RetryFailedTask" IsEnabled="False" HorizontalAlignment="Stretch" />
-                        <Button x:Name="ClearQueueButton" Grid.Column="2" Content="清空等待队列" Click="ClearDownloadQueue" IsEnabled="False" HorizontalAlignment="Stretch" />
-                    </Grid>
-                </Grid>
-            </Border>
-
-            <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                <StackPanel Spacing="10">
-                    <TextBlock Text="状态日志" FontSize="20" FontWeight="SemiBold" />
-                    <TextBox x:Name="DownloadLogBox" MinHeight="150" MaxHeight="300" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
-                </StackPanel>
-            </Border>
-        </StackPanel>
+        </Grid>
     </ScrollViewer>
 </Page>

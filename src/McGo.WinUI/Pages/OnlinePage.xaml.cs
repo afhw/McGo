@@ -1,6 +1,7 @@
-using Microsoft.UI.Dispatching;
+﻿using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using System.Text.Json.Nodes;
 using McGo.Core.Capsules;
 using McGo.Core.Configuration;
@@ -86,6 +87,7 @@ public sealed partial class OnlinePage : Page
 
     internal void RunSmokeChecks()
     {
+
         if (OnlineSectionBar.Items.Count != 4)
         {
             throw new InvalidOperationException("联机页缺少 Python 版联机任务分段。");

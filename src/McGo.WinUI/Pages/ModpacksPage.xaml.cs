@@ -9,6 +9,7 @@ using McGo.Core.Formatting;
 using McGo.Core.Minecraft;
 using McGo.Core.Modpacks;
 using McGo.Core.P2P;
+using McGo.WinUI.Dialogs;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
 
@@ -72,7 +73,7 @@ public sealed partial class ModpacksPage : Page
             var versionId = PackVersionBox.SelectedItem?.ToString() ?? "";
             if (versionId.Length == 0)
             {
-                PackOutputBox.Text = "请先选择要导出的版本。";
+                ShowPackOutput("请先选择要导出的版本。");
                 return;
             }
 
@@ -84,11 +85,11 @@ public sealed partial class ModpacksPage : Page
             }
 
             var added = _modpacks.ExportModpack(GameDir(), _versionSettings, versionId, target, ComboText(PackFormatBox, "modrinth"), _settings.Config.GetBool("GAME", "enable_resource_isolation", true));
-            PackOutputBox.Text = $"已导出 {added} 个文件：{target}";
+            ShowPackOutput($"已导出 {added} 个文件：{target}");
         }
         catch (Exception exc)
         {
-            PackOutputBox.Text = "导出失败：" + exc.Message;
+            ShowPackOutput("导出失败：" + exc.Message);
         }
     }
 
@@ -98,7 +99,7 @@ public sealed partial class ModpacksPage : Page
         {
             if (!await ConfirmModpackImportAsync())
             {
-                PackOutputBox.Text = "已取消导入。";
+                ShowPackOutput("已取消导入。");
                 return;
             }
 
@@ -107,13 +108,13 @@ public sealed partial class ModpacksPage : Page
             var targetVersion = ImportTargetVersionBox.Text.Trim();
             var isolation = _settings.Config.GetBool("GAME", "enable_resource_isolation", true);
             SetPackBusy(true, "已加入全局队列，等待导入整合包...");
-            PackOutputBox.Text = "已加入全局队列，等待导入整合包...";
+            ShowPackOutput("已加入全局队列，等待导入整合包...");
             DownloadTaskManager.Current.Enqueue("modpack", $"导入整合包 {Path.GetFileName(packPath)}", (record, token) =>
                 ImportModpackTaskAsync(record, packPath, gameDir, targetVersion, isolation, token));
         }
         catch (Exception exc)
         {
-            PackOutputBox.Text = "整合包导入失败：" + exc.Message;
+            ShowPackOutput("整合包导入失败：" + exc.Message);
             PackStatusText.Text = "整合包导入失败";
             SetPackBusy(false);
         }
@@ -146,7 +147,7 @@ public sealed partial class ModpacksPage : Page
             _versionSettingsService.SaveVersionSettings(_versionSettings);
             LoadState();
             PackVersionBox.SelectedItem = result.Version;
-            PackOutputBox.Text = string.Join(Environment.NewLine, [
+            ShowPackOutput(string.Join(Environment.NewLine, [
                 $"已导入：{result.Name}",
                 $"版本：{result.Version}",
                 $"Minecraft：{result.Minecraft}",
@@ -156,18 +157,18 @@ public sealed partial class ModpacksPage : Page
                 $"缺失文件：{result.MissingFiles}",
                 $"运行目录：{result.RuntimeDir}",
                 result.MissingReportPath.Length > 0 ? $"缺失报告：{result.MissingReportPath}" : "",
-            ]);
+            ]));
             return $"已导入 {result.Name}，下载 {result.FilesDownloaded} 个文件";
         }
         catch (OperationCanceledException)
         {
-            PackOutputBox.Text = "整合包导入已取消。";
+            ShowPackOutput("整合包导入已取消。");
             PackStatusText.Text = "整合包导入已取消";
             throw;
         }
         catch (Exception exc)
         {
-            PackOutputBox.Text = "整合包导入失败：" + exc.Message;
+            ShowPackOutput("整合包导入失败：" + exc.Message);
             PackStatusText.Text = "整合包导入失败";
             throw;
         }
@@ -193,7 +194,7 @@ public sealed partial class ModpacksPage : Page
             _lastCapsuleRuntimeDir = result.RuntimeDir;
             LoadState();
             PackVersionBox.SelectedItem = result.Version;
-            PackOutputBox.Text = string.Join(Environment.NewLine, [
+            ShowPackOutput(string.Join(Environment.NewLine, [
                 $"胶囊已导入：{result.Name}",
                 $"版本：{result.Version}",
                 $"Minecraft：{result.Minecraft}",
@@ -201,12 +202,12 @@ public sealed partial class ModpacksPage : Page
                 $"文件清单：{result.Files.Count}",
                 $"待补齐文件：{result.MissingFiles.Count}",
                 $"运行目录：{result.RuntimeDir}",
-            ]);
+            ]));
             PackStatusText.Text = $"胶囊已导入，待补齐 {result.MissingFiles.Count} 个文件";
         }
         catch (Exception exc)
         {
-            PackOutputBox.Text = "胶囊导入失败：" + exc.Message;
+            ShowPackOutput("胶囊导入失败：" + exc.Message);
             PackStatusText.Text = "胶囊导入失败";
         }
     }
@@ -218,7 +219,7 @@ public sealed partial class ModpacksPage : Page
             var versionId = PackVersionBox.SelectedItem?.ToString() ?? "";
             if (versionId.Length == 0)
             {
-                PackOutputBox.Text = "请先选择要导出的版本。";
+                ShowPackOutput("请先选择要导出的版本。");
                 return;
             }
 
@@ -236,12 +237,12 @@ public sealed partial class ModpacksPage : Page
                 target,
                 BuildCapsuleP2PInfo(),
                 _settings.Config.GetBool("GAME", "enable_resource_isolation", true));
-            PackOutputBox.Text = $"胶囊已导出：{result.TargetPath}\n文件：{result.FileCount}\n大小：{AppFormatter.FormatBytes(result.TotalSize)}";
+            ShowPackOutput($"胶囊已导出：{result.TargetPath}\n文件：{result.FileCount}\n大小：{AppFormatter.FormatBytes(result.TotalSize)}");
             PackStatusText.Text = "胶囊导出完成";
         }
         catch (Exception exc)
         {
-            PackOutputBox.Text = "胶囊导出失败：" + exc.Message;
+            ShowPackOutput("胶囊导出失败：" + exc.Message);
             PackStatusText.Text = "胶囊导出失败";
         }
     }
@@ -254,7 +255,7 @@ public sealed partial class ModpacksPage : Page
             var versionId = PackVersionBox.SelectedItem?.ToString() ?? CapsuleTargetVersionBox.Text.Trim();
             if (versionId.Length == 0)
             {
-                PackOutputBox.Text = "请先选择要提供补包的版本。";
+                ShowPackOutput("请先选择要提供补包的版本。");
                 return;
             }
 
@@ -267,7 +268,7 @@ public sealed partial class ModpacksPage : Page
             StartCapsuleHostButton.IsEnabled = false;
             StopCapsuleHostButton.IsEnabled = true;
             PackStatusText.Text = "正在启动胶囊补包服务";
-            PackOutputBox.Text = $"正在启动胶囊补包服务：{runtimeDir}";
+            ShowPackOutput($"正在启动胶囊补包服务：{runtimeDir}");
             _ = Task.Run(async () =>
             {
                 try
@@ -313,7 +314,7 @@ public sealed partial class ModpacksPage : Page
         }
         catch (Exception exc)
         {
-            PackOutputBox.Text = "启动补包服务失败：" + exc.Message;
+            ShowPackOutput("启动补包服务失败：" + exc.Message);
             PackStatusText.Text = "启动补包服务失败";
         }
     }
@@ -340,7 +341,7 @@ public sealed partial class ModpacksPage : Page
 
             if (_lastCapsuleFiles.Count == 0 || string.IsNullOrWhiteSpace(_lastCapsuleRuntimeDir))
             {
-                PackOutputBox.Text = "请先导入胶囊，或选择包含文件清单的胶囊。";
+                ShowPackOutput("请先导入胶囊，或选择包含文件清单的胶囊。");
                 return;
             }
 
@@ -356,7 +357,7 @@ public sealed partial class ModpacksPage : Page
         }
         catch (Exception exc)
         {
-            PackOutputBox.Text = "胶囊补包失败：" + exc.Message;
+            ShowPackOutput("胶囊补包失败：" + exc.Message);
             PackStatusText.Text = "胶囊补包失败";
             PullCapsuleFilesButton.IsEnabled = true;
         }
@@ -394,19 +395,19 @@ public sealed partial class ModpacksPage : Page
                     DownloadTaskManager.Current.Update(record, item => item.Detail = message);
                 }),
                 cancellationToken);
-            PackOutputBox.Text = $"胶囊补包完成：下载 {result.Downloaded}/{result.TotalMissing}，跳过 {result.Skipped}，写入 {AppFormatter.FormatBytes(result.Bytes)}";
+            ShowPackOutput($"胶囊补包完成：下载 {result.Downloaded}/{result.TotalMissing}，跳过 {result.Skipped}，写入 {AppFormatter.FormatBytes(result.Bytes)}");
             PackStatusText.Text = "胶囊补包完成";
             return $"胶囊补包完成：下载 {result.Downloaded}/{result.TotalMissing}";
         }
         catch (OperationCanceledException)
         {
-            PackOutputBox.Text = "胶囊补包已取消。";
+            ShowPackOutput("胶囊补包已取消。");
             PackStatusText.Text = "胶囊补包已取消";
             throw;
         }
         catch (Exception exc)
         {
-            PackOutputBox.Text = "胶囊补包失败：" + exc.Message;
+            ShowPackOutput("胶囊补包失败：" + exc.Message);
             PackStatusText.Text = "胶囊补包失败";
             throw;
         }
@@ -476,6 +477,7 @@ public sealed partial class ModpacksPage : Page
         }
 
         PackOutputBox.Text = ModpackService.AnalyzeCrashLogs(GameDir(), versionId, runtimeDir);
+        RevealPackOutput();
     }
 
     private JsonObject BuildCapsuleP2PInfo()
@@ -517,13 +519,13 @@ public sealed partial class ModpacksPage : Page
     private void GenerateCapsuleRoom(object sender, RoutedEventArgs e)
     {
         RoomBox.Text = P2PUtilities.GenerateRoomCode();
-        PackOutputBox.Text = "已生成胶囊 P2P 房间号。";
+        ShowPackOutput("已生成胶囊 P2P 房间号。");
     }
 
     private void SaveCapsuleP2P(object sender, RoutedEventArgs e)
     {
         SaveCapsuleP2PSettings();
-        PackOutputBox.Text = "胶囊 P2P 信息已保存。";
+        ShowPackOutput("胶囊 P2P 信息已保存。");
     }
 
     private void BuildCapsuleInvite(object sender, RoutedEventArgs e)
@@ -536,13 +538,13 @@ public sealed partial class ModpacksPage : Page
         }
 
         SaveCapsuleP2PSettings();
-        PackOutputBox.Text = string.Join(Environment.NewLine, [
+        ShowPackOutput(string.Join(Environment.NewLine, [
             $"中继：{RelayHostBox.Text.Trim()}:{NumberPort(RelayPortBox, 10721)}",
             $"房间：{room}",
             $"口令：{(SecretBox.Password.Trim().Length == 0 ? "无" : SecretBox.Password.Trim())}",
             $"加入者本地服务器：127.0.0.1:{NumberPort(JoinPortBox, 25565)}",
             $"胶囊补包房间：{CapsuleFileTransferService.FileRoom(room)}",
-        ]);
+        ]));
     }
 
     private void SaveCapsuleP2PSettings()
@@ -590,15 +592,12 @@ public sealed partial class ModpacksPage : Page
             }
         }
 
-        var dialog = new ContentDialog
-        {
-            XamlRoot = XamlRoot,
-            Title = "确认导入整合包",
-            Content = string.Join(Environment.NewLine, lines),
-            PrimaryButtonText = "继续导入",
-            CloseButtonText = "取消",
-            DefaultButton = ContentDialogButton.Close,
-        };
+        var dialog = AppDialog.Create(
+            this,
+            "确认导入整合包",
+            string.Join(Environment.NewLine, lines),
+            "继续导入",
+            "取消");
         return await dialog.ShowAsync() == ContentDialogResult.Primary;
     }
 
@@ -637,6 +636,16 @@ public sealed partial class ModpacksPage : Page
     {
         PackOutputBox.Text += (PackOutputBox.Text.Length == 0 ? "" : Environment.NewLine) + message;
         PackOutputBox.SelectionStart = PackOutputBox.Text.Length;
+    }
+
+    // 结果型输出（导出结果、崩溃分析、邀请信息等）没有独立的状态提示，
+    // 默认折叠的输出区必须在此时展开，否则用户点了按钮看不到任何反馈。
+    private void RevealPackOutput() => PackOutputExpander.IsExpanded = true;
+
+    private void ShowPackOutput(string text)
+    {
+        PackOutputBox.Text = text;
+        RevealPackOutput();
     }
 
     private async Task<Windows.Storage.StorageFile?> PickOpenFileAsync(IEnumerable<string> extensions)

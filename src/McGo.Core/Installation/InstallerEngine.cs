@@ -71,7 +71,7 @@ public sealed class InstallerEngine
                                                    string.Equals(item["loader"]?["version"]?.GetValue<string>() ?? "", loaderVersion, StringComparison.OrdinalIgnoreCase))
                        ?? throw new InvalidOperationException($"未找到适用于 {MinecraftVersion} 的 Fabric Loader。");
         var selectedLoaderVersion = selected["loader"]?["version"]?.GetValue<string>() ?? "";
-        var profileUrl = $"{InstallServices.MirrorRoot(MirrorSource)}/fabric-meta/v2/versions/loader/{MinecraftVersion}/{selectedLoaderVersion}/profile/json";
+        var profileUrl = $"{InstallServices.FabricMetaRoot(MirrorSource)}/v2/versions/loader/{MinecraftVersion}/{selectedLoaderVersion}/profile/json";
         StatusCallback?.Invoke($"正在获取 Fabric 安装配置：{MinecraftVersion} / Loader {selectedLoaderVersion}");
         var profileJson = await new HttpClient().GetFromJsonAsync<JsonObject>(profileUrl, cancellationToken) ?? [];
         var versionId = profileJson["id"]?.GetValue<string>() ?? $"fabric-loader-{selectedLoaderVersion}-{MinecraftVersion}";
@@ -136,7 +136,9 @@ public sealed class InstallerEngine
             }
 
             forgeVersion = forgeVersion.Trim();
-            installerUrl = $"{InstallServices.MirrorRoot(MirrorSource)}/maven/net/minecraftforge/forge/{MinecraftVersion}-{forgeVersion}/forge-{MinecraftVersion}-{forgeVersion}-installer.jar";
+            // Forge 安装器只在 Forge 自己的 Maven 上，官方源要指向 maven.minecraftforge.net，
+            // 拼到 launchermeta.mojang.com/maven 上是 404。
+            installerUrl = $"{InstallServices.ForgeMavenRoot(MirrorSource)}/net/minecraftforge/forge/{MinecraftVersion}-{forgeVersion}/forge-{MinecraftVersion}-{forgeVersion}-installer.jar";
             label = $"Forge {forgeVersion}";
         }
         else
@@ -152,9 +154,10 @@ public sealed class InstallerEngine
                               ?? throw new InvalidOperationException($"未找到适用于 {MinecraftVersion} 的 NeoForge 版本。");
             var installerPath = selected["installerPath"]?.GetValue<string>() ?? "";
             var selectedVersion = selected["version"]?.GetValue<string>() ?? selected["rawVersion"]?.GetValue<string>() ?? "";
+            var rawVersion = selected["rawVersion"]?.GetValue<string>() ?? selectedVersion;
             installerUrl = installerPath.Length > 0
-                ? InstallServices.MirrorRoot(MirrorSource) + installerPath
-                : $"{InstallServices.MirrorRoot(MirrorSource)}/maven/net/neoforged/neoforge/{selectedVersion}/neoforge-{selectedVersion}-installer.jar";
+                ? InstallServices.NeoForgeInstallerUrl(installerPath, MirrorSource)
+                : InstallServices.NeoForgeInstallerUrl(MinecraftVersion, rawVersion, selectedVersion, MirrorSource);
             label = $"NeoForge {selectedVersion}";
         }
 
@@ -194,13 +197,15 @@ public sealed class InstallerEngine
         var type = selected["type"]?.GetValue<string>() ?? "HD_U";
         var versionId = InstallServices.BuildOptifineVersionId(MinecraftVersion, selected);
         var libraryVersion = InstallServices.BuildOptifineLibraryVersion(selected);
-        var installerUrl = $"{InstallServices.MirrorRoot(MirrorSource)}/optifine/{MinecraftVersion}/{type}/{patch}";
+        var installerUrl = InstallServices.OptifineInstallerUrl(MinecraftVersion, type, patch);
         var tempDir = Path.Combine(Path.GetTempPath(), $"mcgo-optifine-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempDir);
         try
         {
             var installerPath = Path.Combine(tempDir, "optifine-installer.jar");
-            await _services.StreamDownloadAsync(installerUrl, installerPath, ProgressCallback, "下载 OptiFine 安装包", MirrorSource, cancellationToken);
+            // OptiFine 安装包只从 BMCLAPI 取（optifine.net 有防盗链），
+            // 因此这里显式指定镜像，避免被按当前下载源改写到 Mojang 上（404）。
+            await _services.StreamDownloadAsync(installerUrl, installerPath, ProgressCallback, "下载 OptiFine 安装包", "bmclapi", cancellationToken);
             var libraryPath = Path.Combine(GameDir, "libraries", "optifine", "OptiFine", libraryVersion, $"OptiFine-{libraryVersion}.jar");
             Directory.CreateDirectory(Path.GetDirectoryName(libraryPath)!);
             File.Copy(installerPath, libraryPath, overwrite: true);
@@ -281,8 +286,8 @@ public sealed class InstallerEngine
         var fallbackPath = Path.Combine(GameDir, "libraries", relative);
         if (!File.Exists(fallbackPath))
         {
-            var url = $"{InstallServices.MirrorRoot(MirrorSource)}/maven/{relative.Replace('\\', '/')}";
-            await _services.StreamDownloadAsync(url, fallbackPath, ProgressCallback, "下载 LaunchWrapper", MirrorSource, cancellationToken);
+            var url = $"{InstallServices.MirrorRoot("bmclapi")}/maven/{relative.Replace('\\', '/')}";
+            await _services.StreamDownloadAsync(url, fallbackPath, ProgressCallback, "下载 LaunchWrapper", "bmclapi", cancellationToken);
         }
 
         return fallbackName;

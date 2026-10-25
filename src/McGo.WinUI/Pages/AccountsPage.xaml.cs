@@ -6,6 +6,7 @@ using McGo.Core.App;
 using McGo.Core.Authentication;
 using McGo.Core.Configuration;
 using McGo.Core.Downloads;
+using McGo.WinUI.Dialogs;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
@@ -62,6 +63,7 @@ public sealed partial class AccountsPage : Page
         DeleteAccountBox.SelectedItem = CurrentAccountBox.SelectedItem;
 
         OutputBox.Text = labels.Count == 0 ? "当前没有账号。" : $"已加载 {labels.Count} 个账号。";
+        EmptyAccountsCard.Visibility = labels.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         if (labels.Count == 0)
         {
             _settings.Config.Set("ACCOUNTS", "selected_account_id", "");
@@ -131,6 +133,13 @@ public sealed partial class AccountsPage : Page
 
     private void DeleteAccountSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+    }
+
+    /// <summary>从空状态直接进离线登录并聚焦用户名，减少一次选择成本。</summary>
+    private void StartOfflineAccountFlow(object sender, RoutedEventArgs e)
+    {
+        SelectLoginMode("offline");
+        OfflineNameBox.Focus(FocusState.Programmatic);
     }
 
     private void SelectLoginMode(string mode)
@@ -259,15 +268,7 @@ public sealed partial class AccountsPage : Page
             return;
         }
 
-        var dialog = new ContentDialog
-        {
-            Title = "删除账号",
-            Content = $"确定要删除 {AccountLabel(account)} 吗？",
-            PrimaryButtonText = "删除",
-            CloseButtonText = "取消",
-            DefaultButton = ContentDialogButton.Close,
-            XamlRoot = XamlRoot,
-        };
+        var dialog = AppDialog.Create(this, "删除账号", $"确定要删除 {AccountLabel(account)} 吗？", "删除", "取消");
         if (await dialog.ShowAsync() != ContentDialogResult.Primary)
         {
             return;

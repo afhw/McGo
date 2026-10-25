@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8" ?>
+﻿<?xml version="1.0" encoding="utf-8" ?>
 <Page
     x:Class="McGo.WinUI.Pages.SettingsPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -6,14 +6,32 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
-    <ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled" HorizontalContentAlignment="Stretch">
-        <StackPanel x:Name="SettingsLayoutRoot" Padding="24,18,24,24" Spacing="16" MaxWidth="1100" HorizontalAlignment="Stretch">
-            <StackPanel Spacing="4">
-                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="环境与界面" />
-                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="按任务切换设置分区；保存会一次写入所有修改。" TextWrapping="Wrap" />
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <ScrollViewer
+            x:Name="SettingsLayoutRoot"
+            HorizontalContentAlignment="Stretch"
+            HorizontalScrollBarVisibility="Disabled"
+            HorizontalScrollMode="Disabled"
+            VerticalContentAlignment="Top">
+            <StackPanel
+                HorizontalAlignment="Left"
+                Padding="24,20,24,20"
+                Spacing="16"
+                MaxWidth="960">
+
+            <StackPanel Spacing="3">
+                <TextBlock Style="{StaticResource McgoPageTitleStyle}" Text="设置" />
+                <TextBlock Style="{StaticResource McgoPageSubtitleStyle}" Text="日常只需要“环境”和“外观与功能”；改完点右下角保存。" />
             </StackPanel>
 
-            <SelectorBar x:Name="SettingsSectionBar" SelectionChanged="SettingsSectionChanged">
+            <SelectorBar
+                x:Name="SettingsSectionBar"
+                HorizontalAlignment="Left"
+                SelectionChanged="SettingsSectionChanged">
                 <SelectorBarItem Text="环境" Tag="environment" />
                 <SelectorBarItem Text="下载" Tag="download" />
                 <SelectorBarItem Text="外观与功能" Tag="appearance" />
@@ -21,11 +39,11 @@
                 <SelectorBarItem Text="更新" Tag="update" />
             </SelectorBar>
 
-            <Border x:Name="EnvironmentSettingsPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+            <Border x:Name="EnvironmentSettingsPanel" Style="{StaticResource McgoCardStyle}">
                 <StackPanel Spacing="12">
-                    <StackPanel Spacing="3">
-                        <TextBlock Text="环境与目录" FontSize="18" FontWeight="SemiBold" />
-                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="Minecraft 数据目录和默认 Java 运行时。" TextWrapping="Wrap" />
+                    <StackPanel Spacing="2">
+                        <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="环境与目录" />
+                        <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="Minecraft 数据目录和默认 Java 运行时。" />
                     </StackPanel>
                     <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
@@ -33,7 +51,7 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBox x:Name="GameDirectoryBox" Header="游戏目录" />
-                        <Button Grid.Column="1" VerticalAlignment="Bottom" Content="选择目录" Click="ChooseGameDirectory" />
+                        <Button Grid.Column="1" VerticalAlignment="Bottom" Click="ChooseGameDirectory" Content="选择目录" Style="{StaticResource McgoSecondaryButtonStyle}" />
                     </Grid>
                     <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
@@ -41,35 +59,30 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBox x:Name="JavaPathBox" Header="Java 路径" />
-                        <Button Grid.Column="1" VerticalAlignment="Bottom" Content="选择文件" Click="ChooseJavaFile" />
+                        <Button Grid.Column="1" VerticalAlignment="Bottom" Click="ChooseJavaFile" Content="选择文件" Style="{StaticResource McgoSecondaryButtonStyle}" />
                     </Grid>
                     <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <ComboBox x:Name="JavaCandidatesBox" Header="检测到的 Java" SelectionChanged="JavaCandidateChanged" />
-                        <Button Grid.Column="1" VerticalAlignment="Bottom" Content="重新检测" Click="RefreshJavaCandidates" />
+                        <ComboBox x:Name="JavaCandidatesBox" HorizontalAlignment="Stretch" Header="检测到的 Java" SelectionChanged="JavaCandidateChanged" />
+                        <Button Grid.Column="1" VerticalAlignment="Bottom" Click="RefreshJavaCandidates" Content="重新检测" Style="{StaticResource McgoSecondaryButtonStyle}" />
                     </Grid>
                 </StackPanel>
             </Border>
 
-            <Border x:Name="DownloadSettingsPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" Visibility="Collapsed">
+            <Border x:Name="DownloadSettingsPanel" Style="{StaticResource McgoCardStyle}" Visibility="Collapsed">
                 <StackPanel Spacing="12">
-                    <StackPanel Spacing="3">
-                        <TextBlock Text="下载参数" FontSize="18" FontWeight="SemiBold" />
-                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="镜像、缓存、并发和可选的 Modrinth 自定义地址。" TextWrapping="Wrap" />
+                    <StackPanel Spacing="2">
+                        <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="下载参数" />
+                        <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="镜像、缓存、并发和可选的 Modrinth 自定义地址。" />
                     </StackPanel>
                     <Grid ColumnSpacing="12" RowSpacing="10">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
                         <ComboBox x:Name="MirrorBox" Header="镜像源">
                             <ComboBoxItem Content="官方源" Tag="official" />
                             <ComboBoxItem Content="BMCLAPI" Tag="bmclapi" />
@@ -79,24 +92,40 @@
                             <ComboBoxItem Content="校验后复用" Tag="verify" />
                             <ComboBoxItem Content="总是下载" Tag="redownload" />
                         </ComboBox>
-                        <NumberBox x:Name="CoreThreadsBox" Grid.Row="1" Header="核心文件并发" Minimum="1" Maximum="64" SmallChange="1" LargeChange="4" SpinButtonPlacementMode="Compact" />
-                        <NumberBox x:Name="AssetThreadsBox" Grid.Row="1" Grid.Column="1" Header="资源文件并发" Minimum="1" Maximum="96" SmallChange="1" LargeChange="8" SpinButtonPlacementMode="Compact" />
-                        <NumberBox x:Name="SpeedLimitBox" Grid.Row="2" Header="限速 KB/s（0 为不限）" Minimum="0" Maximum="1048576" SmallChange="256" LargeChange="1024" SpinButtonPlacementMode="Compact" />
                     </Grid>
-                    <TextBox x:Name="ModrinthApiBaseBox" Header="Modrinth API Base" PlaceholderText="留空使用官方地址" />
-                    <TextBox x:Name="ModrinthCdnBaseBox" Header="Modrinth CDN Base" PlaceholderText="留空不重写下载地址" />
+                    <NumberBox x:Name="SpeedLimitBox" Header="限速 KB/s（0 为不限）" LargeChange="1024" Maximum="1048576" Minimum="0" SmallChange="256" SpinButtonPlacementMode="Compact" />
+                    <Expander HorizontalAlignment="Stretch" IsExpanded="False">
+                        <Expander.Header>
+                            <StackPanel Spacing="1">
+                                <TextBlock Text="高级：并发与自定义地址" FontWeight="SemiBold" />
+                                <TextBlock Style="{StaticResource McgoStatLabelStyle}" Text="一般不需要改" />
+                            </StackPanel>
+                        </Expander.Header>
+                        <StackPanel Padding="0,10,0,0" Spacing="10">
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <NumberBox x:Name="CoreThreadsBox" Header="核心文件并发" LargeChange="4" Maximum="64" Minimum="1" SmallChange="1" SpinButtonPlacementMode="Compact" />
+                                <NumberBox x:Name="AssetThreadsBox" Grid.Column="1" Header="资源文件并发" LargeChange="8" Maximum="96" Minimum="1" SmallChange="1" SpinButtonPlacementMode="Compact" />
+                            </Grid>
+                            <TextBox x:Name="ModrinthApiBaseBox" Header="Modrinth API Base" PlaceholderText="留空使用官方地址" />
+                            <TextBox x:Name="ModrinthCdnBaseBox" Header="Modrinth CDN Base" PlaceholderText="留空不重写下载地址" />
+                        </StackPanel>
+                    </Expander>
                 </StackPanel>
             </Border>
 
-            <Border x:Name="AppearanceSettingsPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" Visibility="Collapsed">
+            <Border x:Name="AppearanceSettingsPanel" Style="{StaticResource McgoCardStyle}" Visibility="Collapsed">
                 <StackPanel Spacing="12">
-                    <StackPanel Spacing="3">
-                        <TextBlock Text="个性化与功能" FontSize="18" FontWeight="SemiBold" />
-                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="主题、主页内容和可见功能集中在这里。" TextWrapping="Wrap" />
+                    <StackPanel Spacing="2">
+                        <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="个性化与功能" />
+                        <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="主题、主页内容和可见功能集中在这里。" />
                     </StackPanel>
-                    <Grid ColumnSpacing="12">
+                    <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="220" />
+                            <ColumnDefinition Width="Auto" MinWidth="160" />
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
@@ -106,7 +135,7 @@
                             <ComboBoxItem Content="跟随系统" Tag="auto" />
                         </ComboBox>
                         <TextBox x:Name="ThemeImageBox" Grid.Column="1" Header="主题背景图" />
-                        <Button Grid.Column="2" VerticalAlignment="Bottom" Content="选择" Click="ChooseThemeImageFile" />
+                        <Button Grid.Column="2" VerticalAlignment="Bottom" Click="ChooseThemeImageFile" Content="选择" Style="{StaticResource McgoSecondaryButtonStyle}" />
                     </Grid>
                     <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
@@ -114,7 +143,7 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBox x:Name="HomeContentSourceBox" Header="主页内容源" />
-                        <Button Grid.Column="1" VerticalAlignment="Bottom" Content="选择" Click="ChooseHomeContentFile" />
+                        <Button Grid.Column="1" VerticalAlignment="Bottom" Click="ChooseHomeContentFile" Content="选择" Style="{StaticResource McgoSecondaryButtonStyle}" />
                     </Grid>
                     <Grid ColumnSpacing="12" RowSpacing="8">
                         <Grid.ColumnDefinitions>
@@ -127,27 +156,20 @@
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <CheckBox x:Name="HomeNetworkCheckBox" Content="允许联网主页" />
-                        <CheckBox x:Name="AdvancedModeCheckBox" Grid.Column="1" Content="显示高级选项" Checked="AdvancedModeChanged" Unchecked="AdvancedModeChanged" />
+                        <CheckBox x:Name="AdvancedModeCheckBox" Grid.Column="1" Checked="AdvancedModeChanged" Content="显示高级选项" Unchecked="AdvancedModeChanged" />
                         <CheckBox x:Name="ResourceIsolationCheckBox" Grid.Row="1" Content="启用版本资源隔离" />
                         <CheckBox x:Name="ShowDownloadCheckBox" Grid.Row="1" Grid.Column="1" Content="显示下载页" />
-                        <CheckBox x:Name="ShowManageCheckBox" Grid.Row="2" Content="显示管理页" />
                     </Grid>
-                    <Grid ColumnSpacing="8" MaxWidth="360" HorizontalAlignment="Left">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <Button Content="刷新主页预览" Click="RefreshHomeContent" HorizontalAlignment="Stretch" />
-                    </Grid>
-                    <TextBox x:Name="HomePreviewBox" MinHeight="150" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
+                    <Button HorizontalAlignment="Left" Click="RefreshHomeContent" Content="刷新主页预览" Style="{StaticResource McgoSecondaryButtonStyle}" />
+                    <TextBox x:Name="HomePreviewBox" MinHeight="150" Style="{StaticResource McgoOutputBoxStyle}" />
                 </StackPanel>
             </Border>
 
-            <Border x:Name="MusicSettingsPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" Visibility="Collapsed">
+            <Border x:Name="MusicSettingsPanel" Style="{StaticResource McgoCardStyle}" Visibility="Collapsed">
                 <StackPanel Spacing="12">
-                    <StackPanel Spacing="3">
-                        <TextBlock Text="背景音乐" FontSize="18" FontWeight="SemiBold" />
-                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="选择本地音乐并控制启动游戏后的播放行为。" TextWrapping="Wrap" />
+                    <StackPanel Spacing="2">
+                        <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="背景音乐" />
+                        <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="选择本地音乐并控制启动游戏后的播放行为。" />
                     </StackPanel>
                     <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
@@ -155,7 +177,7 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBox x:Name="MusicPathBox" Header="音乐文件" />
-                        <Button Grid.Column="1" VerticalAlignment="Bottom" Content="选择" Click="ChooseMusicFile" />
+                        <Button Grid.Column="1" VerticalAlignment="Bottom" Click="ChooseMusicFile" Content="选择" Style="{StaticResource McgoSecondaryButtonStyle}" />
                     </Grid>
                     <Grid ColumnSpacing="12">
                         <Grid.ColumnDefinitions>
@@ -165,50 +187,77 @@
                         <CheckBox x:Name="MusicEnabledBox" Content="启用背景音乐" />
                         <CheckBox x:Name="MusicPauseOnLaunchBox" Grid.Column="1" Content="启动游戏后暂停" />
                     </Grid>
-                    <NumberBox x:Name="MusicVolumeBox" Header="音量 %" Minimum="0" Maximum="100" SmallChange="1" LargeChange="10" SpinButtonPlacementMode="Compact" />
+                    <NumberBox x:Name="MusicVolumeBox" Header="音量 %" LargeChange="10" Maximum="100" Minimum="0" SmallChange="1" SpinButtonPlacementMode="Compact" />
                     <Grid ColumnSpacing="8" MaxWidth="360" HorizontalAlignment="Left">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <Button Content="播放 / 应用" Click="ApplyMusicSettings" HorizontalAlignment="Stretch" />
-                        <Button Grid.Column="1" Content="停止音乐" Click="StopMusic" HorizontalAlignment="Stretch" />
+                        <Button HorizontalAlignment="Stretch" Click="ApplyMusicSettings" Content="播放 / 应用" Style="{StaticResource McgoPrimaryButtonStyle}" />
+                        <Button Grid.Column="1" HorizontalAlignment="Stretch" Click="StopMusic" Content="停止音乐" Style="{StaticResource McgoSecondaryButtonStyle}" />
                     </Grid>
                 </StackPanel>
             </Border>
 
-            <Border x:Name="UpdateSettingsPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" Visibility="Collapsed">
+            <Border x:Name="UpdateSettingsPanel" Style="{StaticResource McgoCardStyle}" Visibility="Collapsed">
                 <StackPanel Spacing="12">
-                    <StackPanel Spacing="3">
-                        <TextBlock Text="McGo 更新" FontSize="18" FontWeight="SemiBold" />
-                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="检查更新清单，下载并应用新版本。" TextWrapping="Wrap" />
+                    <StackPanel Spacing="2">
+                        <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="McGo 更新" />
+                        <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="检查更新清单，下载并应用新版本。" />
                     </StackPanel>
-                    <TextBox x:Name="UpdateManifestBox" Header="更新清单 URL" />
                     <CheckBox x:Name="UpdateAutoCheckBox" Content="启动时自动检查更新" />
-                    <TextBlock x:Name="UpdateStatusText" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    <ProgressBar x:Name="UpdateProgressBar" Minimum="0" Maximum="100" Height="8" />
+                    <TextBlock x:Name="UpdateStatusText" Style="{StaticResource McgoCardSubtitleStyle}" TextWrapping="Wrap" />
+                    <ProgressBar x:Name="UpdateProgressBar" Height="6" Maximum="100" Minimum="0" />
                     <Grid ColumnSpacing="8" MaxWidth="540" HorizontalAlignment="Left">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <Button Content="检查更新" Click="CheckUpdates" HorizontalAlignment="Stretch" />
-                        <Button Grid.Column="1" Content="下载更新" Click="DownloadUpdate" HorizontalAlignment="Stretch" />
-                        <Button Grid.Column="2" Content="应用更新" Click="ApplyDownloadedUpdate" HorizontalAlignment="Stretch" />
+                        <Button HorizontalAlignment="Stretch" Click="CheckUpdates" Content="检查更新" Style="{StaticResource McgoPrimaryButtonStyle}" />
+                        <Button Grid.Column="1" HorizontalAlignment="Stretch" Click="DownloadUpdate" Content="下载更新" Style="{StaticResource McgoSecondaryButtonStyle}" />
+                        <Button Grid.Column="2" HorizontalAlignment="Stretch" Click="ApplyDownloadedUpdate" Content="应用更新" Style="{StaticResource McgoSecondaryButtonStyle}" />
                     </Grid>
-                    <TextBox x:Name="UpdateOutputBox" MinHeight="180" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
+                    <Expander HorizontalAlignment="Stretch" IsExpanded="False">
+                        <Expander.Header>
+                            <TextBlock FontSize="13" Text="更新源与详情" />
+                        </Expander.Header>
+                        <StackPanel Padding="0,10,0,0" Spacing="10">
+                            <TextBox x:Name="UpdateManifestBox" Header="更新清单 URL" />
+                            <TextBox x:Name="UpdateOutputBox" MaxHeight="220" MinHeight="120" Style="{StaticResource McgoLogBoxStyle}" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Expander>
                 </StackPanel>
             </Border>
 
+            </StackPanel>
+        </ScrollViewer>
+
+        <!--  保存条常驻底部，随时可点  -->
+        <Border
+            Grid.Row="1"
+            Padding="20,10"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="0,1,0,0">
             <Grid ColumnSpacing="12">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
-                <Button Content="保存全部设置" Click="SaveSettings" />
-                <TextBlock x:Name="StatusText" Grid.Column="1" VerticalAlignment="Center" TextWrapping="Wrap" />
+                <Button Click="SaveSettings" Style="{StaticResource McgoPrimaryButtonStyle}">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <SymbolIcon Symbol="Save" />
+                        <TextBlock FontWeight="SemiBold" Text="保存全部设置" />
+                    </StackPanel>
+                </Button>
+                <TextBlock
+                    x:Name="StatusText"
+                    Grid.Column="1"
+                    VerticalAlignment="Center"
+                    Style="{StaticResource McgoCardSubtitleStyle}"
+                    TextWrapping="Wrap" />
             </Grid>
-        </StackPanel>
-    </ScrollViewer>
+        </Border>
+    </Grid>
 </Page>

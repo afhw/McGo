@@ -1,13 +1,285 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Application
-    x:Class="McGo.WinUI.App"
-    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+<Application x:Class="McGo.WinUI.App" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
+
+
+    <ResourceDictionary.ThemeDictionaries>
+        <!-- ============================ 深色 ============================ -->
+        <ResourceDictionary x:Key="Default">
+            <Color x:Key="SystemAccentColor">#FF1370F3</Color>
+            <Color x:Key="SystemAccentColorLight1">#FF2E82F6</Color>
+            <Color x:Key="SystemAccentColorLight2">#FF4C93F8</Color>
+            <Color x:Key="SystemAccentColorLight3">#FF6AA4FA</Color>
+            <Color x:Key="SystemAccentColorDark1">#FF0F5FD4</Color>
+            <Color x:Key="SystemAccentColorDark2">#FF0C4EB0</Color>
+            <Color x:Key="SystemAccentColorDark3">#FF093D8C</Color>
+
+            <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="#FF1370F3" />
+            <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="#F01370F3" />
+            <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#D91370F3" />
+            <SolidColorBrush x:Key="AccentFillColorDisabledBrush" Color="#4D1370F3" />
+            <SolidColorBrush x:Key="TextOnAccentFillColorPrimaryBrush" Color="#FFFFFFFF" />
+            <SolidColorBrush x:Key="TextOnAccentFillColorSecondaryBrush" Color="#EBFFFFFF" />
+            <SolidColorBrush x:Key="TextOnAccentFillColorDisabledBrush" Color="#80FFFFFF" />
+            <SolidColorBrush x:Key="TextOnAccentFillColorSelectedTextBrush" Color="#FFFFFFFF" />
+            <SolidColorBrush x:Key="AccentTextFillColorPrimaryBrush" Color="#FF5C9BF8" />
+            <SolidColorBrush x:Key="AccentTextFillColorSecondaryBrush" Color="#FF7DB1FA" />
+            <SolidColorBrush x:Key="AccentTextFillColorTertiaryBrush" Color="#FF9CC5FB" />
+            <SolidColorBrush x:Key="AccentTextFillColorDisabledBrush" Color="#5CFFFFFF" />
+            <SolidColorBrush x:Key="FocusStrokeColorOuterBrush" Color="#FFFFFFFF" />
+            <SolidColorBrush x:Key="FocusStrokeColorInnerBrush" Color="#FF000000" />
+            <SolidColorBrush x:Key="NavigationViewSelectionIndicatorForeground" Color="#FF1370F3" />
+
+            <SolidColorBrush x:Key="McgoAccentSoftBrush" Color="#261370F3" />
+            <SolidColorBrush x:Key="McgoAccentSoftBorderBrush" Color="#4D1370F3" />
+            <SolidColorBrush x:Key="McgoDividerBrush" Color="#14FFFFFF" />
+            <SolidColorBrush x:Key="McgoIconForegroundBrush" Color="#FF6FA8F9" />
+            <SolidColorBrush x:Key="McgoHeroBorderBrush" Color="#3D1370F3" />
+            <LinearGradientBrush x:Key="McgoHeroBrush" StartPoint="0,0" EndPoint="1,1">
+                <GradientStop Color="#3D1370F3" Offset="0" />
+                <GradientStop Color="#171370F3" Offset="0.55" />
+                <GradientStop Color="#00000000" Offset="1" />
+            </LinearGradientBrush>
+        </ResourceDictionary>
+
+        <!-- ============================ 浅色 ============================ -->
+        <ResourceDictionary x:Key="Light">
+            <Color x:Key="SystemAccentColor">#FF1370F3</Color>
+            <Color x:Key="SystemAccentColorLight1">#FF2E82F6</Color>
+            <Color x:Key="SystemAccentColorLight2">#FF4C93F8</Color>
+            <Color x:Key="SystemAccentColorLight3">#FF6AA4FA</Color>
+            <Color x:Key="SystemAccentColorDark1">#FF0F5FD4</Color>
+            <Color x:Key="SystemAccentColorDark2">#FF0C4EB0</Color>
+            <Color x:Key="SystemAccentColorDark3">#FF093D8C</Color>
+
+            <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="#FF1370F3" />
+            <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="#F01370F3" />
+            <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#D91370F3" />
+            <SolidColorBrush x:Key="AccentFillColorDisabledBrush" Color="#4D1370F3" />
+            <SolidColorBrush x:Key="TextOnAccentFillColorPrimaryBrush" Color="#FFFFFFFF" />
+            <SolidColorBrush x:Key="TextOnAccentFillColorSecondaryBrush" Color="#EBFFFFFF" />
+            <SolidColorBrush x:Key="TextOnAccentFillColorDisabledBrush" Color="#80FFFFFF" />
+            <SolidColorBrush x:Key="TextOnAccentFillColorSelectedTextBrush" Color="#FFFFFFFF" />
+            <SolidColorBrush x:Key="AccentTextFillColorPrimaryBrush" Color="#FF0F5FD4" />
+            <SolidColorBrush x:Key="AccentTextFillColorSecondaryBrush" Color="#FF0C4EB0" />
+            <SolidColorBrush x:Key="AccentTextFillColorTertiaryBrush" Color="#FF093D8C" />
+            <SolidColorBrush x:Key="AccentTextFillColorDisabledBrush" Color="#5C000000" />
+            <SolidColorBrush x:Key="FocusStrokeColorOuterBrush" Color="#FF000000" />
+            <SolidColorBrush x:Key="FocusStrokeColorInnerBrush" Color="#FFFFFFFF" />
+            <SolidColorBrush x:Key="NavigationViewSelectionIndicatorForeground" Color="#FF1370F3" />
+
+            <SolidColorBrush x:Key="McgoAccentSoftBrush" Color="#141370F3" />
+            <SolidColorBrush x:Key="McgoAccentSoftBorderBrush" Color="#331370F3" />
+            <SolidColorBrush x:Key="McgoDividerBrush" Color="#14000000" />
+            <SolidColorBrush x:Key="McgoIconForegroundBrush" Color="#FF0F5FD4" />
+            <SolidColorBrush x:Key="McgoHeroBorderBrush" Color="#291370F3" />
+            <LinearGradientBrush x:Key="McgoHeroBrush" StartPoint="0,0" EndPoint="1,1">
+                <GradientStop Color="#291370F3" Offset="0" />
+                <GradientStop Color="#0F1370F3" Offset="0.55" />
+                <GradientStop Color="#001370F3" Offset="1" />
+            </LinearGradientBrush>
+        </ResourceDictionary>
+    </ResourceDictionary.ThemeDictionaries>
+
+    <!-- ============================== 布局 ============================== -->
+
+    <!-- 页面根容器：统一内边距与节奏 -->
+    <Style x:Key="McgoPageRootStyle" TargetType="StackPanel">
+        <Setter Property="Padding" Value="24,16,24,28" />
+        <Setter Property="Spacing" Value="16" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+    </Style>
+
+    <!-- 页面标题区 -->
+    <Style x:Key="McgoPageTitleStyle" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="26" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="TextWrapping" Value="NoWrap" />
+        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        <Setter Property="LineHeight" Value="32" />
+    </Style>
+
+    <Style x:Key="McgoPageSubtitleStyle" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+
+    <!-- 卡片 -->
+    <Style x:Key="McgoCardStyle" TargetType="Border">
+        <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="Padding" Value="18" />
+    </Style>
+
+    <!-- 强调卡片：用于首页主区与启动主操作 -->
+    <Style x:Key="McgoHeroCardStyle" TargetType="Border" BasedOn="{StaticResource McgoCardStyle}">
+        <Setter Property="Background" Value="{ThemeResource McgoHeroBrush}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource McgoHeroBorderBrush}" />
+        <Setter Property="Padding" Value="20" />
+    </Style>
+
+    <!-- 次级卡片：嵌在卡片里的分区 -->
+    <Style x:Key="McgoInsetCardStyle" TargetType="Border">
+        <Setter Property="Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Padding" Value="14" />
+    </Style>
+
+    <!-- 卡片标题 -->
+    <Style x:Key="McgoCardTitleStyle" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="17" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="TextWrapping" Value="NoWrap" />
+        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    </Style>
+
+    <Style x:Key="McgoCardSubtitleStyle" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+
+    <!-- 表单标签 -->
+    <Style x:Key="McgoFieldLabelStyle" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+
+    <!-- 统计块 -->
+    <Style x:Key="McgoStatValueStyle" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="24" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        <Setter Property="TextWrapping" Value="NoWrap" />
+        <Setter Property="LineHeight" Value="30" />
+    </Style>
+
+    <Style x:Key="McgoStatLabelStyle" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+        <Setter Property="TextWrapping" Value="NoWrap" />
+        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    </Style>
+
+    <!-- 键值信息行 -->
+    <Style x:Key="McgoInfoKeyStyle" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorTertiaryBrush}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="TextWrapping" Value="NoWrap" />
+    </Style>
+
+    <Style x:Key="McgoInfoValueStyle" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    </Style>
+
+    <!-- 图标徽章 -->
+    <Style x:Key="McgoIconBadgeStyle" TargetType="Border">
+        <Setter Property="Width" Value="36" />
+        <Setter Property="Height" Value="36" />
+        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="Background" Value="{ThemeResource McgoAccentSoftBrush}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <Style x:Key="McgoIconGlyphStyle" TargetType="SymbolIcon">
+        <Setter Property="Foreground" Value="{ThemeResource McgoIconForegroundBrush}" />
+        <Setter Property="HorizontalAlignment" Value="Center" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <!-- 分隔线 -->
+    <Style x:Key="McgoDividerStyle" TargetType="Border">
+        <Setter Property="Height" Value="1" />
+        <Setter Property="Background" Value="{ThemeResource McgoDividerBrush}" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="Margin" Value="0,2" />
+    </Style>
+
+    <!-- 快捷入口按钮：左对齐图标 + 文本 -->
+    <Style x:Key="McgoTileButtonStyle" TargetType="Button">
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+        <Setter Property="MinHeight" Value="42" />
+        <Setter Property="Padding" Value="12,8" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+    </Style>
+
+    <!-- 主操作按钮 -->
+    <Style x:Key="McgoPrimaryButtonStyle" TargetType="Button" BasedOn="{StaticResource AccentButtonStyle}">
+        <Setter Property="MinHeight" Value="40" />
+        <Setter Property="Padding" Value="18,8" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="CornerRadius" Value="8" />
+    </Style>
+
+    <!-- 次级操作按钮 -->
+    <Style x:Key="McgoSecondaryButtonStyle" TargetType="Button">
+        <Setter Property="MinHeight" Value="36" />
+        <Setter Property="Padding" Value="14,6" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+    </Style>
+
+    <!-- 只读输出框 -->
+    <Style x:Key="McgoOutputBoxStyle" TargetType="TextBox">
+        <Setter Property="IsReadOnly" Value="True" />
+        <Setter Property="AcceptsReturn" Value="True" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="Padding" Value="10,8" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}" />
+    </Style>
+
+    <!-- 日志框 -->
+    <Style x:Key="McgoLogBoxStyle" TargetType="TextBox" BasedOn="{StaticResource McgoOutputBoxStyle}">
+        <Setter Property="FontFamily" Value="Cascadia Mono,Consolas,Microsoft YaHei UI" />
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="TextWrapping" Value="NoWrap" />
+        <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Auto" />
+        <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
+    </Style>
+
+    <!-- 分段导航容器 -->
+    <Style x:Key="McgoSectionBarStyle" TargetType="SelectorBar">
+        <Setter Property="Margin" Value="0,2,0,0" />
+    </Style>
+
+    <!-- 状态胶囊 -->
+    <Style x:Key="McgoChipStyle" TargetType="Border">
+        <Setter Property="CornerRadius" Value="11" />
+        <Setter Property="Padding" Value="10,3" />
+        <Setter Property="Background" Value="{ThemeResource McgoAccentSoftBrush}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource McgoAccentSoftBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <Style x:Key="McgoChipTextStyle" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    </Style>
+
+
         </ResourceDictionary>
     </Application.Resources>
 </Application>

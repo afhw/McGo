@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8" ?>
+﻿<?xml version="1.0" encoding="utf-8" ?>
 <Page
     x:Class="McGo.WinUI.Pages.ResourcesPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -6,84 +6,280 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
-    <ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled" HorizontalContentAlignment="Stretch">
-        <StackPanel x:Name="ResponsiveLayoutRoot" Padding="24,18,24,24" Spacing="14" MaxWidth="1100" HorizontalAlignment="Stretch">
+    <ScrollViewer
+        HorizontalScrollBarVisibility="Disabled"
+        HorizontalContentAlignment="Stretch"
+        HorizontalScrollMode="Disabled"
+        VerticalContentAlignment="Top"
+        VerticalScrollBarVisibility="Auto"
+        VerticalScrollMode="Auto">
+        <Grid
+            x:Name="ResponsiveLayoutRoot"
+            MaxWidth="1200"
+            HorizontalAlignment="Stretch"
+            Padding="24,20,24,28"
+            ColumnSpacing="18"
+            RowSpacing="14"
+            SizeChanged="ResponsiveLayoutRoot_SizeChanged">
 
-            <StackPanel Spacing="4">
-                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="资源" />
-                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="从 Modrinth 搜索并安装资源，或管理当前版本的本地资源。" TextWrapping="Wrap" />
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition x:Name="ResourcePrimaryColumn" Width="*" />
+                <ColumnDefinition x:Name="ResourceSideColumn" Width="320" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <StackPanel x:Name="ResourcePageHeader" Spacing="3">
+                <TextBlock Style="{StaticResource McgoPageTitleStyle}" Text="资源" />
+                <TextBlock Style="{StaticResource McgoPageSubtitleStyle}" Text="输入关键词搜索 Modrinth，选中结果就能装；本地资源也能在这里整理。" />
             </StackPanel>
 
-            <SelectorBar x:Name="ResourceSectionBar" SelectionChanged="ResourceSectionChanged">
+            <SelectorBar
+                x:Name="ResourceSectionBar"
+                Grid.Row="1"
+                Grid.ColumnSpan="2"
+                SelectionChanged="ResourceSectionChanged">
                 <SelectorBarItem Text="资源市场" Tag="market" />
                 <SelectorBarItem Text="本地资源" Tag="local" />
             </SelectorBar>
 
-            <Border x:Name="ResourceSearchPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                <StackPanel Spacing="12">
-                    <TextBlock Text="资源市场" FontSize="18" FontWeight="SemiBold" />
-                    <Grid ColumnSpacing="12" RowSpacing="10">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
-                        <TextBox x:Name="ResourceQueryBox" Header="搜索关键词" PlaceholderText="Mod、资源包、光影或数据包" />
-                        <ComboBox x:Name="ResourceVersionBox" Grid.Column="1" Header="安装目标版本" SelectionChanged="ResourceVersionChanged" />
-                        <ComboBox x:Name="ResourceSourceBox" Grid.Row="1" Header="来源" SelectedIndex="0" SelectionChanged="ResourceSourceChanged">
-                            <ComboBoxItem Content="modrinth" />
-                            <ComboBoxItem Content="local" />
-                        </ComboBox>
-                        <ComboBox x:Name="ResourceTypeBox" Grid.Row="1" Grid.Column="1" Header="类型" SelectedIndex="0" SelectionChanged="ResourceTypeChanged">
-                            <ComboBoxItem Content="mod" />
-                            <ComboBoxItem Content="resourcepack" />
-                            <ComboBoxItem Content="shader" />
-                            <ComboBoxItem Content="datapack" />
-                        </ComboBox>
-                        <TextBox x:Name="ResourceGameVersionBox" Grid.Row="2" Header="游戏版本" />
-                        <TextBox x:Name="ResourceLoaderBox" Grid.Row="2" Grid.Column="1" Header="加载器" />
-                        <ComboBox x:Name="ResourceSortBox" Grid.Row="3" Header="排序" SelectedIndex="0">
-                            <ComboBoxItem Content="relevance" />
-                            <ComboBoxItem Content="downloads" />
-                            <ComboBoxItem Content="follows" />
-                            <ComboBoxItem Content="updated" />
-                            <ComboBoxItem Content="newest" />
-                        </ComboBox>
-                        <Button x:Name="SearchResourcesButton" Grid.Row="3" Grid.Column="1" Content="搜索资源" Click="SearchResources" VerticalAlignment="Bottom" HorizontalAlignment="Stretch" />
-                    </Grid>
-                </StackPanel>
-            </Border>
+            <!--  ==================== 左列：搜索 + 结果（主区）  ====================  -->
+            <StackPanel
+                Grid.Row="2"
+                Grid.Column="0"
+                Spacing="14">
 
-            <Grid>
+                <!--  主操作：一个关键词框 + 一个搜索按钮，其余全部折叠  -->
+                <Border x:Name="ResourceSearchPanel" Style="{StaticResource McgoCardStyle}">
+                    <StackPanel Spacing="12">
+                        <StackPanel Spacing="2">
+                            <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="搜索资源" />
+                            <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="输入关键词直接搜索，需要时再展开筛选条件。" />
+                        </StackPanel>
 
-                <Border x:Name="ResourceResultsPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                    <StackPanel Spacing="10">
-                        <TextBlock Text="搜索结果" FontSize="18" FontWeight="SemiBold" />
-                        <CheckBox x:Name="InstallResourceDependenciesCheckBox" Content="安装 Modrinth 必需依赖" IsChecked="True" />
-                        <Grid ColumnSpacing="8" MaxWidth="420" HorizontalAlignment="Left">
+                        <Grid ColumnSpacing="8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <Button x:Name="InstallResourceButton" Content="安装选中资源" Click="InstallSelectedResource" HorizontalAlignment="Stretch" />
-                            <Button x:Name="ResourceDetailButton" Grid.Column="1" Content="查看详情" Click="ShowSelectedResourceDetail" HorizontalAlignment="Stretch" />
+                            <TextBox
+                                x:Name="ResourceQueryBox"
+                                MinHeight="42"
+                                KeyDown="ResourceQueryKeyDown"
+                                PlaceholderText="Mod / 资源包" />
+                            <Button
+                                x:Name="SearchResourcesButton"
+                                Grid.Column="1"
+                                MinWidth="104"
+                                MinHeight="42"
+                                Click="SearchResources"
+                                Style="{StaticResource McgoPrimaryButtonStyle}">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <SymbolIcon Symbol="Find" />
+                                    <TextBlock FontWeight="SemiBold" Text="搜索" />
+                                </StackPanel>
+                            </Button>
                         </Grid>
-                        <TextBlock x:Name="ResourceStatusText" Text="等待搜索" TextWrapping="Wrap" />
-                        <ProgressBar x:Name="ResourceProgressBar" Minimum="0" Maximum="100" Height="8" />
-                        <ListView x:Name="ResourceResultsList" MinHeight="280" />
+
+                        <!--  次要筛选：默认收起，不占首屏  -->
+                        <Expander
+                            x:Name="ResourceFilterExpander"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Stretch"
+                            IsExpanded="False">
+                            <Expander.Header>
+                                <Grid ColumnSpacing="10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <SymbolIcon Symbol="Setting" Style="{StaticResource McgoIconGlyphStyle}" />
+                                    <StackPanel
+                                        Grid.Column="1"
+                                        VerticalAlignment="Center"
+                                        Spacing="1">
+                                        <TextBlock FontWeight="SemiBold" Text="筛选条件" />
+                                        <TextBlock Style="{StaticResource McgoStatLabelStyle}" Text="版本 · 来源 · 类型 · 排序 · 游戏版本 · 加载器" TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                </Grid>
+                            </Expander.Header>
+
+                            <StackPanel Padding="0,10,0,0" Spacing="10">
+                                <Grid
+                                    x:Name="FilterGrid"
+                                    ColumnSpacing="12"
+                                    RowSpacing="10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+
+                                    <StackPanel Spacing="5">
+                                        <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="安装目标版本" />
+                                        <ComboBox
+                                            x:Name="ResourceVersionBox"
+                                            HorizontalAlignment="Stretch"
+                                            SelectionChanged="ResourceVersionChanged" />
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="1" Spacing="5">
+                                        <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="来源" />
+                                        <ComboBox
+                                            x:Name="ResourceSourceBox"
+                                            HorizontalAlignment="Stretch"
+                                            SelectedIndex="0"
+                                            SelectionChanged="ResourceSourceChanged">
+                                            <ComboBoxItem Content="modrinth" />
+                                            <ComboBoxItem Content="local" />
+                                        </ComboBox>
+                                    </StackPanel>
+
+                                    <StackPanel
+                                        Grid.Row="1"
+                                        Spacing="5">
+                                        <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="类型" />
+                                        <ComboBox
+                                            x:Name="ResourceTypeBox"
+                                            HorizontalAlignment="Stretch"
+                                            SelectedIndex="0"
+                                            SelectionChanged="ResourceTypeChanged">
+                                            <ComboBoxItem Content="mod" />
+                                            <ComboBoxItem Content="resourcepack" />
+                                            <ComboBoxItem Content="shader" />
+                                            <ComboBoxItem Content="datapack" />
+                                        </ComboBox>
+                                    </StackPanel>
+
+                                    <StackPanel
+                                        Grid.Row="1"
+                                        Grid.Column="1"
+                                        Spacing="5">
+                                        <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="排序" />
+                                        <ComboBox
+                                            x:Name="ResourceSortBox"
+                                            HorizontalAlignment="Stretch"
+                                            SelectedIndex="0">
+                                            <ComboBoxItem Content="relevance" />
+                                            <ComboBoxItem Content="downloads" />
+                                            <ComboBoxItem Content="follows" />
+                                            <ComboBoxItem Content="updated" />
+                                            <ComboBoxItem Content="newest" />
+                                        </ComboBox>
+                                    </StackPanel>
+
+                                    <StackPanel
+                                        Grid.Row="2"
+                                        Spacing="5">
+                                        <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="游戏版本" />
+                                        <TextBox x:Name="ResourceGameVersionBox" PlaceholderText="留空不限制" TextChanged="ResourceTargetFilterChanged" />                                    </StackPanel>
+
+                                    <StackPanel
+                                        Grid.Row="2"
+                                        Grid.Column="1"
+                                        Spacing="5">
+                                        <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="加载器" />
+                                        <TextBox x:Name="ResourceLoaderBox" PlaceholderText="留空不限制" TextChanged="ResourceTargetFilterChanged" />
+                                    </StackPanel>
+                                </Grid>
+
+                                <TextBlock Style="{StaticResource McgoStatLabelStyle}" Text="游戏版本与加载器会按目标版本自动填写，一般不用改。" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Expander>
                     </StackPanel>
                 </Border>
 
-                <Border x:Name="LocalResourcesPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" Visibility="Collapsed">
+                <!--  结果列表：页面主要内容  -->
+                <Border x:Name="ResourceResultsPanel" Style="{StaticResource McgoCardStyle}">
                     <StackPanel Spacing="10">
-                        <TextBlock Text="本地资源" FontSize="18" FontWeight="SemiBold" />
-                        <TextBox x:Name="TargetDirBox" Header="目标目录" />
-                        <Grid ColumnSpacing="8" RowSpacing="8" MaxWidth="520" HorizontalAlignment="Left">
+                        <StackPanel Spacing="2">
+                            <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="搜索结果" />
+                            <TextBlock x:Name="ResourceStatusText" Style="{StaticResource McgoCardSubtitleStyle}" Text="等待搜索" />
+                        </StackPanel>
+
+                        <ProgressBar
+                            x:Name="ResourceProgressBar"
+                            Height="4"
+                            Maximum="100"
+                            Minimum="0" />
+
+                        <!--  选中后立刻能操作，不用滚到列表底部  -->
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <CheckBox
+                                x:Name="InstallResourceDependenciesCheckBox"
+                                VerticalAlignment="Center"
+                                Content="一并安装必需依赖"
+                                IsChecked="True" />
+                            <StackPanel
+                                Grid.Column="1"
+                                Orientation="Horizontal"
+                                Spacing="8">
+                                <Button
+                                    x:Name="ResourceDetailButton"
+                                    Click="ShowSelectedResourceDetail"
+                                    Content="查看详情"
+                                    Style="{StaticResource McgoSecondaryButtonStyle}" />
+                                <Button
+                                    x:Name="InstallResourceButton"
+                                    Click="InstallSelectedResource"
+                                    Style="{StaticResource McgoPrimaryButtonStyle}">
+                                    <StackPanel Orientation="Horizontal" Spacing="7">
+                                        <SymbolIcon Symbol="Download" />
+                                        <TextBlock FontWeight="SemiBold" Text="安装选中" />
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+                        </Grid>
+
+                        <Border Style="{StaticResource McgoDividerStyle}" />
+
+                        <ListView
+                            x:Name="ResourceResultsList"
+                            MaxHeight="560"
+                            MinHeight="300" />
+                    </StackPanel>
+                </Border>
+
+                <!--  本地资源（分段切换后显示）  -->
+                <Border
+                    x:Name="LocalResourcesPanel"
+                    Style="{StaticResource McgoCardStyle}"
+                    Visibility="Collapsed">
+                    <StackPanel Spacing="12">
+                        <StackPanel Spacing="2">
+                            <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="本地资源" />
+                            <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="管理目标目录里的文件：启用、禁用、删除或补齐前置。" />
+                        </StackPanel>
+
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="TargetDirBox" Header="目标目录" TextChanged="ResourceTargetFilterChanged" />
+                            <Button
+                                Grid.Column="1"
+                                VerticalAlignment="Bottom"
+                                Click="RefreshLocalResources"
+                                Content="刷新本地"
+                                Style="{StaticResource McgoSecondaryButtonStyle}" />
+                        </Grid>
+
+                        <Grid
+                            ColumnSpacing="8"
+                            RowSpacing="8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="*" />
@@ -93,39 +289,128 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
-                            <Button Content="刷新本地" Click="RefreshLocalResources" HorizontalAlignment="Stretch" />
-                            <Button Grid.Column="1" Content="查看详情" Click="ShowLocalResourceDetail" HorizontalAlignment="Stretch" />
-                            <Button Grid.Column="2" Content="启用" Click="EnableLocalResource" HorizontalAlignment="Stretch" />
-                            <Button Grid.Row="1" Content="禁用" Click="DisableLocalResource" HorizontalAlignment="Stretch" />
-                            <Button Grid.Row="1" Grid.Column="1" Content="删除" Click="DeleteLocalResource" HorizontalAlignment="Stretch" />
+                            <Button
+                                HorizontalAlignment="Stretch"
+                                Click="ShowLocalResourceDetail"
+                                Content="查看详情"
+                                Style="{StaticResource McgoSecondaryButtonStyle}" />
+                            <Button
+                                Grid.Column="1"
+                                HorizontalAlignment="Stretch"
+                                Click="EnableLocalResource"
+                                Content="启用"
+                                Style="{StaticResource McgoSecondaryButtonStyle}" />
+                            <Button
+                                Grid.Column="2"
+                                HorizontalAlignment="Stretch"
+                                Click="DisableLocalResource"
+                                Content="禁用"
+                                Style="{StaticResource McgoSecondaryButtonStyle}" />
+                            <Button
+                                Grid.Row="1"
+                                HorizontalAlignment="Stretch"
+                                Click="DeleteLocalResource"
+                                Content="删除"
+                                Style="{StaticResource McgoSecondaryButtonStyle}" />
+                            <Button
+                                x:Name="ResolveDependenciesButton"
+                                Grid.Row="1"
+                                Grid.Column="1"
+                                HorizontalAlignment="Stretch"
+                                Click="ResolveDependencies"
+                                Content="解析依赖"
+                                Style="{StaticResource McgoSecondaryButtonStyle}" />
+                            <Button
+                                x:Name="InstallMissingDependenciesButton"
+                                Grid.Row="1"
+                                Grid.Column="2"
+                                HorizontalAlignment="Stretch"
+                                Click="InstallMissingDependencies"
+                                Style="{StaticResource McgoPrimaryButtonStyle}"
+                                ToolTipService.ToolTip="检测并安装缺失的 Mod 前置">
+                                <TextBlock Text="补齐前置" TextTrimming="CharacterEllipsis" />
+                            </Button>
                         </Grid>
-                        <Grid ColumnSpacing="8" MaxWidth="420" HorizontalAlignment="Left">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <Button x:Name="ResolveDependenciesButton" Content="解析依赖" Click="ResolveDependencies" HorizontalAlignment="Stretch" />
-                            <Button x:Name="InstallMissingDependenciesButton" Grid.Column="1" Content="安装缺失前置" Click="InstallMissingDependencies" HorizontalAlignment="Stretch" />
-                        </Grid>
-                        <ListView x:Name="LocalResourcesList" MinHeight="220" />
+
+                        <ListView x:Name="LocalResourcesList" MinHeight="280" />
                     </StackPanel>
                 </Border>
-            </Grid>
+            </StackPanel>
 
-            <Border Padding="16" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                <StackPanel Spacing="8">
-                    <TextBlock Text="资源详情" FontSize="18" FontWeight="SemiBold" />
-                    <ListView x:Name="ResourceScreenshotsList" MaxHeight="110" />
-                    <TextBox x:Name="ResourceDetailBox" MinHeight="180" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
-                </StackPanel>
-            </Border>
+            <!--  ==================== 右列：详情与日志（默认收起）  ====================  -->
+            <StackPanel
+                x:Name="ResourceSidePanel"
+                Grid.Row="2"
+                Grid.Column="1"
+                Spacing="12">
 
-            <Border Padding="16" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                <StackPanel Spacing="8">
-                    <TextBlock Text="操作日志" FontSize="18" FontWeight="SemiBold" />
-                    <TextBox x:Name="ResourceOutputBox" MinHeight="180" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
-                </StackPanel>
-            </Border>
-        </StackPanel>
+                <!--  装到哪：把折叠面板里最关键的信息摊在表面  -->
+                <Border Padding="16" Style="{StaticResource McgoCardStyle}">
+                    <StackPanel Spacing="10">
+                        <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="安装目标" />
+
+                        <StackPanel Spacing="2">
+                            <TextBlock Style="{StaticResource McgoStatLabelStyle}" Text="版本 · 类型" />
+                            <TextBlock x:Name="ResourceTargetVersionText" TextWrapping="Wrap" Text="尚未选择版本" />
+                        </StackPanel>
+
+                        <StackPanel Spacing="2">
+                            <TextBlock Style="{StaticResource McgoStatLabelStyle}" Text="存放目录" />
+                            <TextBlock
+                                x:Name="ResourceTargetDirText"
+                                Style="{StaticResource McgoInfoValueStyle}"
+                                Text="—" />
+                        </StackPanel>
+
+                        <TextBlock
+                            x:Name="ResourceTargetHintText"
+                            Style="{StaticResource McgoStatLabelStyle}"
+                            TextWrapping="Wrap"
+                            Text="在左侧展开“筛选条件”可以改目标版本和类型。" />
+                    </StackPanel>
+                </Border>
+
+                <Expander
+                    x:Name="ResourceDetailExpander"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Stretch"
+                    IsExpanded="False">
+                    <Expander.Header>
+                        <StackPanel VerticalAlignment="Center" Spacing="1">
+                            <TextBlock FontWeight="SemiBold" Text="资源详情" />
+                            <TextBlock Style="{StaticResource McgoStatLabelStyle}" Text="选中结果后查看介绍与截图" />
+                        </StackPanel>
+                    </Expander.Header>
+                    <StackPanel Padding="0,10,0,0" Spacing="8">
+                        <ListView x:Name="ResourceScreenshotsList" MaxHeight="110" />
+                        <TextBox
+                            x:Name="ResourceDetailBox"
+                            MinHeight="200"
+                            Style="{StaticResource McgoOutputBoxStyle}" />
+                    </StackPanel>
+                </Expander>
+
+                <Expander
+                    x:Name="ResourceOutputExpander"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Stretch"
+                    IsExpanded="False">
+                    <Expander.Header>
+                        <StackPanel VerticalAlignment="Center" Spacing="1">
+                            <TextBlock FontWeight="SemiBold" Text="操作日志" />
+                            <TextBlock x:Name="ResourceOutputPreview" Style="{StaticResource McgoStatLabelStyle}" Text="安装、依赖与状态消息" />
+                        </StackPanel>
+                    </Expander.Header>
+                    <TextBox
+                        x:Name="ResourceOutputBox"
+                        Margin="0,10,0,0"
+                        MinHeight="140"
+                        MaxHeight="260"
+                        Style="{StaticResource McgoLogBoxStyle}"
+                        TextChanged="ResourceOutputChanged"
+                        TextWrapping="Wrap" />
+                </Expander>
+            </StackPanel>
+        </Grid>
     </ScrollViewer>
 </Page>

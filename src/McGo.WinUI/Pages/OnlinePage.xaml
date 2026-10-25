@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8" ?>
+﻿<?xml version="1.0" encoding="utf-8" ?>
 <Page
     x:Class="McGo.WinUI.Pages.OnlinePage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -7,11 +7,23 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     NavigationCacheMode="Required"
     mc:Ignorable="d">
-    <ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled" HorizontalContentAlignment="Stretch">
-        <StackPanel x:Name="ResponsiveLayoutRoot" Padding="24,18,24,24" Spacing="16" MaxWidth="1100" HorizontalAlignment="Stretch">
-            <StackPanel Spacing="4">
-                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="联机" />
-                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="管理服务器、检测 NAT，或建立 McGo P2P 隧道。" TextWrapping="Wrap" />
+    <Grid>
+        <ScrollViewer
+            HorizontalScrollBarVisibility="Disabled"
+            HorizontalContentAlignment="Stretch"
+            HorizontalScrollMode="Disabled"
+            VerticalContentAlignment="Top"
+            VerticalScrollBarVisibility="Auto"
+            VerticalScrollMode="Auto">
+            <StackPanel
+                x:Name="ResponsiveLayoutRoot"
+                HorizontalAlignment="Stretch"
+                Padding="24,16,24,28"
+                Spacing="16">
+
+            <StackPanel Spacing="3">
+                <TextBlock Style="{StaticResource McgoPageTitleStyle}" Text="联机" />
+                <TextBlock Style="{StaticResource McgoPageSubtitleStyle}" Text="和好友用同一个房间号对上，房主在游戏里开个局域网就能一起玩。" />
             </StackPanel>
 
             <SelectorBar x:Name="OnlineSectionBar" SelectionChanged="OnlineSectionChanged">
@@ -21,19 +33,17 @@
                 <SelectorBarItem Text="开黑胶囊" Tag="capsule" />
             </SelectorBar>
 
-            <Border x:Name="P2PPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                <StackPanel Spacing="14">
-                    <StackPanel Spacing="3">
-                        <TextBlock Text="创建或加入房间" FontSize="20" FontWeight="SemiBold" />
-                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="两端使用相同的房间号和口令。" TextWrapping="Wrap" />
-                    </StackPanel>
+            <!--  ==================== P2P：先身份、再房间号、一个按钮  ====================  -->
+            <Border x:Name="P2PPanel" Style="{StaticResource McgoHeroCardStyle}">
+                <StackPanel Spacing="12">
 
+                    <!--  先选身份，紧接着就是房间号和唯一的主按钮  -->
                     <SelectorBar x:Name="P2PRoleBar" SelectionChanged="P2PRoleChanged">
                         <SelectorBarItem Text="我是房主" Tag="host" />
                         <SelectorBarItem Text="我要加入" Tag="guest" />
                     </SelectorBar>
 
-                    <Grid x:Name="P2PPrimarySettingsGrid" ColumnSpacing="12" RowSpacing="10">
+                    <Grid x:Name="P2PPrimarySettingsGrid" ColumnSpacing="10" RowSpacing="8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="*" />
@@ -42,60 +52,101 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
+
                         <Grid ColumnSpacing="8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <TextBox x:Name="RoomBox" Header="房间号" PlaceholderText="留空会自动生成" />
-                            <Button Grid.Column="1" Click="GenerateRoom" VerticalAlignment="Bottom" ToolTipService.ToolTip="生成房间号">
+                            <Button
+                                Grid.Column="1"
+                                VerticalAlignment="Bottom"
+                                Click="GenerateRoom"
+                                Style="{StaticResource McgoSecondaryButtonStyle}"
+                                ToolTipService.ToolTip="生成房间号">
                                 <SymbolIcon Symbol="Refresh" />
                             </Button>
                         </Grid>
-                        <PasswordBox x:Name="SecretBox" Grid.Column="1" Header="房间口令" PlaceholderText="可选" />
 
-                        <StackPanel x:Name="HostPortPanel" Grid.Row="1" Spacing="5">
-                            <TextBlock Text="Minecraft LAN 端口" />
-                            <NumberBox x:Name="HostPortBox" Minimum="1" Maximum="65535" SmallChange="1" LargeChange="100" SpinButtonPlacementMode="Compact" ValueChanged="P2PPortChanged" />
-                        </StackPanel>
-                        <Grid x:Name="JoinPortPanel" Grid.Row="1" ColumnSpacing="8" Visibility="Collapsed">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <NumberBox x:Name="JoinPortBox" Header="本地监听端口" Minimum="1" Maximum="65535" SmallChange="1" LargeChange="100" SpinButtonPlacementMode="Compact" ValueChanged="P2PPortChanged" />
-                            <Button Grid.Column="1" Click="PickJoinPort" VerticalAlignment="Bottom" ToolTipService.ToolTip="自动选择可用端口">
-                                <SymbolIcon Symbol="Refresh" />
-                            </Button>
-                        </Grid>
-                        <StackPanel Grid.Row="1" Grid.Column="1" Spacing="5" VerticalAlignment="Center">
-                            <TextBlock x:Name="P2PRoleHintTitle" Text="房主操作" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                            <TextBlock x:Name="P2PConnectionHintText" Text="在 Minecraft 中开放局域网后填写端口" TextWrapping="Wrap" />
+                        <PasswordBox
+                            x:Name="SecretBox"
+                            Grid.Column="1"
+                            Header="房间口令"
+                            PlaceholderText="可选" />
+
+                        <StackPanel
+                            Grid.Row="1"
+                            Grid.ColumnSpan="2"
+                            Spacing="1">
+                            <TextBlock x:Name="P2PRoleHintTitle" Style="{StaticResource McgoFieldLabelStyle}" Text="房主操作" />
+                            <TextBlock
+                                x:Name="P2PConnectionHintText"
+                                Style="{StaticResource McgoCardSubtitleStyle}"
+                                Text="在 Minecraft 中开放局域网后填写端口"
+                                TextWrapping="Wrap" />
                         </StackPanel>
                     </Grid>
 
-                    <ProgressBar x:Name="P2PStatusBar" Minimum="0" Maximum="100" Height="6" />
-                    <TextBlock x:Name="P2PStatusText" Text="状态：未启动" TextWrapping="Wrap" />
-                    <Grid ColumnSpacing="8">
+                    <!--  唯一的主操作：按钮文字由代码按房主/加入者切换  -->
+                    <Grid ColumnSpacing="10">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="1.35*" />
+                            <ColumnDefinition Width="1.7*" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <Button x:Name="StartP2PButton" Style="{StaticResource AccentButtonStyle}" Content="创建房间" Click="StartSelectedP2P" HorizontalAlignment="Stretch" />
-                        <Button x:Name="StopP2PButton" Grid.Column="1" Content="停止连接" Click="StopP2P" IsEnabled="False" HorizontalAlignment="Stretch" />
+                        <Button
+                            x:Name="StartP2PButton"
+                            MinHeight="52"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Center"
+                            Click="StartSelectedP2P"
+                            Content="创建房间"
+                            FontSize="16"
+                            Style="{StaticResource McgoPrimaryButtonStyle}" />
+                        <Button
+                            x:Name="StopP2PButton"
+                            Grid.Column="1"
+                            MinHeight="52"
+                            HorizontalAlignment="Stretch"
+                            Click="StopP2P"
+                            Content="停止连接"
+                            IsEnabled="False"
+                            Style="{StaticResource McgoSecondaryButtonStyle}" />
                     </Grid>
+
+                    <StackPanel Spacing="6">
+                        <TextBlock
+                            x:Name="P2PStatusText"
+                            Style="{StaticResource McgoStatLabelStyle}"
+                            Text="状态：未启动"
+                            TextWrapping="Wrap" />
+                        <ProgressBar
+                            x:Name="P2PStatusBar"
+                            Height="4"
+                            Maximum="100"
+                            Minimum="0" />
+                    </StackPanel>
+
+                    <!--  邀请：一行两个次要按钮  -->
                     <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <Button Click="CopyInviteText" HorizontalAlignment="Stretch">
+                        <Button
+                            HorizontalAlignment="Stretch"
+                            Click="CopyInviteText"
+                            Style="{StaticResource McgoSecondaryButtonStyle}">
                             <StackPanel Orientation="Horizontal" Spacing="7">
                                 <SymbolIcon Symbol="Copy" />
                                 <TextBlock Text="复制邀请" />
                             </StackPanel>
                         </Button>
-                        <Button Grid.Column="1" Click="PasteInviteText" HorizontalAlignment="Stretch">
+                        <Button
+                            Grid.Column="1"
+                            HorizontalAlignment="Stretch"
+                            Click="PasteInviteText"
+                            Style="{StaticResource McgoSecondaryButtonStyle}">
                             <StackPanel Orientation="Horizontal" Spacing="7">
                                 <SymbolIcon Symbol="Paste" />
                                 <TextBlock Text="粘贴邀请" />
@@ -103,18 +154,90 @@
                         </Button>
                     </Grid>
 
-                    <Expander x:Name="P2PConnectionSettings" Header="连接设置">
-                        <StackPanel Padding="0,8,0,0" Spacing="10">
+                    <!--  中继、端口、UDP 等收敛进折叠面板，默认不占首屏  -->
+                    <Expander
+                        x:Name="P2PConnectionSettings"
+                        HorizontalAlignment="Stretch"
+                        IsExpanded="False">
+                        <Expander.Header>
+                            <Grid ColumnSpacing="10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <SymbolIcon Symbol="Setting" Style="{StaticResource McgoIconGlyphStyle}" />
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="1">
+                                    <TextBlock FontWeight="SemiBold" Text="连接设置" />
+                                    <TextBlock
+                                        Style="{StaticResource McgoStatLabelStyle}"
+                                        Text="中继服务器 · 本地端口 · UDP 打洞"
+                                        TextTrimming="CharacterEllipsis"
+                                        TextWrapping="NoWrap" />
+                                </StackPanel>
+                            </Grid>
+                        </Expander.Header>
+                        <StackPanel Padding="0,10,0,0" Spacing="12">
                             <Grid ColumnSpacing="12">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
                                 <TextBox x:Name="RelayHostBox" Header="中继主机" />
-                                <NumberBox x:Name="RelayPortBox" Grid.Column="1" Header="中继端口" Minimum="1" Maximum="65535" SmallChange="1" LargeChange="100" SpinButtonPlacementMode="Compact" />
+                                <NumberBox
+                                    x:Name="RelayPortBox"
+                                    Grid.Column="1"
+                                    Header="中继端口"
+                                    LargeChange="100"
+                                    Maximum="65535"
+                                    Minimum="1"
+                                    SmallChange="1"
+                                    SpinButtonPlacementMode="Compact" />
                             </Grid>
+
+                            <Border Style="{StaticResource McgoDividerStyle}" />
+
+                            <!--  端口随角色切换：房主是局域网端口，加入者是本地监听端口  -->
+                            <StackPanel x:Name="HostPortPanel" Spacing="5">
+                                <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="Minecraft LAN 端口" />
+                                <NumberBox
+                                    x:Name="HostPortBox"
+                                    LargeChange="100"
+                                    Maximum="65535"
+                                    Minimum="1"
+                                    SmallChange="1"
+                                    SpinButtonPlacementMode="Compact"
+                                    ValueChanged="P2PPortChanged" />
+                            </StackPanel>
+                            <Grid x:Name="JoinPortPanel" ColumnSpacing="8" Visibility="Collapsed">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <NumberBox
+                                    x:Name="JoinPortBox"
+                                    Header="本地监听端口"
+                                    LargeChange="100"
+                                    Maximum="65535"
+                                    Minimum="1"
+                                    SmallChange="1"
+                                    SpinButtonPlacementMode="Compact"
+                                    ValueChanged="P2PPortChanged" />
+                                <Button
+                                    Grid.Column="1"
+                                    VerticalAlignment="Bottom"
+                                    Click="PickJoinPort"
+                                    Style="{StaticResource McgoSecondaryButtonStyle}"
+                                    ToolTipService.ToolTip="自动选择可用端口">
+                                    <SymbolIcon Symbol="Refresh" />
+                                </Button>
+                            </Grid>
+
                             <CheckBox x:Name="UdpEnabledBox" Content="优先 UDP 直连，失败时回退 TCP 中继" />
-                            <Button Click="SaveOnlineSettings" HorizontalAlignment="Left">
+
+                            <Button
+                                HorizontalAlignment="Left"
+                                Click="SaveOnlineSettings"
+                                Style="{StaticResource McgoSecondaryButtonStyle}">
                                 <StackPanel Orientation="Horizontal" Spacing="7">
                                     <SymbolIcon Symbol="Save" />
                                     <TextBlock Text="保存连接设置" />
@@ -125,93 +248,224 @@
                 </StackPanel>
             </Border>
 
-            <Border x:Name="NatPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" Visibility="Collapsed">
+            <!--  ==================== NAT  ====================  -->
+            <Border x:Name="NatPanel" Style="{StaticResource McgoCardStyle}" Visibility="Collapsed">
                 <StackPanel Spacing="12">
-                    <StackPanel Spacing="3">
-                        <TextBlock Text="NAT 类型检测" FontSize="20" FontWeight="SemiBold" />
-                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="通过 STUN 检测当前网络的 UDP 公网映射。" TextWrapping="Wrap" />
+                    <StackPanel Spacing="2">
+                        <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="NAT 类型检测" />
+                        <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="通过 STUN 检测当前网络的 UDP 公网映射，判断能否直连。" />
                     </StackPanel>
-                    <TextBlock x:Name="NatStatusText" Text="NAT 类型：未检测" TextWrapping="Wrap" />
-                    <TextBox x:Name="NatOutputBox" MinHeight="160" MaxHeight="320" Text="点击“检测 NAT 类型”后显示 STUN 探测结果。" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
+                    <TextBlock x:Name="NatStatusText" TextWrapping="Wrap" Text="NAT 类型：未检测" />
                     <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <Button x:Name="NatDetectButton" Style="{StaticResource AccentButtonStyle}" Content="检测 NAT 类型" Click="DetectNat" HorizontalAlignment="Stretch" />
-                        <Button Grid.Column="1" Content="复制检测结果" Click="CopyNatResult" HorizontalAlignment="Stretch" />
+                        <Button
+                            x:Name="NatDetectButton"
+                            HorizontalAlignment="Stretch"
+                            Click="DetectNat"
+                            Content="检测 NAT 类型"
+                            Style="{StaticResource McgoPrimaryButtonStyle}" />
+                        <Button
+                            Grid.Column="1"
+                            HorizontalAlignment="Stretch"
+                            Click="CopyNatResult"
+                            Content="复制检测结果"
+                            Style="{StaticResource McgoSecondaryButtonStyle}" />
                     </Grid>
+                    <TextBox
+                        x:Name="NatOutputBox"
+                        MaxHeight="320"
+                        MinHeight="160"
+                        Style="{StaticResource McgoLogBoxStyle}"
+                        Text="点击“检测 NAT 类型”后显示 STUN 探测结果。" />
                 </StackPanel>
             </Border>
 
-            <Border x:Name="ServersPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" Visibility="Collapsed">
+            <!--  ==================== 常用服务器  ====================  -->
+            <Border x:Name="ServersPanel" Style="{StaticResource McgoCardStyle}" Visibility="Collapsed">
                 <StackPanel Spacing="12">
-                    <StackPanel Spacing="3">
-                        <TextBlock Text="常用服务器" FontSize="20" FontWeight="SemiBold" />
-                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="每行保存一个服务器地址，可使用“地址 | 备注”格式。" TextWrapping="Wrap" />
+                    <StackPanel Spacing="2">
+                        <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="常用服务器" />
+                        <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="每行一个地址，支持“地址 | 备注”格式。" />
                     </StackPanel>
-                    <TextBox x:Name="ServerListBox" MinHeight="180" MaxHeight="360" TextWrapping="Wrap" AcceptsReturn="True" />
+                    <TextBox
+                        x:Name="ServerListBox"
+                        MinHeight="180"
+                        MaxHeight="360"
+                        AcceptsReturn="True"
+                        TextWrapping="Wrap" />
                     <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <Button Style="{StaticResource AccentButtonStyle}" Content="保存服务器" Click="SaveServers" HorizontalAlignment="Stretch" />
-                        <Button Grid.Column="1" Content="复制首个服务器" Click="CopyFirstServer" HorizontalAlignment="Stretch" />
+                        <Button
+                            HorizontalAlignment="Stretch"
+                            Click="SaveServers"
+                            Content="保存服务器"
+                            Style="{StaticResource McgoPrimaryButtonStyle}" />
+                        <Button
+                            Grid.Column="1"
+                            HorizontalAlignment="Stretch"
+                            Click="CopyFirstServer"
+                            Content="复制首个服务器"
+                            Style="{StaticResource McgoSecondaryButtonStyle}" />
                     </Grid>
                 </StackPanel>
             </Border>
 
-            <Border x:Name="CapsulePanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" Visibility="Collapsed">
+            <!--  ==================== 开黑胶囊  ====================  -->
+            <Border x:Name="CapsulePanel" Style="{StaticResource McgoCardStyle}" Visibility="Collapsed">
                 <StackPanel Spacing="12">
-                    <StackPanel Spacing="3">
-                        <TextBlock Text="开黑胶囊" FontSize="20" FontWeight="SemiBold" />
-                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="导入或导出私有文件清单，并通过 P2P 补齐胶囊文件。" TextWrapping="Wrap" />
+                    <StackPanel Spacing="2">
+                        <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="开黑胶囊" />
+                        <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="导入或导出私有文件清单，并通过 P2P 补齐缺失文件。" />
                     </StackPanel>
+
                     <TextBox x:Name="CapsuleGameDirBox" Header="游戏目录" />
+
                     <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <ComboBox x:Name="CapsuleVersionBox" Header="本地版本" SelectionChanged="CapsuleVersionChanged" HorizontalAlignment="Stretch" />
-                        <Button Grid.Column="1" Content="同步版本" Click="RefreshCapsuleVersions" VerticalAlignment="Bottom" />
+                        <ComboBox
+                            x:Name="CapsuleVersionBox"
+                            HorizontalAlignment="Stretch"
+                            Header="本地版本"
+                            SelectionChanged="CapsuleVersionChanged" />
+                        <Button
+                            Grid.Column="1"
+                            VerticalAlignment="Bottom"
+                            Click="RefreshCapsuleVersions"
+                            Content="同步版本"
+                            Style="{StaticResource McgoSecondaryButtonStyle}" />
                     </Grid>
-                    <TextBox x:Name="CapsuleRuntimeDirBox" Header="胶囊运行目录" />
+
                     <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBox x:Name="CapsuleManifestPathBox" Header="胶囊文件或 mcgo-capsule.json" />
-                        <Button Grid.Column="1" Content="选择胶囊" Click="ChooseCapsuleManifest" VerticalAlignment="Bottom" />
+                        <Button
+                            Grid.Column="1"
+                            VerticalAlignment="Bottom"
+                            Click="ChooseCapsuleManifest"
+                            Content="选择胶囊"
+                            Style="{StaticResource McgoSecondaryButtonStyle}" />
                     </Grid>
-                    <Grid ColumnSpacing="8" RowSpacing="8">
+
+                    <!--  运行目录由版本设置自动推导，收进折叠面板  -->
+                    <Expander HorizontalAlignment="Stretch" IsExpanded="False">
+                        <Expander.Header>
+                            <Grid ColumnSpacing="10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <SymbolIcon Symbol="Folder" Style="{StaticResource McgoIconGlyphStyle}" />
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="1">
+                                    <TextBlock FontWeight="SemiBold" Text="胶囊运行目录" />
+                                    <TextBlock
+                                        Style="{StaticResource McgoStatLabelStyle}"
+                                        Text="按所选版本与资源隔离设置自动生成"
+                                        TextTrimming="CharacterEllipsis"
+                                        TextWrapping="NoWrap" />
+                                </StackPanel>
+                            </Grid>
+                        </Expander.Header>
+                        <TextBox
+                            x:Name="CapsuleRuntimeDirBox"
+                            Margin="0,8,0,0"
+                            Header="胶囊运行目录" />
+                    </Expander>
+
+                    <Border Style="{StaticResource McgoDividerStyle}" />
+
+                    <!--  补包服务：一个主操作 + 一个停止  -->
+                    <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
-                        <Button x:Name="ImportCapsuleButton" Content="导入开黑胶囊" Click="ImportCapsule" HorizontalAlignment="Stretch" />
-                        <Button x:Name="ExportCapsuleButton" Grid.Column="1" Content="导出开黑胶囊" Click="ExportCapsule" HorizontalAlignment="Stretch" />
-                        <Button x:Name="StartCapsuleHostButton" Grid.Row="1" Style="{StaticResource AccentButtonStyle}" Content="启动补包服务" Click="StartCapsuleFileHost" HorizontalAlignment="Stretch" />
-                        <Button x:Name="PullCapsuleButton" Grid.Row="1" Grid.Column="1" Content="补齐胶囊文件" Click="PullCapsuleFiles" IsEnabled="False" HorizontalAlignment="Stretch" />
-                        <Button x:Name="StopCapsuleHostButton" Grid.Row="2" Content="停止补包服务" Click="StopCapsuleFileHost" IsEnabled="False" HorizontalAlignment="Stretch" />
+                        <Button
+                            x:Name="StartCapsuleHostButton"
+                            HorizontalAlignment="Stretch"
+                            Click="StartCapsuleFileHost"
+                            Content="启动补包服务"
+                            Style="{StaticResource McgoPrimaryButtonStyle}" />
+                        <Button
+                            x:Name="StopCapsuleHostButton"
+                            Grid.Column="1"
+                            HorizontalAlignment="Stretch"
+                            Click="StopCapsuleFileHost"
+                            Content="停止补包服务"
+                            IsEnabled="False"
+                            Style="{StaticResource McgoSecondaryButtonStyle}" />
                     </Grid>
-                    <ProgressBar x:Name="CapsulePullProgressBar" Minimum="0" Maximum="100" Height="6" />
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button
+                            x:Name="PullCapsuleButton"
+                            HorizontalAlignment="Stretch"
+                            Click="PullCapsuleFiles"
+                            Content="补齐胶囊文件"
+                            IsEnabled="False"
+                            Style="{StaticResource McgoSecondaryButtonStyle}" />
+                        <Button
+                            x:Name="ImportCapsuleButton"
+                            Grid.Column="1"
+                            HorizontalAlignment="Stretch"
+                            Click="ImportCapsule"
+                            Content="导入开黑胶囊"
+                            Style="{StaticResource McgoSecondaryButtonStyle}" />
+                    </Grid>
+                    <Button
+                        x:Name="ExportCapsuleButton"
+                        HorizontalAlignment="Left"
+                        Click="ExportCapsule"
+                        Content="导出开黑胶囊"
+                        Style="{StaticResource McgoSecondaryButtonStyle}" />
+
+                    <ProgressBar
+                        x:Name="CapsulePullProgressBar"
+                        Height="4"
+                        Maximum="100"
+                        Minimum="0" />
                 </StackPanel>
             </Border>
 
-            <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                <StackPanel Spacing="10">
-                    <TextBlock Text="联机状态日志" FontSize="20" FontWeight="SemiBold" />
-                    <TextBox x:Name="OnlineOutputBox" MinHeight="140" MaxHeight="280" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
-                </StackPanel>
-            </Border>
+            <!--  ==================== 日志：默认折叠  ====================  -->
+            <Expander HorizontalAlignment="Stretch" IsExpanded="False">
+                <Expander.Header>
+                    <Grid ColumnSpacing="10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <SymbolIcon Symbol="Document" Style="{StaticResource McgoIconGlyphStyle}" />
+                        <TextBlock
+                            Grid.Column="1"
+                            VerticalAlignment="Center"
+                            FontWeight="SemiBold"
+                            Text="联机状态日志" />
+                    </Grid>
+                </Expander.Header>
+                <TextBox
+                    x:Name="OnlineOutputBox"
+                    Margin="0,8,0,0"
+                    MinHeight="120"
+                    MaxHeight="300"
+                    Style="{StaticResource McgoLogBoxStyle}"
+                    TextWrapping="Wrap" />
+            </Expander>
         </StackPanel>
-    </ScrollViewer>
+        </ScrollViewer>
+    </Grid>
 </Page>

@@ -6,6 +6,7 @@ using McGo.Core.Downloads;
 using McGo.Core.Java;
 using McGo.Core.Personalization;
 using McGo.Core.Updates;
+using McGo.WinUI.Dialogs;
 using McGo.WinUI.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -125,7 +126,6 @@ public sealed partial class SettingsPage : Page
         AdvancedModeCheckBox.IsChecked = _settings.Config.GetBool("UI", "advanced_mode", false);
         ResourceIsolationCheckBox.IsChecked = _settings.Config.GetBool("GAME", "enable_resource_isolation", true);
         ShowDownloadCheckBox.IsChecked = _settings.Config.GetBool("FEATURES", "show_download", true);
-        ShowManageCheckBox.IsChecked = _settings.Config.GetBool("FEATURES", "show_manage", true);
         MusicPathBox.Text = _settings.Config.Get("MUSIC", "path", "");
         MusicEnabledBox.IsChecked = _settings.Config.GetBool("MUSIC", "enabled", false);
         MusicVolumeBox.Value = ClampDouble(_settings.Config.GetInt("MUSIC", "volume", 35), 0, 100);
@@ -194,7 +194,6 @@ public sealed partial class SettingsPage : Page
         _settings.Config.Set("UI", "advanced_mode", (AdvancedModeCheckBox.IsChecked == true).ToString());
         _settings.Config.Set("GAME", "enable_resource_isolation", (ResourceIsolationCheckBox.IsChecked == true).ToString());
         _settings.Config.Set("FEATURES", "show_download", (ShowDownloadCheckBox.IsChecked == true).ToString());
-        _settings.Config.Set("FEATURES", "show_manage", (ShowManageCheckBox.IsChecked == true).ToString());
         _settings.Config.Set("HOME", "content_source", HomeContentSourceBox.Text.Trim());
         _settings.Config.Set("HOME", "allow_network", (HomeNetworkCheckBox.IsChecked == true).ToString());
         SaveMusicConfig();
@@ -522,17 +521,14 @@ public sealed partial class SettingsPage : Page
                 return;
             }
 
-            var dialog = new ContentDialog
-            {
-                XamlRoot = XamlRoot,
-                Title = "应用更新",
-                Content = installerUpdate
+            var dialog = AppDialog.Create(
+                this,
+                "应用更新",
+                installerUpdate
                     ? "应用更新需要关闭 McGo，然后启动新版安装器。是否继续？"
                     : "应用更新需要关闭 McGo，并在替换完成后重新启动。是否继续？",
-                PrimaryButtonText = "继续",
-                CloseButtonText = "取消",
-                DefaultButton = ContentDialogButton.Close,
-            };
+                "继续",
+                "取消");
             if (await dialog.ShowAsync() != ContentDialogResult.Primary)
             {
                 return;
@@ -621,9 +617,7 @@ public sealed partial class SettingsPage : Page
         if (App.MainWindow is MainWindow mainWindow)
         {
             mainWindow.ApplyAppearance(ComboValue(ThemeBox, "dark"), ThemeImageBox.Text.Trim());
-            mainWindow.ApplyFeatureVisibility(
-                ShowDownloadCheckBox.IsChecked == true,
-                ShowManageCheckBox.IsChecked == true);
+            mainWindow.ApplyFeatureVisibility(ShowDownloadCheckBox.IsChecked == true);
         }
     }
 
@@ -678,6 +672,11 @@ public sealed partial class SettingsPage : Page
         AddJavaCandidate(candidates, configuredPath);
         AddJavaCandidate(candidates, "java");
         AddJavaCandidate(candidates, JavaRuntimeService.FindJavaInDirectory(Path.Combine(gameDirectory, "java_runtimes")));
+        // 官方启动器自带的 JRE 在 .minecraft\runtime 下，不在 PATH 里，需单独枚举。
+        foreach (var bundled in JavaRuntimeService.FindBundledRuntimeCandidates())
+        {
+            AddJavaCandidate(candidates, bundled);
+        }
 
         foreach (var pathDir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {

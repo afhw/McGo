@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8" ?>
+﻿<?xml version="1.0" encoding="utf-8" ?>
 <Page
     x:Class="McGo.WinUI.Pages.LaunchPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -6,415 +6,596 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
-    <ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled" HorizontalContentAlignment="Stretch">
-        <StackPanel x:Name="ResponsiveLayoutRoot" Padding="24,18,24,24" Spacing="18" MaxWidth="1280" HorizontalAlignment="Stretch" SizeChanged="ResponsiveLayoutRoot_SizeChanged" LayoutUpdated="ResponsiveLayoutRoot_LayoutUpdated">
-            <StackPanel x:Name="LaunchPageHeader" Spacing="4">
-                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="启动" />
-                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="选择账号与版本，确认运行环境后启动 Minecraft。" TextWrapping="Wrap" />
-            </StackPanel>
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto">
+        <Grid
+            x:Name="ResponsiveLayoutRoot"
+            MaxWidth="1280"
+            HorizontalAlignment="Stretch"
+            Padding="24,20,24,28"
+            VerticalAlignment="Top"
+            ColumnSpacing="20"
+            RowSpacing="16"
+            SizeChanged="ResponsiveLayoutRoot_SizeChanged"
+            LayoutUpdated="ResponsiveLayoutRoot_LayoutUpdated">
 
-            <Grid ColumnSpacing="18" RowSpacing="18">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition x:Name="LaunchActionColumn" Width="5*" />
-                    <ColumnDefinition x:Name="LaunchVersionCenterColumn" Width="6*" />
-                </Grid.ColumnDefinitions>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition x:Name="LaunchActionColumn" Width="340" />
+                <ColumnDefinition x:Name="LaunchVersionCenterColumn" Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
 
-                <StackPanel x:Name="LaunchActionPanel" Spacing="14">
-                    <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                        <StackPanel Spacing="14">
-                            <StackPanel Spacing="3">
-                                <TextBlock Text="立即启动" FontSize="20" FontWeight="SemiBold" />
-                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="选择账号和本地版本，准备好后直接进入游戏。" TextWrapping="Wrap" />
+            <!--  ============ 左：身份 + 一个主按钮 ============  -->
+            <StackPanel x:Name="LaunchActionPanel" Spacing="14">
+
+                <StackPanel x:Name="LaunchPageHeader" Spacing="2">
+                    <TextBlock Style="{StaticResource McgoPageTitleStyle}" Text="启动" />
+                </StackPanel>
+
+                <Border Padding="20,22" Style="{StaticResource McgoCardStyle}">
+                    <StackPanel Spacing="16">
+
+                        <!--  谁在玩：头像 + 名字，一眼确认身份  -->
+                        <StackPanel HorizontalAlignment="Center" Spacing="6">
+                            <Border
+                                Width="76"
+                                Height="76"
+                                HorizontalAlignment="Center"
+                                Background="{ThemeResource McgoAccentSoftBrush}"
+                                BorderBrush="{ThemeResource McgoAccentSoftBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="18">
+                                <TextBlock
+                                    x:Name="AvatarText"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center"
+                                    FontSize="32"
+                                    FontWeight="SemiBold"
+                                    Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                    Text="?" />
+                            </Border>
+                            <TextBlock
+                                x:Name="AccountNameText"
+                                HorizontalAlignment="Center"
+                                FontSize="16"
+                                FontWeight="SemiBold"
+                                Text="未登录"
+                                TextTrimming="CharacterEllipsis" />
+                            <TextBlock
+                                x:Name="AccountTypeText"
+                                HorizontalAlignment="Center"
+                                Style="{StaticResource McgoStatLabelStyle}"
+                                Text="还没有账号" />
+                        </StackPanel>
+
+                        <!--  唯一的主操作：按钮里直接写清楚版本  -->
+                        <Button
+                            x:Name="PrimaryLaunchButton"
+                            MinHeight="78"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Center"
+                            Click="PrimaryLaunchAction"
+                            Style="{StaticResource McgoPrimaryButtonStyle}">
+                            <StackPanel Spacing="1">
+                                <StackPanel HorizontalAlignment="Center" Orientation="Horizontal" Spacing="9">
+                                    <SymbolIcon x:Name="PrimaryLaunchIcon" Symbol="Play" />
+                                    <TextBlock
+                                        x:Name="PrimaryLaunchText"
+                                        FontSize="18"
+                                        FontWeight="SemiBold"
+                                        Text="启动游戏" />
+                                </StackPanel>
+                                <TextBlock
+                                    x:Name="PrimaryLaunchSubText"
+                                    HorizontalAlignment="Center"
+                                    FontSize="12"
+                                    Opacity="0.85"
+                                    Text="选择版本"
+                                    TextTrimming="CharacterEllipsis" />
                             </StackPanel>
+                        </Button>
 
-                            <Grid ColumnSpacing="12" RowSpacing="10">
+                        <!--  两个次要入口，和 PCL 一样并排  -->
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Button
+                                HorizontalAlignment="Stretch"
+                                Click="ShowVersionSelectorTab"
+                                Content="版本选择"
+                                Style="{StaticResource McgoSecondaryButtonStyle}" />
+                            <Button
+                                Grid.Column="1"
+                                HorizontalAlignment="Stretch"
+                                Click="ShowVersionSettingsTab"
+                                Content="版本设置"
+                                Style="{StaticResource McgoSecondaryButtonStyle}" />
+                        </Grid>
+
+                        <Button
+                            HorizontalAlignment="Center"
+                            Padding="6,2"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Click="GoAccounts"
+                            Content="切换账号"
+                            FontSize="12"
+                            Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+
+                        <Border Style="{StaticResource McgoDividerStyle}" />
+
+                        <!--  进度：平时只有一行，启动时才热闹起来  -->
+                        <StackPanel Spacing="6">
+                            <ProgressBar
+                                x:Name="LaunchProgressBar"
+                                Height="4"
+                                Maximum="100"
+                                Minimum="0" />
+                            <TextBlock
+                                x:Name="LaunchStatusText"
+                                Style="{StaticResource McgoStatLabelStyle}"
+                                Text="选好账号和版本就能开始"
+                                TextWrapping="Wrap" />
+                            <Grid ColumnSpacing="8">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
+                                <TextBlock
+                                    x:Name="LaunchStageText"
+                                    Style="{StaticResource McgoStatLabelStyle}"
+                                    Text="等待启动" />
+                                <TextBlock
+                                    x:Name="LaunchMethodText"
+                                    Grid.Column="1"
+                                    Style="{StaticResource McgoStatLabelStyle}"
+                                    Text="未选择登录方式" />
+                                <TextBlock
+                                    x:Name="LaunchProgressText"
+                                    Grid.Column="2"
+                                    Style="{StaticResource McgoStatLabelStyle}"
+                                    Text="0%" />
+                            </Grid>
+                        </StackPanel>
+
+                        <!--  账号与运行环境：默认收起，需要时才展开  -->
+                        <Expander HorizontalAlignment="Stretch" IsExpanded="False">
+                            <Expander.Header>
+                                <TextBlock FontSize="13" Text="账号与运行环境" />
+                            </Expander.Header>
+                            <StackPanel Padding="0,10,0,0" Spacing="12">
                                 <StackPanel Spacing="5">
-                                    <TextBlock Text="当前账号" />
-                                    <ComboBox x:Name="AccountComboBox" SelectionChanged="AccountSelectionChanged" HorizontalAlignment="Stretch" />
+                                    <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="当前账号" />
+                                    <ComboBox
+                                        x:Name="AccountComboBox"
+                                        HorizontalAlignment="Stretch"
+                                        SelectionChanged="AccountSelectionChanged" />
                                 </StackPanel>
-                                <StackPanel Grid.Column="1" Spacing="5">
-                                    <TextBlock Text="版本分类" />
-                                    <ComboBox x:Name="VersionCategoryBox" SelectionChanged="VersionCategoryChanged" SelectedIndex="0" HorizontalAlignment="Stretch">
-                                        <ComboBoxItem Content="全部版本" />
-                                        <ComboBoxItem Content="收藏" />
-                                        <ComboBoxItem Content="原版" />
-                                        <ComboBoxItem Content="仅 OptiFine" />
-                                        <ComboBoxItem Content="可安装 Mod" />
-                                        <ComboBoxItem Content="隐藏" />
-                                    </ComboBox>
-                                </StackPanel>
-                                <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Spacing="5">
-                                    <TextBlock Text="当前版本" />
-                                    <ComboBox x:Name="VersionDisplayBox" SelectionChanged="VersionDisplayChanged" HorizontalAlignment="Stretch" />
-                                </StackPanel>
-                                <StackPanel Grid.Row="2" Grid.ColumnSpan="2" Spacing="5">
-                                    <TextBlock Text="快速进入存档" />
+                                <TextBox x:Name="GameDirectoryBox" Header="游戏目录" />
+                                <TextBox x:Name="JavaPathBox" Header="Java 路径" />
+                                <StackPanel Spacing="5">
+                                    <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="检测到的 Java" />
                                     <Grid ColumnSpacing="8">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
-                                        <ComboBox x:Name="QuickPlayBox" SelectionChanged="QuickPlaySelectionChanged" HorizontalAlignment="Stretch" />
-                                        <Button Grid.Column="1" Click="RefreshQuickPlayWorlds" ToolTipService.ToolTip="刷新存档">
+                                        <ComboBox
+                                            x:Name="JavaCandidatesBox"
+                                            HorizontalAlignment="Stretch"
+                                            PlaceholderText="Java 候选"
+                                            SelectionChanged="JavaCandidateChanged" />
+                                        <Button
+                                            Grid.Column="1"
+                                            Click="RefreshJavaCandidates"
+                                            Style="{StaticResource McgoSecondaryButtonStyle}"
+                                            ToolTipService.ToolTip="刷新 Java 候选">
                                             <SymbolIcon Symbol="Refresh" />
                                         </Button>
                                     </Grid>
                                 </StackPanel>
-                            </Grid>
-
-                            <TextBlock x:Name="VersionSummaryText" Text="未选择版本" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
-                            <ProgressBar x:Name="LaunchProgressBar" Minimum="0" Maximum="100" Height="6" />
-                            <TextBlock x:Name="LaunchStatusText" Text="将根据游戏版本自动选择合适的 Java" TextWrapping="Wrap" />
-                            <Grid ColumnSpacing="10" RowSpacing="4">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
-                                <TextBlock x:Name="LaunchStageText" Text="当前步骤：等待启动" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
-                                <TextBlock x:Name="LaunchMethodText" Grid.Column="1" Text="登录方式：未选择" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
-                                <TextBlock x:Name="LaunchProgressText" Grid.Row="1" Text="启动进度：0%" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
-                            </Grid>
-
-                            <Grid ColumnSpacing="8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="1.25*" />
-                                </Grid.ColumnDefinitions>
-                                <Button Click="RefreshVersions" HorizontalAlignment="Stretch">
-                                    <StackPanel Orientation="Horizontal" Spacing="7">
-                                        <SymbolIcon Symbol="Refresh" />
-                                        <TextBlock Text="刷新版本" />
-                                    </StackPanel>
-                                </Button>
-                                <Button Grid.Column="1" Click="OpenSavesFolder" HorizontalAlignment="Stretch">
-                                    <StackPanel Orientation="Horizontal" Spacing="7">
-                                        <SymbolIcon Symbol="Folder" />
-                                        <TextBlock Text="打开存档" />
-                                    </StackPanel>
-                                </Button>
-                                <Button Grid.Column="2" Style="{StaticResource AccentButtonStyle}" Click="LaunchGame" HorizontalAlignment="Stretch">
-                                    <StackPanel Orientation="Horizontal" Spacing="7">
-                                        <SymbolIcon Symbol="Play" />
-                                        <TextBlock Text="启动游戏" />
-                                    </StackPanel>
-                                </Button>
-                            </Grid>
-                        </StackPanel>
-                    </Border>
-
-                    <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                        <StackPanel Spacing="12">
-                            <StackPanel Spacing="3">
-                                <TextBlock Text="运行环境" FontSize="20" FontWeight="SemiBold" />
-                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="通常无需调整；Java 不匹配时可在这里检测或下载。" TextWrapping="Wrap" />
-                            </StackPanel>
-                            <StackPanel Spacing="5">
-                                <TextBlock Text="游戏目录" />
-                                <TextBox x:Name="GameDirectoryBox" />
-                            </StackPanel>
-                            <StackPanel Spacing="5">
-                                <TextBlock Text="Java 路径" />
-                                <TextBox x:Name="JavaPathBox" />
-                            </StackPanel>
-                            <StackPanel Spacing="5">
-                                <TextBlock Text="检测到的 Java" />
+                                <TextBlock x:Name="JavaVersionText" Style="{StaticResource McgoStatLabelStyle}" Text="未检测 Java" />
+                                <ProgressBar
+                                    x:Name="JavaDownloadProgressBar"
+                                    Height="4"
+                                    Maximum="100"
+                                    Minimum="0" />
+                                <TextBlock x:Name="JavaDownloadStatusText" Style="{StaticResource McgoStatLabelStyle}" Text="可自动下载推荐 Java" />
                                 <Grid ColumnSpacing="8">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <ComboBox x:Name="JavaCandidatesBox" PlaceholderText="Java 候选" SelectionChanged="JavaCandidateChanged" HorizontalAlignment="Stretch" />
-                                    <Button Grid.Column="1" Click="RefreshJavaCandidates" ToolTipService.ToolTip="刷新 Java 候选">
-                                        <SymbolIcon Symbol="Refresh" />
-                                    </Button>
+                                    <Button
+                                        HorizontalAlignment="Stretch"
+                                        Click="CheckJavaRuntime"
+                                        Content="检测 Java"
+                                        Style="{StaticResource McgoSecondaryButtonStyle}" />
+                                    <Button
+                                        Grid.Column="1"
+                                        HorizontalAlignment="Stretch"
+                                        Click="DownloadRecommendedJava"
+                                        Content="下载 Java"
+                                        Style="{StaticResource McgoSecondaryButtonStyle}" />
                                 </Grid>
+                                <Button
+                                    HorizontalAlignment="Left"
+                                    Click="SaveSettings"
+                                    Content="保存设置"
+                                    Style="{StaticResource McgoSecondaryButtonStyle}" />
                             </StackPanel>
-                            <TextBlock x:Name="JavaVersionText" Text="未选择 Java" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
-                            <ProgressBar x:Name="JavaDownloadProgressBar" Minimum="0" Maximum="100" Height="6" />
-                            <TextBlock x:Name="JavaDownloadStatusText" Text="可自动下载当前版本推荐的 Java 运行时" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
-                            <Grid ColumnSpacing="8" RowSpacing="8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
-                                <Button Content="检测 Java" Click="CheckJavaRuntime" HorizontalAlignment="Stretch" />
-                                <Button Grid.Column="1" Content="下载推荐 Java" Click="DownloadRecommendedJava" HorizontalAlignment="Stretch" />
-                                <Button Grid.Row="1" Grid.ColumnSpan="2" Content="保存运行环境" Click="SaveSettings" HorizontalAlignment="Stretch" />
-                            </Grid>
-                        </StackPanel>
-                    </Border>
-                </StackPanel>
+                        </Expander>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
 
-                <StackPanel x:Name="VersionCenterPanel" Grid.Column="1" Spacing="14">
-                    <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                        <StackPanel Spacing="8">
-                        <StackPanel Spacing="3">
-                            <TextBlock Text="版本中心" FontSize="22" FontWeight="SemiBold" />
-                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="在本地版本列表和当前版本设置之间切换。" TextWrapping="Wrap" />
-                        </StackPanel>
+            <!--  ============ 右：版本 ============  -->
+            <StackPanel
+                x:Name="VersionCenterPanel"
+                Grid.Row="0"
+                Grid.Column="1"
+                Spacing="12">
+
+                <Border VerticalAlignment="Stretch" Style="{StaticResource McgoCardStyle}">
+                    <StackPanel Spacing="10">
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock
+                                VerticalAlignment="Center"
+                                Style="{StaticResource McgoCardTitleStyle}"
+                                Text="本地版本" />
+                            <ComboBox
+                                x:Name="VersionCategoryBox"
+                                Grid.Column="1"
+                                MinWidth="118"
+                                VerticalAlignment="Center"
+                                SelectedIndex="0"
+                                SelectionChanged="VersionCategoryChanged">
+                                <ComboBoxItem Content="全部版本" />
+                                <ComboBoxItem Content="收藏" />
+                                <ComboBoxItem Content="原版" />
+                                <ComboBoxItem Content="快照" />
+                                <ComboBoxItem Content="远古版本" />
+                                <ComboBoxItem Content="仅 OptiFine" />
+                                <ComboBoxItem Content="可安装 Mod" />
+                                <ComboBoxItem Content="隐藏" />
+                            </ComboBox>
+                        </Grid>
+
                         <SelectorBar x:Name="VersionSectionBar" SelectionChanged="VersionSectionChanged">
                             <SelectorBarItem Text="选择版本" Tag="selector" />
                             <SelectorBarItem Text="版本设置" Tag="settings" />
                         </SelectorBar>
-                        </StackPanel>
-                    </Border>
 
-                    <Border x:Name="VersionSelectorPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                        <StackPanel Spacing="12">
-                            <Grid ColumnSpacing="10">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Spacing="3">
-                                    <TextBlock Text="本地版本" FontSize="20" FontWeight="SemiBold" />
-                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="按左侧分类筛选，选择后可直接启动或进入版本设置。" TextWrapping="Wrap" />
-                                </StackPanel>
-                                <Button Grid.Column="1" Click="RefreshVersions" ToolTipService.ToolTip="刷新本地版本">
-                                    <SymbolIcon Symbol="Refresh" />
-                                </Button>
-                            </Grid>
-                            <StackPanel x:Name="NoVersionsPanel" Padding="12,28" Spacing="10" HorizontalAlignment="Center">
-                                <SymbolIcon Symbol="Library" />
-                                <TextBlock Text="未发现本地版本" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center" />
-                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="下载游戏后即可在这里选择、启动和维护版本。" TextWrapping="Wrap" TextAlignment="Center" />
-                                <Button Content="前往下载" Click="OpenDownloadPage" HorizontalAlignment="Center" />
+                        <!--  选择版本  -->
+                        <StackPanel x:Name="VersionSelectorPanel" Spacing="8">
+                            <StackPanel
+                                x:Name="NoVersionsPanel"
+                                Padding="12,80"
+                                HorizontalAlignment="Center"
+                                Spacing="10">
+                                <SymbolIcon Symbol="Library" Style="{StaticResource McgoIconGlyphStyle}" />
+                                <TextBlock
+                                    HorizontalAlignment="Center"
+                                    FontSize="15"
+                                    FontWeight="SemiBold"
+                                    Text="还没有安装版本" />
+                                <TextBlock
+                                    Style="{StaticResource McgoCardSubtitleStyle}"
+                                    TextAlignment="Center"
+                                    Text="装一个就能开始游戏。" />
+                                <Button
+                                    HorizontalAlignment="Center"
+                                    Click="OpenDownloadPage"
+                                    Content="去下载"
+                                    Style="{StaticResource McgoPrimaryButtonStyle}" />
                             </StackPanel>
-                            <ListView x:Name="VersionsList" MinHeight="220" MaxHeight="420" SelectionChanged="VersionsList_SelectionChanged" Visibility="Collapsed" />
-                            <TextBlock x:Name="SelectorVersionSummaryText" Text="未选择版本" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                            <ListView
+                                x:Name="VersionsList"
+                                MaxHeight="520"
+                                MinHeight="0"
+                                SelectionChanged="VersionsList_SelectionChanged"
+                                Visibility="Collapsed">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid ColumnSpacing="10" Padding="2,4">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Border
+                                                Width="26"
+                                                Height="26"
+                                                VerticalAlignment="Center"
+                                                Background="{ThemeResource McgoAccentSoftBrush}"
+                                                BorderBrush="{ThemeResource McgoAccentSoftBorderBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="7">
+                                                <FontIcon
+                                                    FontSize="13"
+                                                    Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                                    Glyph="{Binding IconGlyph}" />
+                                            </Border>
+                                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="1">
+                                                <TextBlock
+                                                    FontSize="14"
+                                                    Text="{Binding DisplayName}"
+                                                    TextTrimming="CharacterEllipsis" />
+                                                <TextBlock
+                                                    Style="{StaticResource McgoStatLabelStyle}"
+                                                    Text="{Binding Summary}"
+                                                    TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+                            <TextBlock x:Name="VersionSummaryText" Style="{StaticResource McgoStatLabelStyle}" Text="" />
                         </StackPanel>
-                    </Border>
 
-                    <StackPanel x:Name="VersionSettingsPanel" Spacing="12" Visibility="Collapsed">
-                        <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                            <StackPanel Spacing="12">
-                                <StackPanel Spacing="3">
-                                    <TextBlock Text="个性化" FontSize="20" FontWeight="SemiBold" />
-                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="使用名称、图标和标记区分不同游戏实例。" TextWrapping="Wrap" />
-                                </StackPanel>
-                                <Grid ColumnSpacing="12" RowSpacing="10">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="2*" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
-                                    <StackPanel Spacing="5">
-                                        <TextBlock Text="显示名称" />
-                                        <TextBox x:Name="VersionAliasBox" />
-                                    </StackPanel>
-                                    <StackPanel Grid.Column="1" Spacing="5">
-                                        <TextBlock Text="版本图标" />
-                                        <ComboBox x:Name="VersionIconBox" SelectedIndex="0" HorizontalAlignment="Stretch">
-                                            <ComboBoxItem Content="自动" />
-                                            <ComboBoxItem Content="⭐" />
-                                            <ComboBoxItem Content="⚙" />
-                                            <ComboBoxItem Content="📦" />
-                                            <ComboBoxItem Content="🧪" />
-                                        </ComboBox>
-                                    </StackPanel>
-                                    <Grid Grid.Row="1" Grid.ColumnSpan="2" ColumnSpacing="12">
+                        <!--  版本设置  -->
+                        <StackPanel
+                            x:Name="VersionSettingsPanel"
+                            Spacing="12"
+                            Visibility="Collapsed">
+
+                            <Border Style="{StaticResource McgoInsetCardStyle}">
+                                <StackPanel Spacing="10">
+                                    <TextBlock FontWeight="SemiBold" Text="个性化" />
+                                    <Grid ColumnSpacing="10" RowSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="2*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Spacing="5">
+                                            <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="显示名称" />
+                                            <TextBox x:Name="VersionAliasBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="5">
+                                            <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="图标" />
+                                            <ComboBox
+                                                x:Name="VersionIconBox"
+                                                HorizontalAlignment="Stretch"
+                                                SelectedIndex="0">
+                                                <ComboBoxItem Content="自动" />
+                                                <ComboBoxItem Content="⭐" />
+                                                <ComboBoxItem Content="⚙" />
+                                                <ComboBoxItem Content="📦" />
+                                                <ComboBoxItem Content="🧪" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                    </Grid>
+                                    <Grid ColumnSpacing="10">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
-                                        <CheckBox x:Name="UseIsolationCheckBox" Content="版本独立目录" />
-                                        <CheckBox x:Name="VersionFavoriteCheckBox" Grid.Column="1" Content="收藏当前版本" />
-                                        <CheckBox x:Name="VersionHiddenCheckBox" Grid.Column="2" Content="隐藏当前版本" />
+                                        <CheckBox x:Name="UseIsolationCheckBox" Content="独立目录" />
+                                        <CheckBox
+                                            x:Name="VersionFavoriteCheckBox"
+                                            Grid.Column="1"
+                                            Content="收藏" />
+                                        <CheckBox
+                                            x:Name="VersionHiddenCheckBox"
+                                            Grid.Column="2"
+                                            Content="隐藏" />
                                     </Grid>
-                                </Grid>
-                                <Button Style="{StaticResource AccentButtonStyle}" Content="保存当前版本设置" Click="SaveVersionSettings" HorizontalAlignment="Left" />
-                            </StackPanel>
-                        </Border>
+                                    <Button
+                                        HorizontalAlignment="Left"
+                                        Click="SaveVersionSettings"
+                                        Content="保存个性化"
+                                        Style="{StaticResource McgoSecondaryButtonStyle}" />
+                                </StackPanel>
+                            </Border>
 
-                        <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                            <StackPanel Spacing="12">
-                                <StackPanel Spacing="3">
-                                    <TextBlock Text="启动设置" FontSize="20" FontWeight="SemiBold" />
-                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="为当前版本单独配置内存、窗口和启动参数。" TextWrapping="Wrap" />
+                            <Border Style="{StaticResource McgoInsetCardStyle}">
+                                <StackPanel Spacing="10">
+                                    <TextBlock FontWeight="SemiBold" Text="启动设置" />
+                                    <CheckBox
+                                        x:Name="ManualMemoryCheckBox"
+                                        Checked="ManualMemoryChanged"
+                                        Content="手动分配内存"
+                                        Unchecked="ManualMemoryChanged" />
+                                    <TextBlock x:Name="MemoryLabel" Style="{StaticResource McgoFieldLabelStyle}" Text="最大内存：自动" />
+                                    <Slider
+                                        x:Name="MemorySlider"
+                                        Maximum="65536"
+                                        Minimum="1024"
+                                        StepFrequency="256"
+                                        ValueChanged="MemorySliderChanged" />
+                                    <Grid ColumnSpacing="10" RowSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <StackPanel x:Name="MinimumMemoryPanel" Spacing="5">
+                                            <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="最小内存 MB" />
+                                            <NumberBox
+                                                x:Name="MinMemoryBox"
+                                                LargeChange="1024"
+                                                Maximum="65536"
+                                                Minimum="0"
+                                                SmallChange="256"
+                                                SpinButtonPlacementMode="Compact" />
+                                        </StackPanel>
+                                        <StackPanel x:Name="GcStrategyPanel" Grid.Column="1" Spacing="5">
+                                            <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="GC 策略" />
+                                            <ComboBox x:Name="GcStrategyBox" SelectedIndex="0">
+                                                <ComboBoxItem Content="G1GC" />
+                                                <ComboBoxItem Content="ZGC" />
+                                                <ComboBoxItem Content="SerialGC" />
+                                                <ComboBoxItem Content="None" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel x:Name="WindowWidthPanel" Grid.Row="1" Spacing="5">
+                                            <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="窗口宽度" />
+                                            <NumberBox
+                                                x:Name="WindowWidthBox"
+                                                LargeChange="256"
+                                                Maximum="16384"
+                                                Minimum="0"
+                                                SmallChange="64"
+                                                SpinButtonPlacementMode="Compact" />
+                                        </StackPanel>
+                                        <StackPanel
+                                            x:Name="WindowHeightPanel"
+                                            Grid.Row="1"
+                                            Grid.Column="1"
+                                            Spacing="5">
+                                            <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="窗口高度" />
+                                            <NumberBox
+                                                x:Name="WindowHeightBox"
+                                                LargeChange="256"
+                                                Maximum="16384"
+                                                Minimum="0"
+                                                SmallChange="64"
+                                                SpinButtonPlacementMode="Compact" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <ComboBox
+                                            x:Name="QuickPlayBox"
+                                            HorizontalAlignment="Stretch"
+                                            Header="直接进存档"
+                                            SelectionChanged="QuickPlaySelectionChanged" />
+                                        <Button
+                                            Grid.Column="1"
+                                            VerticalAlignment="Bottom"
+                                            Click="RefreshQuickPlayWorlds"
+                                            Style="{StaticResource McgoSecondaryButtonStyle}"
+                                            ToolTipService.ToolTip="刷新存档">
+                                            <SymbolIcon Symbol="Refresh" />
+                                        </Button>
+                                    </Grid>
                                 </StackPanel>
-                                <StackPanel Spacing="6">
-                                    <CheckBox x:Name="ManualMemoryCheckBox" Content="手动分配最大内存" Checked="ManualMemoryChanged" Unchecked="ManualMemoryChanged" />
-                                    <TextBlock x:Name="MemoryLabel" Text="最大内存：自动" />
-                                    <Slider x:Name="MemorySlider" Minimum="1024" Maximum="65536" StepFrequency="256" ValueChanged="MemorySliderChanged" />
-                                </StackPanel>
-                                <Grid ColumnSpacing="12" RowSpacing="10">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
-                                    <StackPanel x:Name="MinimumMemoryPanel" Spacing="5">
-                                        <TextBlock Text="最小内存 MB" />
-                                        <NumberBox x:Name="MinMemoryBox" Minimum="0" Maximum="65536" SmallChange="256" LargeChange="1024" SpinButtonPlacementMode="Compact" />
-                                    </StackPanel>
-                                    <StackPanel x:Name="GcStrategyPanel" Grid.Column="1" Spacing="5">
-                                        <TextBlock Text="GC 策略" />
-                                        <ComboBox x:Name="GcStrategyBox" SelectedIndex="0">
-                                            <ComboBoxItem Content="G1GC" />
-                                            <ComboBoxItem Content="ZGC" />
-                                            <ComboBoxItem Content="SerialGC" />
-                                            <ComboBoxItem Content="None" />
-                                        </ComboBox>
-                                    </StackPanel>
-                                    <StackPanel x:Name="WindowWidthPanel" Grid.Row="1" Spacing="5">
-                                        <TextBlock Text="窗口宽度" />
-                                        <NumberBox x:Name="WindowWidthBox" Minimum="0" Maximum="16384" SmallChange="64" LargeChange="256" SpinButtonPlacementMode="Compact" />
-                                    </StackPanel>
-                                    <StackPanel x:Name="WindowHeightPanel" Grid.Row="1" Grid.Column="1" Spacing="5">
-                                        <TextBlock Text="窗口高度" />
-                                        <NumberBox x:Name="WindowHeightBox" Minimum="0" Maximum="16384" SmallChange="64" LargeChange="256" SpinButtonPlacementMode="Compact" />
-                                    </StackPanel>
-                                </Grid>
-                                <StackPanel Spacing="5">
-                                    <TextBlock Text="快速进入存档" />
-                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="在左侧“立即启动”区域选择。" TextWrapping="Wrap" />
-                                </StackPanel>
-                            </StackPanel>
-                        </Border>
+                            </Border>
 
-                        <Border x:Name="AdvancedLaunchSettingsCard" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                            <StackPanel Spacing="12">
-                                <StackPanel Spacing="3">
-                                    <TextBlock Text="参数与路径" FontSize="20" FontWeight="SemiBold" />
-                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="高级模式下可覆盖 JVM 参数、运行目录和 Mods 目录。" TextWrapping="Wrap" />
+                            <Border x:Name="AdvancedLaunchSettingsCard" Style="{StaticResource McgoInsetCardStyle}">
+                                <StackPanel Spacing="10">
+                                    <TextBlock FontWeight="SemiBold" Text="参数与路径" />
+                                    <Grid ColumnSpacing="10" RowSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <StackPanel Spacing="5">
+                                            <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="额外 JVM 参数" />
+                                            <TextBox x:Name="ExtraJvmArgsBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="5">
+                                            <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="额外游戏参数" />
+                                            <TextBox x:Name="ExtraGameArgsBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Spacing="5">
+                                            <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="启动前命令" />
+                                            <TextBox x:Name="PreLaunchCommandBox" />
+                                        </StackPanel>
+                                        <StackPanel
+                                            Grid.Row="1"
+                                            Grid.Column="1"
+                                            Spacing="5">
+                                            <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="运行目录" />
+                                            <TextBox x:Name="RuntimeDirectoryBox" />
+                                        </StackPanel>
+                                        <StackPanel
+                                            Grid.Row="2"
+                                            Grid.ColumnSpan="2"
+                                            Spacing="5">
+                                            <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="自定义 Mods 目录" />
+                                            <TextBox x:Name="CustomModsDirectoryBox" />
+                                        </StackPanel>
+                                    </Grid>
                                 </StackPanel>
-                                <Grid ColumnSpacing="12" RowSpacing="10">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
-                                    <StackPanel Spacing="5">
-                                        <TextBlock Text="额外 JVM 参数" />
-                                        <TextBox x:Name="ExtraJvmArgsBox" />
-                                    </StackPanel>
-                                    <StackPanel Grid.Column="1" Spacing="5">
-                                        <TextBlock Text="额外游戏参数" />
-                                        <TextBox x:Name="ExtraGameArgsBox" />
-                                    </StackPanel>
-                                    <StackPanel Grid.Row="1" Spacing="5">
-                                        <TextBlock Text="启动前命令" />
-                                        <TextBox x:Name="PreLaunchCommandBox" />
-                                    </StackPanel>
-                                    <StackPanel Grid.Row="1" Grid.Column="1" Spacing="5">
-                                        <TextBlock Text="运行目录" />
-                                        <TextBox x:Name="RuntimeDirectoryBox" />
-                                    </StackPanel>
-                                    <StackPanel Grid.Row="2" Grid.ColumnSpan="2" Spacing="5">
-                                        <TextBlock Text="自定义 Mods 目录" />
-                                        <TextBox x:Name="CustomModsDirectoryBox" />
-                                    </StackPanel>
-                                </Grid>
-                            </StackPanel>
-                        </Border>
+                            </Border>
 
-                        <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                            <StackPanel Spacing="12">
-                                <StackPanel Spacing="3">
-                                    <TextBlock Text="快捷方式" FontSize="20" FontWeight="SemiBold" />
-                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="打开常用目录，或进入当前版本的导出与诊断任务。" TextWrapping="Wrap" />
+                            <Border Style="{StaticResource McgoInsetCardStyle}">
+                                <StackPanel Spacing="10">
+                                    <TextBlock FontWeight="SemiBold" Text="快捷方式与工具" />
+                                    <Grid ColumnSpacing="8" RowSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <Button Click="OpenVersionFolder" Content="版本文件夹" HorizontalAlignment="Stretch" Style="{StaticResource McgoSecondaryButtonStyle}" />
+                                        <Button Grid.Column="1" Click="OpenSavesFolder" Content="存档" HorizontalAlignment="Stretch" Style="{StaticResource McgoSecondaryButtonStyle}" />
+                                        <Button Grid.Column="2" Click="OpenModsFolder" Content="Mods" HorizontalAlignment="Stretch" Style="{StaticResource McgoSecondaryButtonStyle}" />
+                                        <Button Grid.Row="1" Click="OpenResourcepacksFolder" Content="资源包" HorizontalAlignment="Stretch" Style="{StaticResource McgoSecondaryButtonStyle}" />
+                                        <Button Grid.Row="1" Grid.Column="1" Click="OpenShaderpacksFolder" Content="光影" HorizontalAlignment="Stretch" Style="{StaticResource McgoSecondaryButtonStyle}" />
+                                        <Button Grid.Row="1" Grid.Column="2" Click="OpenScreenshotsFolder" Content="截图" HorizontalAlignment="Stretch" Style="{StaticResource McgoSecondaryButtonStyle}" />
+                                        <Button Grid.Row="2" Click="ExportLaunchScript" Content="导出启动脚本" HorizontalAlignment="Stretch" Style="{StaticResource McgoSecondaryButtonStyle}" />
+                                        <Button Grid.Row="2" Grid.Column="1" Click="OpenModpackExport" Content="导出整合包" HorizontalAlignment="Stretch" Style="{StaticResource McgoSecondaryButtonStyle}" />
+                                        <Button Grid.Row="2" Grid.Column="2" Click="OpenCrashAnalysis" Content="分析崩溃" HorizontalAlignment="Stretch" Style="{StaticResource McgoSecondaryButtonStyle}" />
+                                    </Grid>
                                 </StackPanel>
-                                <Grid ColumnSpacing="8" RowSpacing="8">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
-                                    <Button Content="版本文件夹" Click="OpenVersionFolder" HorizontalAlignment="Stretch" />
-                                    <Button Grid.Column="1" Content="存档" Click="OpenSavesFolder" HorizontalAlignment="Stretch" />
-                                    <Button Grid.Column="2" Content="Mods" Click="OpenModsFolder" HorizontalAlignment="Stretch" />
-                                    <Button Grid.Row="1" Content="资源包" Click="OpenResourcepacksFolder" HorizontalAlignment="Stretch" />
-                                    <Button Grid.Row="1" Grid.Column="1" Content="光影" Click="OpenShaderpacksFolder" HorizontalAlignment="Stretch" />
-                                    <Button Grid.Row="1" Grid.Column="2" Content="截图" Click="OpenScreenshotsFolder" HorizontalAlignment="Stretch" />
-                                    <Button Grid.Row="2" Content="导出启动脚本" Click="ExportLaunchScript" HorizontalAlignment="Stretch" />
-                                    <Button Grid.Row="2" Grid.Column="1" Content="导出整合包" Click="OpenModpackExport" HorizontalAlignment="Stretch" />
-                                    <Button Grid.Row="2" Grid.Column="2" Content="分析崩溃" Click="OpenCrashAnalysis" HorizontalAlignment="Stretch" />
-                                </Grid>
-                            </StackPanel>
-                        </Border>
+                            </Border>
 
-                        <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                            <StackPanel Spacing="12">
-                                <StackPanel Spacing="3">
-                                    <TextBlock Text="高级管理" FontSize="20" FontWeight="SemiBold" />
-                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="校验当前版本文件、生成命令或执行删除操作。" TextWrapping="Wrap" />
+                            <Border Style="{StaticResource McgoInsetCardStyle}">
+                                <StackPanel Spacing="10">
+                                    <TextBlock FontWeight="SemiBold" Text="高级管理" />
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Button Click="PreviewCommand" Content="生成命令" HorizontalAlignment="Stretch" Style="{StaticResource McgoSecondaryButtonStyle}" />
+                                        <Button Grid.Column="1" Click="RepairSelectedVersion" Content="补全 / 校验" HorizontalAlignment="Stretch" Style="{StaticResource McgoSecondaryButtonStyle}" />
+                                        <Button Grid.Column="2" Click="DeleteSelectedVersion" Content="删除版本" HorizontalAlignment="Stretch" Style="{StaticResource McgoSecondaryButtonStyle}" />
+                                    </Grid>
+                                    <TextBox x:Name="OutputBox" MaxHeight="200" MinHeight="90" Style="{StaticResource McgoOutputBoxStyle}" />
                                 </StackPanel>
-                                <Grid ColumnSpacing="8">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <Button Content="生成命令" Click="PreviewCommand" HorizontalAlignment="Stretch" />
-                                    <Button Grid.Column="1" Content="补全 / 校验文件" Click="RepairSelectedVersion" HorizontalAlignment="Stretch" />
-                                    <Button Grid.Column="2" Content="删除版本" Click="DeleteSelectedVersion" HorizontalAlignment="Stretch" />
-                                </Grid>
-                                <TextBox x:Name="OutputBox" MinHeight="110" MaxHeight="220" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
-                            </StackPanel>
-                        </Border>
+                            </Border>
 
-                        <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                            <StackPanel Spacing="12">
-                                <StackPanel Spacing="3">
-                                    <TextBlock Text="Mod 管理" FontSize="20" FontWeight="SemiBold" />
-                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="管理当前版本 mods 目录内的 jar，并补齐 Modrinth 必需前置。" TextWrapping="Wrap" />
+                            <Border Style="{StaticResource McgoInsetCardStyle}">
+                                <StackPanel Spacing="10">
+                                    <TextBlock FontWeight="SemiBold" Text="Mod 管理" />
+                                    <TextBlock x:Name="VersionModsStatusText" Style="{StaticResource McgoStatLabelStyle}" TextWrapping="Wrap" Text="选择支持 Mod 的版本后显示列表" />
+                                    <ProgressBar x:Name="VersionModsProgressBar" Height="4" Maximum="100" Minimum="0" />
+                                    <ListView x:Name="VersionModsList" MaxHeight="280" MinHeight="150" />
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Button x:Name="ToggleVersionModButton" Click="ToggleSelectedVersionMod" Content="启用 / 禁用" HorizontalAlignment="Stretch" Style="{StaticResource McgoSecondaryButtonStyle}" />
+                                        <Button x:Name="DeleteVersionModButton" Grid.Column="1" Click="DeleteSelectedVersionMod" Content="删除" HorizontalAlignment="Stretch" Style="{StaticResource McgoSecondaryButtonStyle}" />
+                                        <Button x:Name="RepairVersionModDependenciesButton" Grid.Column="2" Click="RepairVersionModDependencies" Content="补齐前置" HorizontalAlignment="Stretch" Style="{StaticResource McgoSecondaryButtonStyle}" />
+                                    </Grid>
                                 </StackPanel>
-                                <TextBlock x:Name="VersionModsStatusText" Text="选择支持 Mod 的版本后显示列表" TextWrapping="Wrap" />
-                                <ProgressBar x:Name="VersionModsProgressBar" Minimum="0" Maximum="100" Height="6" />
-                                <ListView x:Name="VersionModsList" MinHeight="180" MaxHeight="320" />
-                                <Grid ColumnSpacing="8">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <Button x:Name="ToggleVersionModButton" Content="启用 / 禁用" Click="ToggleSelectedVersionMod" HorizontalAlignment="Stretch" />
-                                    <Button x:Name="DeleteVersionModButton" Grid.Column="1" Content="删除所选 Mod" Click="DeleteSelectedVersionMod" HorizontalAlignment="Stretch" />
-                                    <Button x:Name="RepairVersionModDependenciesButton" Grid.Column="2" Content="补齐 Mod 前置" Click="RepairVersionModDependencies" HorizontalAlignment="Stretch" />
-                                </Grid>
-                            </StackPanel>
-                        </Border>
+                            </Border>
+                        </StackPanel>
                     </StackPanel>
-                </StackPanel>
-            </Grid>
-        </StackPanel>
+                </Border>
+            </StackPanel>
+        </Grid>
     </ScrollViewer>
 </Page>

@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
 using System.IO.Compression;
@@ -447,9 +447,50 @@ runner.Add("Launcher infers Java baseline by Minecraft generation", () =>
     });
 
     var launcher = new LauncherService();
+    // 官方要求：1.16.5 及更早 → Java 8；1.17.x → Java 16；1.18-1.20.4 → 17；1.20.5+ → 21
     Assert.Equal(8, launcher.InferRequiredJavaVersion(temp.Path, "1.16.5"));
-    Assert.Equal(17, launcher.InferRequiredJavaVersion(temp.Path, "1.17.1"));
+    Assert.Equal(8, launcher.InferRequiredJavaVersion(temp.Path, "1.12.2-forge-14.23.5.2859"));
+    Assert.Equal(16, launcher.InferRequiredJavaVersion(temp.Path, "1.17.1"));
+    Assert.Equal(17, launcher.InferRequiredJavaVersion(temp.Path, "1.18.2"));
+    Assert.Equal(17, launcher.InferRequiredJavaVersion(temp.Path, "1.20.4"));
+    Assert.Equal(21, launcher.InferRequiredJavaVersion(temp.Path, "1.20.5"));
     Assert.Equal(21, launcher.InferRequiredJavaVersion(temp.Path, "1.21"));
+    // 快照按发布年份+周次推断（Java 需求切换的真实时间点）
+    Assert.Equal(8, launcher.InferRequiredJavaVersion(temp.Path, "1.16.5"));
+    Assert.Equal(8, launcher.InferRequiredJavaVersion(temp.Path, "20w45a"));   // 1.17 开发前
+    Assert.Equal(16, launcher.InferRequiredJavaVersion(temp.Path, "21w19a"));  // 1.17 开发线起点
+    Assert.Equal(16, launcher.InferRequiredJavaVersion(temp.Path, "21w36a"));  // 1.18 转换前
+    Assert.Equal(17, launcher.InferRequiredJavaVersion(temp.Path, "21w37a"));  // 1.18 开发线起点
+    Assert.Equal(17, launcher.InferRequiredJavaVersion(temp.Path, "23w51a"));  // 1.20.5 转换前
+    Assert.Equal(21, launcher.InferRequiredJavaVersion(temp.Path, "24w03a"));  // 1.20.5 开发线起点
+    Assert.Equal(21, launcher.InferRequiredJavaVersion(temp.Path, "24w14a"));
+
+});
+
+runner.Add("Base Minecraft version ignores assetIndex ids", () =>
+{
+    // 真实事故：1.8.9 的 assetIndex.id 就是 "1.8"，1.16.5 的甚至是纯数字 "5"。
+    // 用 assetIndex 当版本号会把 1.8.9 误判成 1.8，导致 Forge 安装器装到错误的基础版本。
+    using var temp = TempDir.Create();
+    WriteVersion(temp.Path, "1.8.9-forge-11.15.1", new JsonObject
+    {
+        ["type"] = "release",
+        ["assetIndex"] = new JsonObject { ["id"] = "1.8" },
+        ["libraries"] = new JsonArray(),
+        ["mainClass"] = "net.minecraft.client.main.Main",
+    });
+    WriteVersion(temp.Path, "1.16.5", new JsonObject
+    {
+        ["type"] = "release",
+        ["assetIndex"] = new JsonObject { ["id"] = "5" },
+        ["libraries"] = new JsonArray(),
+        ["mainClass"] = "net.minecraft.client.main.Main",
+    });
+
+    var settings = new VersionSettingsService();
+    // 版本号应取自版本名本身，不能被 assetIndex 覆盖成 "1.8"
+    Assert.Equal("1.8.9", settings.ResolveBaseMinecraftVersion(temp.Path, "1.8.9-forge-11.15.1"));
+    Assert.Equal("1.16.5", settings.ResolveBaseMinecraftVersion(temp.Path, "1.16.5"));
 });
 
 runner.Add("Launcher rule evaluation honors os name, arch and override order", () =>
@@ -631,7 +672,7 @@ runner.Add("Launch preflight reports Java, missing files, and natives", () =>
         .Validate(temp.Path, "1.20.1", "java");
     var text = string.Join("\n", result.Issues.Select(issue => issue.Message));
     Assert.False(result.IsOk);
-    Assert.Contains("至少需要 Java 17", text);
+    Assert.Contains("需要 Java 17", text);
     Assert.Contains("缺失 versions", text);
     Assert.Contains("natives 未解压", text);
 });
@@ -654,6 +695,51 @@ runner.Add("Java runtime download extracts archive and finds executable", () =>
     Assert.False(result.Reused);
     Assert.True(File.Exists(result.JavaPath));
     Assert.Contains(Path.Combine("bin", executable), result.JavaPath);
+});
+
+runner.Add("Java bundled runtime finds launcher .minecraft runtime", () =>
+{
+    using var temp = TempDir.Create();
+    var executable = OperatingSystem.IsWindows() ? "java.exe" : "java";
+    var appData = Path.Combine(temp.Path, "Roaming");
+    var localAppData = Path.Combine(temp.Path, "Local");
+    var runtimeDir = Path.Combine(appData, ".minecraft", "runtime");
+
+    // 当前官方启动器布局：<jre>\windows-x64\<jre>\bin\java.exe
+    var modern = Path.Combine(runtimeDir, "java-runtime-delta", "windows-x64", "java-runtime-delta", "bin");
+    Directory.CreateDirectory(modern);
+    File.WriteAllText(Path.Combine(modern, executable), "java");
+
+    // 旧版布局：<jre>\windows\<jre>\bin\java.exe
+    var legacy = Path.Combine(runtimeDir, "jre-legacy", "windows", "jre-legacy", "bin");
+    Directory.CreateDirectory(legacy);
+    File.WriteAllText(Path.Combine(legacy, executable), "java");
+
+    var found = JavaRuntimeService.FindBundledRuntimeCandidates(appData, localAppData);
+
+    Assert.Equal(2, found.Count);
+    Assert.True(found.Any(path => path.Contains("java-runtime-delta", StringComparison.Ordinal)));
+    Assert.True(found.Any(path => path.Contains("jre-legacy", StringComparison.Ordinal)));
+    Assert.True(found.All(File.Exists));
+});
+
+runner.Add("Java bundled runtime skips missing launcher directory", () =>
+{
+    using var temp = TempDir.Create();
+    var appData = Path.Combine(temp.Path, "Roaming");
+    var localAppData = Path.Combine(temp.Path, "Local");
+
+    // 没有 .minecraft 时不应抛异常，直接返回空列表。
+    Assert.Equal(0, JavaRuntimeService.FindBundledRuntimeCandidates(appData, localAppData).Count);
+});
+
+runner.Add("Java bundled runtime ignores jre folder without executable", () =>
+{
+    using var temp = TempDir.Create();
+    var appData = Path.Combine(temp.Path, "Roaming");
+    // runtime 目录存在但里面没有 java.exe 时，不应产生候选。
+    Directory.CreateDirectory(Path.Combine(appData, ".minecraft", "runtime", "java-runtime-gamma", "windows-x64"));
+    Assert.Equal(0, JavaRuntimeService.FindBundledRuntimeCandidates(appData, "").Count);
 });
 
 runner.Add("Java version parser handles legacy and modern output", () =>
@@ -982,6 +1068,475 @@ runner.Add("Downloader gives up after exhausting retries", () =>
     Assert.Equal(3, handler.Attempts);
     Assert.False(File.Exists(targetPath));
     Assert.False(File.Exists(targetPath + ".download"));
+});
+
+runner.Add("Download options expose core and asset concurrency", () =>
+{
+    using var temp = TempDir.Create();
+    var settings = new AppSettings(Path.Combine(temp.Path, "launcher_config.ini"), Path.Combine(temp.Path, "accounts.json"));
+    settings.LoadConfig();
+
+    // 默认值来自 DOWNLOAD 段的既有配置项，必须能被下载代码读取到。
+    Assert.Equal(12, settings.MaxCoreConcurrency);
+    Assert.Equal(24, settings.MaxAssetConcurrency);
+    Assert.Equal(12, settings.ReadDownloadOptions().MaxCoreConcurrency);
+    Assert.Equal(24, settings.ReadDownloadOptions().MaxAssetConcurrency);
+
+    settings.Config.Set("DOWNLOAD", "max_core_threads", "6");
+    settings.Config.Set("DOWNLOAD", "max_asset_threads", "32");
+    Assert.Equal(6, settings.MaxCoreConcurrency);
+    Assert.Equal(32, settings.MaxAssetConcurrency);
+
+    // 越界值必须夹到有效区间：0/负数会让 SemaphoreSlim 死锁，过大则耗尽套接字。
+    settings.Config.Set("DOWNLOAD", "max_core_threads", "0");
+    settings.Config.Set("DOWNLOAD", "max_asset_threads", "-9");
+    Assert.Equal(1, settings.MaxCoreConcurrency);
+    Assert.Equal(1, settings.MaxAssetConcurrency);
+    settings.Config.Set("DOWNLOAD", "max_core_threads", "9999");
+    settings.Config.Set("DOWNLOAD", "max_asset_threads", "9999");
+    Assert.Equal(AppSettings.MaxConcurrencyLimit, settings.MaxCoreConcurrency);
+    Assert.Equal(AppSettings.MaxConcurrencyLimit, settings.MaxAssetConcurrency);
+
+    // 非数字回落默认值而不是退化成 0。
+    settings.Config.Set("DOWNLOAD", "max_core_threads", "not-a-number");
+    Assert.Equal(12, settings.MaxCoreConcurrency);
+
+    // 注入的选项必须被下载服务直接采用。
+    var injected = new DownloaderService(options: new DownloadOptions(3, 5, 0, "reuse"));
+    Assert.Equal(3, injected.MaxCoreConcurrency);
+    Assert.Equal(5, injected.MaxAssetConcurrency);
+});
+
+runner.Add("Download jobs classify core and asset categories", () =>
+{
+    // 资源索引里的 objects 归资源通道，其余（客户端 jar / libraries / natives）归核心通道。
+    Assert.Equal(DownloadJobCategory.Asset, new DownloadJob("u", "p", "", 0, "asset").Category);
+    Assert.Equal(DownloadJobCategory.Core, new DownloadJob("u", "p", "", 0, "library").Category);
+    Assert.Equal(DownloadJobCategory.Core, new DownloadJob("u", "p", "", 0, "native").Category);
+    Assert.Equal(DownloadJobCategory.Core, new DownloadJob("u", "p", "", 0, "client").Category);
+
+    // 显式覆盖优先于 Kind 推断（保留现有元组构造方式的前提下可定向分类）。
+    Assert.Equal(DownloadJobCategory.Asset, new DownloadJob("u", "p", "", 0, "library") { Category = DownloadJobCategory.Asset }.Category);
+
+    var versionJson = new JsonObject
+    {
+        ["downloads"] = new JsonObject
+        {
+            ["client"] = new JsonObject { ["url"] = "https://files.example/client.jar", ["sha1"] = "", ["size"] = 1 },
+        },
+        ["libraries"] = new JsonArray(
+            new JsonObject
+            {
+                ["name"] = "com.example:demo:1.0",
+                ["downloads"] = new JsonObject
+                {
+                    ["artifact"] = new JsonObject
+                    {
+                        ["path"] = "com/example/demo/1.0/demo-1.0.jar",
+                        ["url"] = "https://files.example/demo.jar",
+                    },
+                },
+            }),
+    };
+    var coreJobs = DownloaderService.BuildCoreJobs(versionJson, "game", "1.20.1", "official");
+    Assert.True(coreJobs.All(job => job.Category == DownloadJobCategory.Core));
+
+    var assetIndex = new JsonObject
+    {
+        ["objects"] = new JsonObject
+        {
+            ["minecraft/sounds/demo.ogg"] = new JsonObject { ["hash"] = "aabbccdd", ["size"] = 3 },
+        },
+    };
+    var assetJobs = DownloaderService.BuildAssetJobs(assetIndex, "game", "official");
+    Assert.Equal(1, assetJobs.Count);
+    Assert.Equal(DownloadJobCategory.Asset, assetJobs[0].Category);
+});
+
+runner.Add("Concurrent download aggregates progress without duplicates or gaps", () =>
+{
+    using var temp = TempDir.Create();
+    // 40 个 8KB 文件，并发上限 4：足以真正并行但不会太慢。
+    const int jobCount = 40;
+    const int payloadSize = 8 * 1024;
+    var payloads = new Dictionary<string, byte[]>();
+    var jobs = new List<DownloadJob>();
+    for (var index = 0; index < jobCount; index++)
+    {
+        var payload = Enumerable.Range(0, payloadSize).Select(offset => (byte)((index * 31 + offset) % 251)).ToArray();
+        var url = $"https://files.example/file-{index}.bin";
+        payloads[url] = payload;
+        jobs.Add(new DownloadJob(url, Path.Combine(temp.Path, $"file-{index}.bin"), Sha1(payload), payload.Length, "library")
+        {
+            Category = DownloadJobCategory.Core,
+        });
+    }
+
+    var snapshots = new List<DownloadProgress>();
+    var progress = new SynchronousProgress<DownloadProgress>(snapshot =>
+    {
+        lock (snapshots) snapshots.Add(snapshot);
+    });
+    var service = new DownloaderService(new HttpClient(new SlowRoutingHandler(payloads, TimeSpan.FromMilliseconds(5))), new DownloadOptions(4, 4, 0, "reuse"));
+    var summary = service.DownloadJobsAsync(jobs, progress).GetAwaiter().GetResult();
+
+    Assert.Equal(jobCount, summary.TotalJobs);
+    Assert.Equal(jobCount, summary.CompletedJobs);
+    Assert.Equal(0, summary.ReusedJobs);
+    // 字节总和必须精确等于全部文件大小：不重复计数、不丢字节。
+    Assert.Equal((long)jobCount * payloadSize, summary.DownloadedBytes);
+    Assert.True(Directory.GetFiles(temp.Path).Length == jobCount);
+    Assert.Equal(0, Directory.GetFiles(temp.Path, "*.download").Length);
+
+    List<DownloadProgress> captured;
+    lock (snapshots) captured = [.. snapshots];
+    Assert.True(captured.Count > 0);
+
+    // 进度必须单调不减，且完成数/字节数不重复上报。
+    var lastCompleted = -1;
+    var lastBytes = -1L;
+    foreach (var snapshot in captured)
+    {
+        Assert.True(snapshot.CompletedJobs >= lastCompleted);
+        Assert.True(snapshot.DownloadedBytes >= lastBytes);
+        Assert.Equal(jobCount, snapshot.TotalJobs);
+        Assert.True(snapshot.Progress >= 0 && snapshot.Progress <= 1);
+        lastCompleted = snapshot.CompletedJobs;
+        lastBytes = snapshot.DownloadedBytes;
+    }
+
+    // 最终快照必须是完成态，且字节数收敛到总和（不多不少）。
+    Assert.Equal(jobCount, lastCompleted);
+    Assert.Equal((long)jobCount * payloadSize, lastBytes);
+});
+
+runner.Add("Concurrent download honors the configured concurrency limit", () =>
+{
+    using var temp = TempDir.Create();
+    var handler = new ConcurrencyProbeHandler(TimeSpan.FromMilliseconds(40));
+    var jobs = new List<DownloadJob>();
+    for (var index = 0; index < 24; index++)
+    {
+        var payload = handler.Payload;
+        jobs.Add(new DownloadJob(
+            $"https://files.example/probe-{index}.bin",
+            Path.Combine(temp.Path, $"probe-{index}.bin"),
+            Sha1(payload),
+            payload.Length,
+            "asset")
+        {
+            Category = DownloadJobCategory.Asset,
+        });
+    }
+
+    // 资源通道上限 5：同时在飞的请求数必须 <= 5，且确实达到过 5（否则并发没生效）。
+    var service = new DownloaderService(new HttpClient(handler), new DownloadOptions(1, 5, 0, "reuse"));
+    var summary = service.DownloadJobsAsync(jobs).GetAwaiter().GetResult();
+
+    Assert.Equal(24, summary.CompletedJobs);
+    Assert.Equal(24 * (long)handler.Payload.Length, summary.DownloadedBytes);
+    Assert.True(handler.MaxObserved <= 5);
+    Assert.Equal(5, handler.MaxObserved);
+    Assert.Equal(0, handler.RejectedCount);
+
+    // 单线程配置（上限 1）时不出现并发。
+    using var serial = TempDir.Create();
+    var serialHandler = new ConcurrencyProbeHandler(TimeSpan.FromMilliseconds(20));
+    var serialJobs = new List<DownloadJob>();
+    for (var index = 0; index < 8; index++)
+    {
+        serialJobs.Add(new DownloadJob(
+            $"https://files.example/serial-{index}.bin",
+            Path.Combine(serial.Path, $"serial-{index}.bin"),
+            Sha1(serialHandler.Payload),
+            serialHandler.Payload.Length,
+            "library")
+        {
+            Category = DownloadJobCategory.Core,
+        });
+    }
+
+    var serialService = new DownloaderService(new HttpClient(serialHandler), new DownloadOptions(1, 1, 0, "reuse"));
+    serialService.DownloadJobsAsync(serialJobs).GetAwaiter().GetResult();
+    Assert.Equal(1, serialHandler.MaxObserved);
+});
+
+runner.Add("Concurrent download runs core and asset lanes in parallel", () =>
+{
+    using var temp = TempDir.Create();
+    // 两条通道各自的并发上限都是 2，总并发应能达到 4（证明两条通道是并行推进的）。
+    var handler = new ConcurrencyProbeHandler(TimeSpan.FromMilliseconds(50));
+    var jobs = new List<DownloadJob>();
+    for (var index = 0; index < 8; index++)
+    {
+        jobs.Add(new DownloadJob(
+            $"https://files.example/core-{index}.bin",
+            Path.Combine(temp.Path, $"core-{index}.bin"),
+            Sha1(handler.Payload),
+            handler.Payload.Length,
+            "library")
+        {
+            Category = DownloadJobCategory.Core,
+        });
+        jobs.Add(new DownloadJob(
+            $"https://files.example/asset-{index}.bin",
+            Path.Combine(temp.Path, $"asset-{index}.bin"),
+            Sha1(handler.Payload),
+            handler.Payload.Length,
+            "asset")
+        {
+            Category = DownloadJobCategory.Asset,
+        });
+    }
+
+    var service = new DownloaderService(new HttpClient(handler), new DownloadOptions(2, 2, 0, "reuse"));
+    var summary = service.DownloadJobsAsync(jobs).GetAwaiter().GetResult();
+
+    Assert.Equal(16, summary.CompletedJobs);
+    Assert.Equal(16 * (long)handler.Payload.Length, summary.DownloadedBytes);
+    Assert.True(handler.MaxObserved >= 3);
+    Assert.True(handler.MaxObserved <= 4);
+});
+
+runner.Add("Concurrent download failure fails the whole batch once", () =>
+{
+    using var temp = TempDir.Create();
+    var payload = Encoding.UTF8.GetBytes("healthy-payload");
+    var okUrl = "https://files.example/ok.bin";
+    var routes = new Dictionary<string, HttpResponseMessage>
+    {
+        [okUrl] = BytesResponse(payload),
+    };
+
+    // 一个任务恒失败（重试 3 次后抛出），其余任务正常：整体必须失败，且只抛一个异常。
+    var handler = new CountingRoutingHandler(routes, TimeSpan.FromMilliseconds(5));
+    var jobs = new List<DownloadJob>();
+    for (var index = 0; index < 6; index++)
+    {
+        jobs.Add(new DownloadJob(okUrl, Path.Combine(temp.Path, $"ok-{index}.bin"), Sha1(payload), payload.Length, "library")
+        {
+            Category = DownloadJobCategory.Core,
+        });
+    }
+
+    var failingPath = Path.Combine(temp.Path, "broken.bin");
+    jobs.Add(new DownloadJob("https://files.example/broken.bin", failingPath, "", 0, "library")
+    {
+        Category = DownloadJobCategory.Core,
+    });
+
+    var service = new DownloaderService(new HttpClient(handler), new DownloadOptions(3, 3, 0, "reuse"));
+    var error = Assert.Throws<HttpRequestException>(() => service.DownloadJobsAsync(jobs).GetAwaiter().GetResult());
+    Assert.True(error.Message.Contains("404", StringComparison.Ordinal) || error.StatusCode is null);
+    Assert.False(File.Exists(failingPath));
+    Assert.False(File.Exists(failingPath + ".download"));
+    // 失败任务仍然各自重试，不会因为并发而丢掉重试。
+    Assert.True(handler.Attempts("https://files.example/broken.bin") >= 3);
+
+    // 失败后不应有线程仍在写盘：临时文件全部清理完毕。
+    Assert.Equal(0, Directory.GetFiles(temp.Path, "*.download").Length);
+});
+
+runner.Add("Concurrent download keeps per-job retries independent", () =>
+{
+    using var temp = TempDir.Create();
+    var payload = Encoding.UTF8.GetBytes("retry-payload");
+    // 每个 URL 前 2 次请求返回 503，第 3 次成功：并发下每个任务都必须各自完成重试。
+    var handler = new PerUrlFlakyHandler(failuresBeforeSuccess: 2, payload);
+    var jobs = new List<DownloadJob>();
+    for (var index = 0; index < 6; index++)
+    {
+        jobs.Add(new DownloadJob(
+            $"https://files.example/retry-{index}.bin",
+            Path.Combine(temp.Path, $"retry-{index}.bin"),
+            Sha1(payload),
+            payload.Length,
+            "asset")
+        {
+            Category = DownloadJobCategory.Asset,
+        });
+    }
+
+    var service = new DownloaderService(new HttpClient(handler), new DownloadOptions(3, 3, 0, "reuse"));
+    var summary = service.DownloadJobsAsync(jobs).GetAwaiter().GetResult();
+
+    Assert.Equal(6, summary.CompletedJobs);
+    Assert.Equal(6 * (long)payload.Length, summary.DownloadedBytes);
+    // 每个任务 3 次请求，共 18 次。
+    Assert.Equal(18, handler.TotalAttempts);
+    Assert.Equal(0, Directory.GetFiles(temp.Path, "*.download").Length);
+});
+
+runner.Add("Concurrent download handles duplicate target paths safely", () =>
+{
+    using var temp = TempDir.Create();
+    var payload = Encoding.UTF8.GetBytes("duplicate-target");
+    var targetPath = Path.Combine(temp.Path, "same.bin");
+    // 同一个目标文件出现 3 次（版本 json 里重复库条目）：不能并发写同一个 .download 临时文件。
+    var jobs = Enumerable.Range(0, 3)
+        .Select(_ => new DownloadJob("https://files.example/same.bin", targetPath, Sha1(payload), payload.Length, "library")
+        {
+            Category = DownloadJobCategory.Core,
+        })
+        .ToList();
+    var routes = new Dictionary<string, HttpResponseMessage>
+    {
+        ["https://files.example/same.bin"] = BytesResponse(payload),
+    };
+    var service = new DownloaderService(new HttpClient(new SlowRoutingHandler(new Dictionary<string, byte[]> { ["https://files.example/same.bin"] = payload }, TimeSpan.FromMilliseconds(10))), new DownloadOptions(3, 3, 0, "reuse"));
+    var summary = service.DownloadJobsAsync(jobs).GetAwaiter().GetResult();
+
+    Assert.Equal(3, summary.CompletedJobs);
+    // 第一个任务真正写入，其余复用：字节数不能重复累加。
+    Assert.Equal((long)payload.Length, summary.DownloadedBytes);
+    Assert.Equal(2, summary.ReusedJobs);
+    Assert.Equal("duplicate-target", File.ReadAllText(targetPath));
+    Assert.False(File.Exists(targetPath + ".download"));
+    Assert.True(routes.ContainsKey("https://files.example/same.bin"));
+});
+
+runner.Add("Concurrent download cancellation stops all lanes", () =>
+{
+    using var temp = TempDir.Create();
+    var handler = new ConcurrencyProbeHandler(TimeSpan.FromMilliseconds(200));
+    var jobs = new List<DownloadJob>();
+    for (var index = 0; index < 20; index++)
+    {
+        jobs.Add(new DownloadJob(
+            $"https://files.example/cancel-{index}.bin",
+            Path.Combine(temp.Path, $"cancel-{index}.bin"),
+            Sha1(handler.Payload),
+            handler.Payload.Length,
+            "asset")
+        {
+            Category = DownloadJobCategory.Asset,
+        });
+    }
+
+    using var cancellation = new CancellationTokenSource();
+    var service = new DownloaderService(new HttpClient(handler), new DownloadOptions(4, 4, 0, "reuse"));
+    var task = service.DownloadJobsAsync(jobs, cancellationToken: cancellation.Token);
+    cancellation.CancelAfter(TimeSpan.FromMilliseconds(120));
+    Assert.Throws<OperationCanceledException>(() => task.GetAwaiter().GetResult());
+    // 取消后仍在飞的任务必须已经收尾（没有残留的临时文件句柄）。
+    Assert.Equal(0, Directory.GetFiles(temp.Path, "*.download").Length);
+    Assert.True(Directory.GetFiles(temp.Path).Length < jobs.Count);
+});
+
+runner.Add("Download game files downloads core and assets concurrently", () =>
+{
+    using var temp = TempDir.Create();
+    var gameDir = Path.Combine(temp.Path, "game");
+    var versionId = "1.20.1";
+
+    // 1 个客户端 jar + 12 个库 + 20 个资源对象：全部走真实的 BuildCoreJobs/BuildAssetJobs 分类路径。
+    var payloads = new Dictionary<string, byte[]>();
+    var clientBytes = Encoding.UTF8.GetBytes("client-jar-bytes");
+    payloads["https://files.example/client.jar"] = clientBytes;
+    var libraries = new JsonArray();
+    for (var index = 0; index < 12; index++)
+    {
+        var bytes = Encoding.UTF8.GetBytes($"library-{index}");
+        var url = $"https://files.example/lib-{index}.jar";
+        payloads[url] = bytes;
+        libraries.Add(new JsonObject
+        {
+            ["name"] = $"com.example:lib{index}:1.0",
+            ["downloads"] = new JsonObject
+            {
+                ["artifact"] = new JsonObject
+                {
+                    ["path"] = $"com/example/lib{index}/1.0/lib{index}-1.0.jar",
+                    ["url"] = url,
+                    ["sha1"] = Sha1(bytes),
+                    ["size"] = bytes.Length,
+                },
+            },
+        });
+    }
+
+    var objects = new JsonObject();
+    long assetBytesTotal = 0;
+    for (var index = 0; index < 20; index++)
+    {
+        var bytes = Encoding.UTF8.GetBytes($"asset-object-{index}");
+        var hash = Sha1(bytes);
+        // 资源 URL 由 BuildAssetJobs 固定拼成 resources.download.minecraft.net/<prefix>/<hash>。
+        payloads[$"https://resources.download.minecraft.net/{hash[..2]}/{hash}"] = bytes;
+        objects[$"minecraft/sounds/asset{index}.ogg"] = new JsonObject { ["hash"] = hash, ["size"] = bytes.Length };
+        assetBytesTotal += bytes.Length;
+    }
+
+    var assetIndexBytes = Encoding.UTF8.GetBytes(new JsonObject { ["objects"] = objects }.ToJsonString());
+    payloads["https://files.example/index.json"] = assetIndexBytes;
+    var versionJson = new JsonObject
+    {
+        ["id"] = versionId,
+        ["downloads"] = new JsonObject
+        {
+            ["client"] = new JsonObject
+            {
+                ["url"] = "https://files.example/client.jar",
+                ["sha1"] = Sha1(clientBytes),
+                ["size"] = clientBytes.Length,
+            },
+        },
+        ["assetIndex"] = new JsonObject
+        {
+            ["id"] = "demo",
+            ["url"] = "https://files.example/index.json",
+            ["sha1"] = Sha1(assetIndexBytes),
+            ["size"] = assetIndexBytes.Length,
+        },
+        ["libraries"] = libraries,
+    };
+    Directory.CreateDirectory(Path.Combine(gameDir, "versions", versionId));
+
+    var snapshots = new List<DownloadProgress>();
+    var progress = new SynchronousProgress<DownloadProgress>(snapshot =>
+    {
+        lock (snapshots) snapshots.Add(snapshot);
+    });
+    var httpClient = new HttpClient(new SlowRoutingHandler(payloads, TimeSpan.FromMilliseconds(5)));
+    var service = new DownloaderService(httpClient, new DownloadOptions(6, 8, 0, "reuse"));
+    var summary = service.DownloadGameFilesAsync(versionJson, gameDir, versionId, "official", includeAssets: true, progress)
+        .GetAwaiter().GetResult();
+
+    // 客户端 jar(1) + 库(12) + 资源索引(1) + 资源(20) = 34。
+    Assert.Equal(34, summary.TotalJobs);
+    Assert.Equal(34, summary.CompletedJobs);
+    Assert.Equal(0, summary.ReusedJobs);
+    var expectedBytes = payloads.Values.Sum(bytes => (long)bytes.Length);
+    Assert.Equal(expectedBytes, summary.DownloadedBytes);
+
+    // 文件确实落盘，且没有任何残留临时文件。
+    Assert.Equal(Sha1(clientBytes), McGo.Core.Utilities.FileUtilities.Sha1File(Path.Combine(gameDir, "versions", versionId, $"{versionId}.jar")));
+    Assert.Equal(20, Directory.GetFiles(Path.Combine(gameDir, "assets", "objects"), "*", SearchOption.AllDirectories).Length);
+    Assert.Equal(0, Directory.GetFiles(gameDir, "*.download", SearchOption.AllDirectories).Length);
+
+    // 再次执行：全部命中缓存，复用计数正确、字节数为 0。
+    var cached = service.DownloadGameFilesAsync(versionJson, gameDir, versionId, "official", includeAssets: true)
+        .GetAwaiter().GetResult();
+    Assert.Equal(34, cached.TotalJobs);
+    Assert.Equal(34, cached.ReusedJobs);
+    Assert.Equal(0L, cached.DownloadedBytes);
+
+    // 进度快照：单调不减，最终到达 100%。
+    List<DownloadProgress> captured;
+    lock (snapshots) captured = [.. snapshots];
+    var lastCompleted = -1;
+    var lastBytes = -1L;
+    foreach (var snapshot in captured)
+    {
+        Assert.True(snapshot.CompletedJobs >= lastCompleted);
+        Assert.True(snapshot.DownloadedBytes >= lastBytes);
+        lastCompleted = snapshot.CompletedJobs;
+        lastBytes = snapshot.DownloadedBytes;
+    }
+
+    Assert.Equal(34, lastCompleted);
+    Assert.Equal(expectedBytes, lastBytes);
+    Assert.True(assetBytesTotal > 0);
 });
 
 runner.Add("Capsule file filter excludes sensitive files", () =>
@@ -1779,6 +2334,88 @@ runner.Add("P2P tunnel bridges local TCP over UDP peer path", () =>
     }
 });
 
+runner.Add("Loader support rules only block versions that certainly have no loader", () =>
+{
+    // Fabric 从 1.14 起才有支持：1.13.2 及更早两个镜像都查不到。
+    Assert.Equal(LoaderSupport.Available, LoaderSupportRules.Judge("fabric", "1.14"));
+    Assert.Equal(LoaderSupport.Available, LoaderSupportRules.Judge("fabric", "1.20.1"));
+    Assert.Equal(LoaderSupport.Unavailable, LoaderSupportRules.Judge("fabric", "1.13.2"));
+    Assert.Equal(LoaderSupport.Unavailable, LoaderSupportRules.Judge("fabric", "1.7.10"));
+
+    // NeoForge 是 1.20.1 从 Forge 分叉出来的硬事实。
+    Assert.Equal(LoaderSupport.Unavailable, LoaderSupportRules.Judge("neoforge", "1.20"));
+    Assert.Equal(LoaderSupport.Available, LoaderSupportRules.Judge("neoforge", "1.20.1"));
+    Assert.Equal(LoaderSupport.Available, LoaderSupportRules.Judge("neoforge", "1.21.1"));
+
+    // OptiFine 最早 1.7.2，更早确定没有；更新的版本无法用规则断言。
+    Assert.Equal(LoaderSupport.Unavailable, LoaderSupportRules.Judge("optifine", "1.6.4"));
+    Assert.Equal(LoaderSupport.Unknown, LoaderSupportRules.Judge("optifine", "1.7.10"));
+
+    // Forge 自 1.1 起几乎每个正式版都有构建，更早确定没有；Alpha/Beta 不确定。
+    Assert.Equal(LoaderSupport.Unavailable, LoaderSupportRules.Judge("forge", "1.0"));
+    Assert.Equal(LoaderSupport.Unknown, LoaderSupportRules.Judge("forge", "1.7.10"));
+    Assert.Equal(LoaderSupport.Unknown, LoaderSupportRules.Judge("forge", "b1.7.3"));
+
+    // 快照/空版本无法可靠排序：一律不确定，绝不能当成"不支持"而置灰。
+    Assert.Equal(LoaderSupport.Unknown, LoaderSupportRules.Judge("fabric", "24w14a"));
+    Assert.Equal(LoaderSupport.Unknown, LoaderSupportRules.Judge("neoforge", "24w14a"));
+    Assert.Equal(LoaderSupport.Unknown, LoaderSupportRules.Judge("fabric", ""));
+
+    // 三段版本号必须能正确比较：1.20.1 不等于 1.20。
+    Assert.True(LoaderSupportRules.ParseVersion("1.20.1") > LoaderSupportRules.ParseVersion("1.20"));
+    Assert.True(LoaderSupportRules.ParseVersion("1.20") < LoaderSupportRules.ParseVersion("1.20.1"));
+    Assert.True(LoaderSupportRules.UnavailableLoaders("1.13.2").SetEquals(["fabric", "neoforge"]));
+    // 1.20 没有 NeoForge，但 Fabric/OptiFine/Forge 都不能仅凭规则断言。
+    Assert.True(LoaderSupportRules.UnavailableLoaders("1.20").SetEquals(["neoforge"]));
+});
+
+runner.Add("Loader metadata urls point at each loader's own host", () =>
+{
+    // 回归：官方源曾把 Fabric 元数据拼到 launchermeta.mojang.com/fabric-meta 上，
+    // 必然 404 "The specified blob does not exist."，刷新安装器版本直接失败。
+    Assert.Equal("https://meta.fabricmc.net/v2/versions/loader/1.20.1", InstallServices.FabricLoaderUrl("1.20.1", "official"));
+    Assert.Equal("https://bmclapi2.bangbang93.com/fabric-meta/v2/versions/loader/1.20.1", InstallServices.FabricLoaderUrl("1.20.1", "bmclapi"));
+
+    // Forge 安装器只在 Forge 自己的 Maven 上。
+    Assert.Equal("https://maven.minecraftforge.net", InstallServices.ForgeMavenRoot("official"));
+    Assert.Equal("https://bmclapi2.bangbang93.com/maven", InstallServices.ForgeMavenRoot("bmclapi"));
+
+    // NeoForge 的 installerPath 是 /maven/... 相对路径，官方源要换成 NeoForged 主机。
+    Assert.Equal(
+        "https://maven.neoforged.net/releases/net/neoforged/neoforge/20.2.93/neoforge-20.2.93-installer.jar",
+        InstallServices.NeoForgeInstallerUrl("/maven/net/neoforged/neoforge/20.2.93/neoforge-20.2.93-installer.jar", "official"));
+    Assert.Equal(
+        "https://bmclapi2.bangbang93.com/maven/net/neoforged/neoforge/20.2.93/neoforge-20.2.93-installer.jar",
+        InstallServices.NeoForgeInstallerUrl("/maven/net/neoforged/neoforge/20.2.93/neoforge-20.2.93-installer.jar", "bmclapi"));
+
+    // 没有 installerPath 时按 rawVersion 形态判断分组：1.20.1 在 net/neoforged/forge 下。
+    Assert.Equal(
+        "https://bmclapi2.bangbang93.com/maven/net/neoforged/forge/1.20.1-47.1.105/forge-1.20.1-47.1.105-installer.jar",
+        InstallServices.NeoForgeInstallerUrl("1.20.1", "1.20.1-47.1.105", "1.20.1-47.1.105", "bmclapi"));
+    Assert.Equal(
+        "https://maven.neoforged.net/releases/net/neoforged/neoforge/20.2.93/neoforge-20.2.93-installer.jar",
+        InstallServices.NeoForgeInstallerUrl("1.20.2", "20.2.93", "20.2.93", "official"));
+});
+
+runner.Add("Install services accept BMCLAPI Forge promos array shape", () =>
+{
+    // 回归：BMCLAPI 的 /forge/promos 返回数组，旧实现无条件 node["promos"] 会抛
+    // "The node must be of type 'JsonObject'"，切到 bmclapi 后刷新直接失败。
+    var promos = new JsonArray(
+        new JsonObject
+        {
+            ["name"] = "1.20.1-recommended",
+            ["build"] = new JsonObject { ["mcversion"] = "1.20.1", ["version"] = "47.2.0" },
+        },
+        new JsonObject
+        {
+            ["name"] = "1.20.1-latest",
+            ["build"] = new JsonObject { ["mcversion"] = "1.20.1", ["version"] = "47.2.20" },
+        });
+    var service = new InstallServices(new HttpClient(new JsonHandler(promos)));
+    Assert.SequenceEqual(["47.2.0", "47.2.20"], service.GetForgeVersionsForMcAsync("1.20.1", "bmclapi").GetAwaiter().GetResult());
+});
+
 runner.Add("Install services parse Forge promos and NeoForge/OptiFine helpers", () =>
 {
     var promos = new JsonObject
@@ -2313,8 +2950,177 @@ internal sealed class FlakyHandler : HttpMessageHandler
     }
 }
 
-internal sealed class MidStreamFailureHandler : HttpMessageHandler
+// 同步执行回调的 IProgress：避免 Progress<T> 把回调丢到线程池导致测试提前返回。
+internal sealed class SynchronousProgress<T>(Action<T> handler) : IProgress<T>
 {
+    public void Report(T value) => handler(value);
+}
+
+// 按 URL 返回不同 payload，并在响应前延迟一小段时间，用于放大并发重叠窗口。
+internal sealed class SlowRoutingHandler : HttpMessageHandler
+{
+    private readonly IReadOnlyDictionary<string, byte[]> _payloads;
+    private readonly TimeSpan _delay;
+
+    public SlowRoutingHandler(IReadOnlyDictionary<string, byte[]> payloads, TimeSpan delay)
+    {
+        _payloads = payloads;
+        _delay = delay;
+    }
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        await Task.Delay(_delay, cancellationToken);
+        var url = request.RequestUri!.ToString();
+        return _payloads.TryGetValue(url, out var payload)
+            ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(payload), RequestMessage = request }
+            : new HttpResponseMessage(HttpStatusCode.NotFound) { RequestMessage = request };
+    }
+}
+
+// 记录同时在飞的请求数峰值，用于验证并发上限既生效又不泄漏。
+internal sealed class ConcurrencyProbeHandler : HttpMessageHandler
+{
+    private readonly TimeSpan _delay;
+    private int _inFlight;
+    private int _maxObserved;
+    private int _rejected;
+
+    public ConcurrencyProbeHandler(TimeSpan delay)
+    {
+        _delay = delay;
+        Payload = Encoding.UTF8.GetBytes(new string('p', 256));
+    }
+
+    public byte[] Payload { get; }
+
+    public int MaxObserved => Volatile.Read(ref _maxObserved);
+
+    public int RejectedCount => Volatile.Read(ref _rejected);
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        var current = Interlocked.Increment(ref _inFlight);
+        RecordMax(current);
+        try
+        {
+            await Task.Delay(_delay, cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(Payload),
+                RequestMessage = request,
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            Interlocked.Increment(ref _rejected);
+            throw;
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _inFlight);
+        }
+    }
+
+    private void RecordMax(int current)
+    {
+        int observed;
+        do
+        {
+            observed = Volatile.Read(ref _maxObserved);
+            if (current <= observed)
+            {
+                return;
+            }
+        }
+        while (Interlocked.CompareExchange(ref _maxObserved, current, observed) != observed);
+    }
+}
+
+// 路由表 + 每个 URL 的请求计数，用于验证失败任务确实用尽了重试。
+internal sealed class CountingRoutingHandler : HttpMessageHandler
+{
+    private readonly IReadOnlyDictionary<string, HttpResponseMessage> _routes;
+    private readonly TimeSpan _delay;
+    private readonly Dictionary<string, int> _attempts = new(StringComparer.Ordinal);
+    private readonly object _gate = new();
+
+    public CountingRoutingHandler(IReadOnlyDictionary<string, HttpResponseMessage> routes, TimeSpan delay)
+    {
+        _routes = routes;
+        _delay = delay;
+    }
+
+    public int Attempts(string url)
+    {
+        lock (_gate) return _attempts.TryGetValue(url, out var count) ? count : 0;
+    }
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        var url = request.RequestUri!.ToString();
+        lock (_gate)
+        {
+            _attempts[url] = (_attempts.TryGetValue(url, out var count) ? count : 0) + 1;
+        }
+
+        await Task.Delay(_delay, cancellationToken);
+        if (!_routes.TryGetValue(url, out var route))
+        {
+            return new HttpResponseMessage(HttpStatusCode.NotFound) { RequestMessage = request };
+        }
+
+        var bytes = route.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult();
+        return new HttpResponseMessage(route.StatusCode)
+        {
+            Content = new ByteArrayContent(bytes),
+            RequestMessage = request,
+        };
+    }
+}
+
+// 每个 URL 独立计数：前 N 次返回 503，之后成功。用于验证并发下每个任务各自重试。
+internal sealed class PerUrlFlakyHandler : HttpMessageHandler
+{
+    private readonly int _failuresBeforeSuccess;
+    private readonly byte[] _payload;
+    private readonly Dictionary<string, int> _attempts = new(StringComparer.Ordinal);
+    private readonly object _gate = new();
+    private int _totalAttempts;
+
+    public PerUrlFlakyHandler(int failuresBeforeSuccess, byte[] payload)
+    {
+        _failuresBeforeSuccess = failuresBeforeSuccess;
+        _payload = payload;
+    }
+
+    public int TotalAttempts => Volatile.Read(ref _totalAttempts);
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        var url = request.RequestUri!.ToString();
+        int attempt;
+        lock (_gate)
+        {
+            attempt = (_attempts.TryGetValue(url, out var count) ? count : 0) + 1;
+            _attempts[url] = attempt;
+        }
+
+        Interlocked.Increment(ref _totalAttempts);
+        if (attempt <= _failuresBeforeSuccess)
+        {
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { RequestMessage = request });
+        }
+
+        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(_payload),
+            RequestMessage = request,
+        });
+    }
+}
+
+internal sealed class MidStreamFailureHandler : HttpMessageHandler{
     private readonly IReadOnlyDictionary<string, HttpResponseMessage> _routes;
     private readonly string _failUrl;
 

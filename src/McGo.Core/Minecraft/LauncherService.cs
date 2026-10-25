@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -142,17 +142,85 @@ public sealed class LauncherService
             .ToList();
     }
 
+    /// <summary>
+    /// 推断启动某个版本所需的最低 Java 大版本。
+    /// 优先读版本 JSON 自带的 javaVersion.majorVersion（权威值），
+    /// 拿不到时按 Minecraft 官方各版本要求回退。
+    /// </summary>
+    /// <summary>
+    /// 解析快照版本号（形如 24w14a / 21w43a）并按发布日期推断 Java 需求。
+    ///
+    /// Java 需求升级在快照线上对应的真实周次：
+    ///   1.17 开发期（21w19a 起改用 Java 16）→ 2021 年第 19 周
+    ///   1.18 开发期（21w37a 起改用 Java 17）→ 2021 年第 37 周
+    ///   1.20.5 开发期（24w03a 起改用 Java 21）→ 2024 年第 3 周
+    ///
+    /// 返回 null 表示不是可识别的快照，交给调用方按 1.x 规则处理。
+    /// </summary>
+    private static int? TryParseSnapshotJavaBaseline(string versionId)
+    {
+        var match = Regex.Match(versionId.ToLowerInvariant(), @"\b(\d{2})w(\d{2})([a-z])\b");
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        var year = 2000 + int.Parse(match.Groups[1].Value);
+        var week = int.Parse(match.Groups[2].Value);
+        if (year < 2011 || year > 2100 || week < 1 || week > 53)
+        {
+            return null;
+        }
+
+        // 用「年*100+周」做线性比较，避免跨年计算。
+        // 阈值必须是完整 stamp（年份也要算进去），写成 2403 会让 20w45a(202045) 误判成 Java 21。
+        var stamp = (year * 100) + week;
+        return stamp switch
+        {
+            >= 202403 => 21,   // 24w03a 起：1.20.5 开发线
+            >= 202137 => 17,   // 21w37a 起：1.18 开发线
+            >= 202119 => 16,   // 21w19a 起：1.17 开发线
+            _ => 8,
+        };
+    }
+
     public int InferRequiredJavaVersion(string gameDirectory, string versionId)
     {
-        var baseline = 17;
+        // 默认 8 是最保守的：老版本用高版本 Java 会崩，用低版本至少能启动并给出明确升级提示。
+        var baseline = 8;
+        // 快照（形如 24w14a）没有 1.x 版本号，按发布年份+周次推断，
+        // 依据是 Java 需求切换的真实时间点（下方 SnapshotJavaBaseline）。
+        var snapshot = TryParseSnapshotJavaBaseline(versionId);
+        if (snapshot.HasValue)
+        {
+            baseline = Math.Max(baseline, snapshot.Value);
+        }
         // 只匹配形如 1.20 / 1.20.1 的 Minecraft 版本号，避免被 loader 版本号误导，
         // 例如 fabric-loader-0.16.0-1.20.1 不能被前缀的 0.16 当成 MC 版本。
-        var matches = Regex.Matches(versionId.ToLowerInvariant(), @"1\.(\d+)(?:\.\d+)?");
+        var matches = Regex.Matches(versionId.ToLowerInvariant(), @"1\.(\d+)(?:\.(\d+))?");
         if (matches.Count > 0)
         {
-            var minor = matches.Cast<Match>().Max(item => int.Parse(item.Groups[1].Value));
-            // Java 需求门槛：1.17+ 需要 Java 17，1.21+ 需要 Java 21，1.16 及更早使用 Java 8。
-            baseline = minor >= 21 ? 21 : minor >= 17 ? 17 : 8;
+            // 取最高的那个匹配作为主版本（去掉 loader 版本号带来的噪声）
+            var best = matches.Cast<Match>()
+                .OrderByDescending(item => int.Parse(item.Groups[1].Value))
+                .ThenByDescending(item => item.Groups[2].Success ? int.Parse(item.Groups[2].Value) : 0)
+                .First();
+            var minor = int.Parse(best.Groups[1].Value);
+            var patch = best.Groups[2].Success ? int.Parse(best.Groups[2].Value) : 0;
+
+            // Minecraft → Java 的官方要求（来自各版本 version.json 的 javaVersion.majorVersion）：
+            //   1.16.5 及更早 → Java 8
+            //   1.17.x        → Java 16
+            //   1.18 - 1.20.4 → Java 17
+            //   1.20.5 及以后 → Java 21
+            baseline = minor switch
+            {
+                >= 21 => 21,
+                20 => patch >= 5 ? 21 : 17,
+                18 or 19 => 17,
+                17 => 16,
+                _ => 8,
+            };
         }
 
         int? highestDeclared = null;

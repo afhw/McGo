@@ -8,6 +8,7 @@ using McGo.Core.Downloads;
 using McGo.Core.Formatting;
 using McGo.Core.Minecraft;
 using McGo.Core.Resources;
+using McGo.WinUI.Dialogs;
 
 namespace McGo.WinUI.Pages;
 
@@ -27,6 +28,8 @@ public sealed partial class ResourcesPage : Page
     private bool _resourceDetailRunning;
     private bool _resourceBusy;
     private bool _initialized;
+    private bool _wideLayout;
+    private bool _responsiveLayoutInitialized;
 
     public ResourcesPage()
     {
@@ -35,6 +38,91 @@ public sealed partial class ResourcesPage : Page
         LoadState();
         _initialized = true;
         ResourceSectionBar.SelectedItem = ResourceSectionBar.Items[0];
+    }
+
+    /// <summary>视口宽度：XamlRoot.Size 才是真实客户区，容器宽度可能按内容收缩。</summary>
+    private double ViewportWidth
+    {
+        get
+        {
+            var root = XamlRoot?.Size.Width ?? 0;
+            return root > 0 ? root : (XamlRoot?.Size.Width ?? 0);
+        }
+    }
+
+    private void ResponsiveLayoutRoot_SizeChanged(object sender, SizeChangedEventArgs e)
+        => ApplyResponsiveLayout(ViewportWidth);
+
+    /// <summary>宽窗口左主右辅；窄窗口单列堆叠，主要搜索区始终排在最前。</summary>
+    private void ApplyResponsiveLayout(double width)
+    {
+        if (width <= 0)
+        {
+            return;
+        }
+
+        var wide = width >= 900;
+        if (_responsiveLayoutInitialized && _wideLayout == wide)
+        {
+            return;
+        }
+
+        _responsiveLayoutInitialized = true;
+        _wideLayout = wide;
+        ResourcePrimaryColumn.Width = new GridLength(1, GridUnitType.Star);
+        ResourceSideColumn.Width = wide ? new GridLength(320) : new GridLength(0);
+        Grid.SetRow(ResourceSidePanel, wide ? 2 : 3);
+        Grid.SetColumn(ResourceSidePanel, wide ? 1 : 0);
+        Grid.SetColumnSpan(ResourceSidePanel, wide ? 1 : 2);
+    }
+
+    /// <summary>回车即搜索，省掉一次鼠标移动。</summary>
+    private void ResourceQueryKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        if (e.Key != Windows.System.VirtualKey.Enter)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        SearchResources(sender, new RoutedEventArgs());
+    }
+
+    /// <summary>日志折叠时把最后一条消息显示在标题上，不用展开也能看到结果。</summary>
+    private void ResourceOutputChanged(object sender, TextChangedEventArgs e)
+    {
+        if (ResourceOutputPreview is null)
+        {
+            return;
+        }
+
+        var text = ResourceOutputBox.Text ?? "";
+        var preview = string.Join(
+            " · ",
+            text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+                .Select(line => line.Trim())
+                .Where(line => line.Length > 0));
+        if (preview.Length > 72)
+        {
+            preview = preview[..72] + "…";
+        }
+
+        ResourceOutputPreview.Text = preview.Length == 0 ? "安装、依赖与状态消息" : preview;
+        if (preview.Length > 0)
+        {
+            ToolTipService.SetToolTip(ResourceOutputPreview, preview);
+        }
+    }
+
+    private void RevealResourceDetail() => ResourceDetailExpander.IsExpanded = true;
+
+    private void RevealResourceLog() => ResourceOutputExpander.IsExpanded = true;
+
+    /// <summary>写日志并展开折叠面板：失败原因不该藏在收起的区域里。</summary>
+    private void ShowResourceMessage(string message)
+    {
+        ResourceOutputBox.Text = message;
+        RevealResourceLog();
     }
 
     private void ResourceSectionChanged(SelectorBar sender, SelectorBarSelectionChangedEventArgs e)
@@ -70,7 +158,7 @@ public sealed partial class ResourcesPage : Page
             var source = ComboText(ResourceSourceBox, "modrinth");
             if (ComboText(ResourceTypeBox, "mod") == "mod" && !VersionSupportsModManagement(CurrentResourceVersion()))
             {
-                ResourceOutputBox.Text = "Mod 安装目标需要选择 Fabric、Forge、NeoForge 或 OptiFine 版本。";
+                ShowResourceMessage("Mod 安装目标需要选择 Fabric、Forge、NeoForge 或 OptiFine 版本。");
                 ResourceStatusText.Text = "当前目标版本不支持 Mod。";
                 return;
             }
@@ -94,8 +182,9 @@ public sealed partial class ResourcesPage : Page
 
             if (string.IsNullOrWhiteSpace(ResourceQueryBox.Text))
             {
-                ResourceOutputBox.Text = "请输入要搜索的资源名称。";
+                ShowResourceMessage("请输入要搜索的资源名称。");
                 ResourceStatusText.Text = ResourceOutputBox.Text;
+                ResourceQueryBox.Focus(FocusState.Programmatic);
                 return;
             }
 
@@ -131,33 +220,33 @@ public sealed partial class ResourcesPage : Page
     {
         if (ResourceResultsList.SelectedItem is not string label || !_resourceHitsByLabel.TryGetValue(label, out var hit))
         {
-            ResourceOutputBox.Text = "请先选择一个资源。";
+            ShowResourceMessage("请先选择一个资源。");
             return;
         }
 
         var resourceType = ComboText(ResourceTypeBox, "mod");
         if (resourceType == "mod" && !VersionSupportsModManagement(CurrentResourceVersion()))
         {
-            ResourceOutputBox.Text = "当前目标版本不支持 Mod 管理，请切换到 Fabric、Forge、NeoForge 或 OptiFine 版本。";
+            ShowResourceMessage("当前目标版本不支持 Mod 管理，请切换到 Fabric、Forge、NeoForge 或 OptiFine 版本。");
             return;
         }
 
         if ((hit["source"]?.GetValue<string>() ?? "modrinth") != "modrinth")
         {
-            ResourceOutputBox.Text = "当前只支持从 Modrinth 一键安装；本地来源请在本地资源列表管理。";
+            ShowResourceMessage("当前只支持从 Modrinth 一键安装；本地来源请在本地资源列表管理。");
             return;
         }
 
         if (hit["compatible"]?.GetValue<bool>() == false)
         {
-            ResourceOutputBox.Text = "这个资源没有适配当前安装目标的可下载文件，请换一个版本或资源。";
+            ShowResourceMessage("这个资源没有适配当前安装目标的可下载文件，请换一个版本或资源。");
             return;
         }
 
         var projectId = hit["project_id"]?.GetValue<string>() ?? hit["slug"]?.GetValue<string>() ?? "";
         if (projectId.Length == 0)
         {
-            ResourceOutputBox.Text = "选中资源缺少 project_id。";
+            ShowResourceMessage("选中资源缺少 project_id。");
             return;
         }
 
@@ -198,12 +287,12 @@ public sealed partial class ResourcesPage : Page
             }
             catch (OperationCanceledException)
             {
-                ResourceOutputBox.Text = "资源安装已取消。";
+                ShowResourceMessage("资源安装已取消。");
                 throw;
             }
             catch (Exception exc)
             {
-                ResourceOutputBox.Text = "资源安装失败：" + exc.Message;
+                ShowResourceMessage("资源安装失败：" + exc.Message);
                 throw;
             }
             finally
@@ -217,10 +306,11 @@ public sealed partial class ResourcesPage : Page
     {
         if (ResourceResultsList.SelectedItem is not string label || !_resourceHitsByLabel.TryGetValue(label, out var hit))
         {
-            ResourceOutputBox.Text = "请先选择一个搜索结果。";
+            ShowResourceMessage("请先选择一个搜索结果。");
             return;
         }
 
+        RevealResourceDetail();
         _resourceDetailQueue.Enqueue(hit);
         _ = DrainResourceDetailQueueAsync();
     }
@@ -239,11 +329,11 @@ public sealed partial class ResourcesPage : Page
                 builder.AppendLine($"- {missing.ProjectId} <- {string.Join(", ", missing.RequiredBy)}");
             }
 
-            ResourceOutputBox.Text = builder.ToString();
+            ShowResourceMessage(builder.ToString());
         }
         catch (Exception exc)
         {
-            ResourceOutputBox.Text = "依赖解析失败：" + exc.Message;
+            ShowResourceMessage("依赖解析失败：" + exc.Message);
         }
         finally
         {
@@ -281,20 +371,20 @@ public sealed partial class ResourcesPage : Page
                     },
                     progress,
                     token);
-                ResourceOutputBox.Text = result.DependenciesInstalled.Count == 0
+                ShowResourceMessage(result.DependenciesInstalled.Count == 0
                     ? "没有缺失前置。"
-                    : "已安装缺失前置：\n" + string.Join(Environment.NewLine, result.DependenciesInstalled);
+                    : "已安装缺失前置：\n" + string.Join(Environment.NewLine, result.DependenciesInstalled));
                 RefreshLocalResources(sender, e);
                 return result.DependenciesInstalled.Count == 0 ? "没有缺失前置" : $"已安装 {result.DependenciesInstalled.Count} 个前置";
             }
             catch (OperationCanceledException)
             {
-                ResourceOutputBox.Text = "前置安装已取消。";
+                ShowResourceMessage("前置安装已取消。");
                 throw;
             }
             catch (Exception exc)
             {
-                ResourceOutputBox.Text = "前置安装失败：" + exc.Message;
+                ShowResourceMessage("前置安装失败：" + exc.Message);
                 throw;
             }
             finally
@@ -326,6 +416,7 @@ public sealed partial class ResourcesPage : Page
         catch (Exception exc)
         {
             ResourceOutputBox.Text = "刷新本地资源失败：" + exc.Message;
+            RevealResourceLog();
         }
     }
 
@@ -467,11 +558,11 @@ public sealed partial class ResourcesPage : Page
                 }
             }
 
-            ResourceOutputBox.Text = builder.ToString();
+            ShowResourceMessage(builder.ToString());
         }
         catch (Exception exc)
         {
-            ResourceOutputBox.Text = "读取本地资源失败：" + exc.Message;
+            ShowResourceMessage("读取本地资源失败：" + exc.Message);
         }
     }
 
@@ -489,15 +580,7 @@ public sealed partial class ResourcesPage : Page
                 return;
             }
 
-            var dialog = new ContentDialog
-            {
-                Title = "删除本地资源",
-                Content = $"删除 {item.Title}？",
-                PrimaryButtonText = "删除",
-                CloseButtonText = "取消",
-                DefaultButton = ContentDialogButton.Close,
-                XamlRoot = XamlRoot,
-            };
+            var dialog = AppDialog.Create(this, "删除本地资源", $"删除 {item.Title}？", "删除", "取消");
             if (await dialog.ShowAsync() != ContentDialogResult.Primary)
             {
                 return;
@@ -509,7 +592,7 @@ public sealed partial class ResourcesPage : Page
         }
         catch (Exception exc)
         {
-            ResourceOutputBox.Text = "删除本地资源失败：" + exc.Message;
+            ShowResourceMessage("删除本地资源失败：" + exc.Message);
         }
     }
 
@@ -529,7 +612,7 @@ public sealed partial class ResourcesPage : Page
         }
         catch (Exception exc)
         {
-            ResourceOutputBox.Text = "更新本地资源状态失败：" + exc.Message;
+            ShowResourceMessage("更新本地资源状态失败：" + exc.Message);
         }
     }
 
@@ -540,7 +623,7 @@ public sealed partial class ResourcesPage : Page
             return item;
         }
 
-        ResourceOutputBox.Text = "请先选择一个本地资源。";
+        ShowResourceMessage("请先选择一个本地资源。");
         return null;
     }
 
@@ -724,6 +807,16 @@ public sealed partial class ResourcesPage : Page
 
     private void ResourceVersionChanged(object sender, SelectionChangedEventArgs e) => ApplyResourceVersionSelection();
 
+    private void ResourceTargetFilterChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_initialized)
+        {
+            return;
+        }
+
+        RefreshResourceTargetSummary();
+    }
+
     private void ResourceTypeChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!_initialized || TargetDirBox is null)
@@ -733,7 +826,6 @@ public sealed partial class ResourcesPage : Page
 
         RefreshResourceTargetVersions();
     }
-
     private void RefreshResourceTargetVersions()
     {
         if (ResourceVersionBox is null || ResourceTypeBox is null)
@@ -768,6 +860,36 @@ public sealed partial class ResourcesPage : Page
         ResourceGameVersionBox.Text = versionId.Length > 0 ? _versionSettingsService.ResolveBaseMinecraftVersion(gameDir, versionId) : "";
         ResourceLoaderBox.Text = versionId.Length > 0 ? ModrinthLoaderForVersion(gameDir, versionId) : "";
         TargetDirBox.Text = DefaultResourceTargetDir(versionId);
+        RefreshResourceTargetSummary();
+    }
+
+    /// <summary>折叠筛选后，右栏这张卡片就是"我要装到哪"的唯一答案。</summary>
+    private void RefreshResourceTargetSummary()
+    {
+        if (ResourceTargetVersionText is null || ResourceTargetDirText is null || ResourceTargetHintText is null)
+        {
+            return;
+        }
+
+        var versionId = CurrentResourceVersion();
+        var resourceType = ComboText(ResourceTypeBox, "mod");
+        ResourceTargetVersionText.Text = versionId.Length == 0
+            ? $"未选择版本 · {resourceType}"
+            : $"{versionId} · {resourceType}";
+
+        var targetDir = TargetDirBox.Text.Trim();
+        ResourceTargetDirText.Text = targetDir.Length == 0 ? "—" : targetDir;
+        ToolTipService.SetToolTip(ResourceTargetDirText, targetDir);
+
+        ResourceTargetHintText.Text = versionId.Length == 0
+            ? "还没有可用的本地版本。先到“下载”装一个，或展开左侧“筛选条件”选择目标版本。"
+            : resourceType == "mod" && !VersionSupportsModManagement(versionId)
+                ? "当前版本不支持 Mod 管理，请在左侧“筛选条件”里换 Fabric、Forge、NeoForge 或 OptiFine 版本。"
+                : string.IsNullOrWhiteSpace(ResourceGameVersionBox.Text) && string.IsNullOrWhiteSpace(ResourceLoaderBox.Text)
+                    ? "游戏版本与加载器都不限制，会返回更多结果。"
+                    : $"游戏版本 {Fallback(ResourceGameVersionBox.Text, "不限")} · 加载器 {Fallback(ResourceLoaderBox.Text, "不限")}";
+
+        static string Fallback(string value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
     }
 
     private string CurrentResourceVersion()
@@ -826,6 +948,32 @@ public sealed partial class ResourcesPage : Page
         if (ResourceSectionBar.Items.Count != 2)
         {
             throw new InvalidOperationException("资源页缺少市场与本地资源分段。");
+        }
+
+        // 信息减法：搜索框常驻、筛选与详情/日志默认折叠。
+        if (ResourceQueryBox.Visibility != Visibility.Visible
+            || SearchResourcesButton.Visibility != Visibility.Visible
+            || ResourceResultsList.Visibility != Visibility.Visible)
+        {
+            throw new InvalidOperationException("资源页主搜索区没有常驻显示。");
+        }
+
+        if (ResourceFilterExpander.IsExpanded
+            || ResourceDetailExpander.IsExpanded
+            || ResourceOutputExpander.IsExpanded)
+        {
+            throw new InvalidOperationException("资源页的筛选、详情与日志应默认折叠。");
+        }
+
+        // 宽屏左右分栏，窄屏单列堆叠。
+        var wide = ViewportWidth >= 900;
+        ApplyResponsiveLayout(ViewportWidth);
+        if (wide != _wideLayout
+            || Grid.GetColumn(ResourceSidePanel) != (wide ? 1 : 0)
+            || Grid.GetRow(ResourceSidePanel) != (wide ? 2 : 3)
+            || Grid.GetColumnSpan(ResourceSidePanel) != (wide ? 1 : 2))
+        {
+            throw new InvalidOperationException("资源页宽窄屏布局不正确。");
         }
 
         var resourceTypes = ResourceTypeBox.Items.OfType<ComboBoxItem>()

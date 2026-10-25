@@ -1,7 +1,8 @@
-using Microsoft.UI.Windowing;
+﻿using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
+using McGo.Core.App;
 using McGo.Core.Configuration;
 using McGo.Core.Downloads;
 using McGo.WinUI.Pages;
@@ -11,6 +12,18 @@ namespace McGo.WinUI;
 
 public sealed partial class MainWindow : Window
 {
+    /// <summary>主导航可见入口数量（首页、启动、下载、资源、整合包、联机）。</summary>
+    private const int PrimaryNavigationCount = 6;
+
+    /// <summary>底部导航可见入口数量（账号、设置、日志、关于）。</summary>
+    private const int FooterNavigationCount = 4;
+
+    private static readonly string[] KnownTags =
+    [
+        "home", "launch", "download", "resources", "modpacks", "online",
+        "accounts", "settings", "logs", "about",
+    ];
+
     private bool _syncingNavigationSelection;
     private bool _showDownload = true;
     internal Page? CurrentPage => NavFrame.Content as Page;
@@ -28,6 +41,8 @@ public sealed partial class MainWindow : Window
             AppWindow.SetIcon(iconPath);
         }
 
+        PaneVersionText.Text = $"v{AppConstants.AppVersion}";
+
         ApplyTitleBarButtonColors(ElementTheme.Dark);
         ApplySavedAppearance();
         ApplySavedFeatureVisibility();
@@ -38,16 +53,30 @@ public sealed partial class MainWindow : Window
 
     public void NavigateToTag(string tag)
     {
-        var navItem = NavView.MenuItems.OfType<NavigationViewItem>()
-            .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), tag, StringComparison.OrdinalIgnoreCase));
-        if (navItem is not null && !ReferenceEquals(NavView.SelectedItem, navItem))
+        if (!KnownTags.Contains(tag, StringComparer.OrdinalIgnoreCase))
         {
-            _syncingNavigationSelection = true;
-            NavView.SelectedItem = navItem;
-            _syncingNavigationSelection = false;
+            tag = "home";
         }
 
+        SyncNavigationSelection(tag);
         NavigateToPage(tag);
+    }
+
+    /// <summary>
+    /// 冒烟专用：把游戏目录指到真实数据目录，便于验证已有版本列表等真实场景。
+    /// 直接写配置项（配置本身在临时工作目录，可写），不改变页面的其他行为。
+    /// </summary>
+    internal void ApplySmokeGameDirectory(string gameDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(gameDirectory))
+        {
+            return;
+        }
+
+        var settings = new AppSettings();
+        settings.LoadConfig();
+        settings.Config.Set("GAME", "directory", gameDirectory);
+        settings.SaveConfig();
     }
 
     internal void RunSmokeChecks()
@@ -57,9 +86,9 @@ public sealed partial class MainWindow : Window
             throw new InvalidOperationException("主导航不应显示重复的内置设置项。");
         }
 
-        if (NavView.MenuItems.Count != 5 || NavView.OpenPaneLength > 190)
+        if (NavView.MenuItems.Count != PrimaryNavigationCount || NavView.FooterMenuItems.Count != FooterNavigationCount)
         {
-            throw new InvalidOperationException("主导航没有保持 Python 版的五入口紧凑布局。");
+            throw new InvalidOperationException("主导航没有保持主区六个入口加底部四个辅助入口的信息布局。");
         }
 
         var manager = DownloadTaskManager.Current;
@@ -109,18 +138,22 @@ public sealed partial class MainWindow : Window
     {
         var settings = new AppSettings();
         settings.LoadConfig();
-        ApplyFeatureVisibility(
-            settings.Config.GetBool("FEATURES", "show_download", true),
-            settings.Config.GetBool("FEATURES", "show_manage", true));
+        ApplyFeatureVisibility(settings.Config.GetBool("FEATURES", "show_download", true));
     }
 
-    public void ApplyFeatureVisibility(bool showDownload, bool showManage)
+    public void ApplyFeatureVisibility(bool showDownload)
     {
         _showDownload = showDownload;
         DownloadNavItem.Visibility = showDownload ? Visibility.Visible : Visibility.Collapsed;
-        ManageNavItem.Visibility = showManage ? Visibility.Visible : Visibility.Collapsed;
         UpdateGlobalDownloadTaskEntry();
     }
+
+    /// <summary>
+    /// 当前生效的窗口主题。
+    /// ContentDialog 的内容会被重新挂到 Popup 下，脱离了 RootGrid 的继承链，
+    /// 不显式跟随就会出现"深色界面弹白色对话框"，因此弹出前要以它为准。
+    /// </summary>
+    internal ElementTheme CurrentTheme => RootGrid.RequestedTheme;
 
     public void ApplyAppearance(string theme, string imagePath)
     {
@@ -181,12 +214,6 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (args.IsSettingsSelected)
-        {
-            NavigateToPage("settings");
-            return;
-        }
-
         if (args.SelectedItem is not NavigationViewItem item)
         {
             return;
@@ -220,14 +247,35 @@ public sealed partial class MainWindow : Window
 
     private void OpenGlobalDownloadTasks(object sender, RoutedEventArgs e)
     {
-        if (!ReferenceEquals(NavView.SelectedItem, DownloadNavItem))
+        SyncNavigationSelection("download");
+        NavigateToPage("download-tasks");
+    }
+
+    /// <summary>让导航选中状态跟随当前页面标签。</summary>
+    private void SyncNavigationSelection(string tag)
+    {
+        var target = FindNavigationItem(tag);
+        if (target is null || ReferenceEquals(NavView.SelectedItem, target))
         {
-            _syncingNavigationSelection = true;
-            NavView.SelectedItem = DownloadNavItem;
-            _syncingNavigationSelection = false;
+            return;
         }
 
-        NavigateToPage("download-tasks");
+        _syncingNavigationSelection = true;
+        try
+        {
+            NavView.SelectedItem = target;
+        }
+        finally
+        {
+            _syncingNavigationSelection = false;
+        }
+    }
+
+    private NavigationViewItem? FindNavigationItem(string tag)
+    {
+        return NavView.MenuItems.Concat(NavView.FooterMenuItems)
+            .OfType<NavigationViewItem>()
+            .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), tag, StringComparison.OrdinalIgnoreCase));
     }
 
     private void NavigateToPage(string tag)
@@ -243,7 +291,6 @@ public sealed partial class MainWindow : Window
             "resources" => typeof(ResourcesPage),
             "modpacks" => typeof(ModpacksPage),
             "online" => typeof(OnlinePage),
-            "manage" => typeof(ManagePage),
             "settings" => typeof(SettingsPage),
             "logs" => typeof(LogsPage),
             "about" => typeof(AboutPage),

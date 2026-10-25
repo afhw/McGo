@@ -1,8 +1,10 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using McGo.WinUI.Dialogs;
+using Microsoft.UI.Xaml.Media;
 using McGo.Core.App;
 using McGo.Core.Authentication;
 using McGo.Core.Configuration;
@@ -14,6 +16,61 @@ using McGo.Core.Resources;
 using McGo.WinUI.Services;
 
 namespace McGo.WinUI.Pages;
+
+/// <summary>版本列表项：把纯字符串换成带图标与摘要的可视项。</summary>
+public sealed class VersionListItem
+{
+    public VersionListItem(string versionId, string versionType, string? alias, bool favorite)
+    {
+        VersionId = versionId;
+        IsFavorite = favorite;
+        DisplayName = string.IsNullOrWhiteSpace(alias) ? versionId : $"{alias}（{versionId}）";
+        Summary = BuildSummary(versionId, versionType, favorite);
+        IconGlyph = BuildGlyph(versionType, favorite);
+    }
+
+    public string VersionId { get; }
+
+    public bool IsFavorite { get; }
+
+    public string DisplayName { get; }
+
+    public string Summary { get; }
+
+    public string IconGlyph { get; }
+
+    public override string ToString() => VersionId;
+
+    private static string BuildSummary(string versionId, string versionType, bool favorite)
+    {
+        var kind = versionType switch
+        {
+            "release" => "正式版",
+            "snapshot" => "快照",
+            "old_beta" => "远古 Beta",
+            "old_alpha" => "远古 Alpha",
+            _ => string.IsNullOrWhiteSpace(versionType) ? "未知类型" : versionType,
+        };
+        return favorite ? $"{kind} · 已收藏" : kind;
+    }
+
+    private static string BuildGlyph(string versionType, bool favorite)
+    {
+        if (favorite)
+        {
+            return "\uE735"; // 星形
+        }
+
+        return versionType switch
+        {
+            "release" => "\uE7FC",  // 方块
+            "snapshot" => "\uE7C3", // 实验锥
+            "old_beta" => "\uE81C", // 历史
+            "old_alpha" => "\uE81C",
+            _ => "\uE7FC",
+        };
+    }
+}
 
 public sealed partial class LaunchPage : Page
 {
@@ -32,7 +89,6 @@ public sealed partial class LaunchPage : Page
     private bool _initialized;
     private bool _loadingVersion;
     private bool _loadingJavaCandidates;
-    private bool _syncingVersionSelection;
     private bool _responsiveLayoutInitialized;
     private bool _wideLayout;
     private int _javaEnvironmentRequest;
@@ -115,7 +171,7 @@ public sealed partial class LaunchPage : Page
             return;
         }
 
-        var selected = VersionsList.SelectedItem?.ToString();
+        var selected = SelectedVersionId;
         var gameDir = GameDirectoryBox.Text.Trim();
         var category = ComboText(VersionCategoryBox, "全部版本");
         var request = ++_versionRefreshRequest;
@@ -145,20 +201,28 @@ public sealed partial class LaunchPage : Page
         var allVersions = candidates.Select(candidate => candidate.VersionId).ToList();
         var versions = candidates
             .Where(candidate => VersionVisibleInCategory(candidate.VersionId, candidate.DetectedType, category))
-            .Select(candidate => candidate.VersionId)
-            .OrderBy(versionId => VersionSettingsService.VersionSettingsEntry(_versionSettings, versionId)["favorite"]?.GetValue<bool>() == true ? 0 : 1)
-            .ThenBy(versionId => versionId, StringComparer.OrdinalIgnoreCase)
+            .Select(candidate =>
+            {
+                var entry = VersionSettingsService.VersionSettingsEntry(_versionSettings, candidate.VersionId);
+                return new VersionListItem(
+                    candidate.VersionId,
+                    candidate.DetectedType,
+                    entry["alias"]?.GetValue<string>(),
+                    entry["favorite"]?.GetValue<bool>() == true);
+            })
+            .OrderBy(item => item.IsFavorite ? 0 : 1)
+            .ThenBy(item => item.VersionId, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        _syncingVersionSelection = true;
         VersionsList.ItemsSource = versions;
-        VersionDisplayBox.ItemsSource = versions;
         NoVersionsPanel.Visibility = versions.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         VersionsList.Visibility = versions.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
-        _syncingVersionSelection = false;
-        if (selected is not null && versions.Contains(selected))
+        // 空列表时不显示摘要，避免“空盒子 + 一行说明”的松散布局
+        VersionSummaryText.Visibility = versions.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        var restored = selected is null ? null : versions.FirstOrDefault(item => item.VersionId == selected);
+        if (restored is not null)
         {
-            VersionsList.SelectedItem = selected;
+            VersionsList.SelectedItem = restored;
         }
         else if (versions.Count > 0)
         {
@@ -189,7 +253,9 @@ public sealed partial class LaunchPage : Page
         {
             "隐藏" => hidden,
             "收藏" => favorite && !hidden,
-            "原版" => !hidden && detectedType == "原版",
+            "原版" => !hidden && detectedType == "正式版",
+            "快照" => !hidden && detectedType == "快照",
+            "远古版本" => !hidden && detectedType is "远古 Beta" or "远古 Alpha",
             "仅 OptiFine" => !hidden && detectedType == "OptiFine",
             "可安装 Mod" => !hidden && detectedType is "Fabric" or "Forge" or "NeoForge" or "OptiFine",
             _ => !hidden,
@@ -198,17 +264,11 @@ public sealed partial class LaunchPage : Page
 
     private void VersionsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (VersionsList.SelectedItem is not string versionId)
+        if (SelectedVersionId is not string versionId)
         {
             return;
         }
 
-        if (!_syncingVersionSelection && !Equals(VersionDisplayBox.SelectedItem, versionId))
-        {
-            _syncingVersionSelection = true;
-            VersionDisplayBox.SelectedItem = versionId;
-            _syncingVersionSelection = false;
-        }
 
         var entry = VersionSettingsService.VersionSettingsEntry(_versionSettings, versionId);
         _loadingVersion = true;
@@ -237,18 +297,6 @@ public sealed partial class LaunchPage : Page
         _loadingVersion = false;
     }
 
-    private void VersionDisplayChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_syncingVersionSelection)
-        {
-            return;
-        }
-
-        if (VersionDisplayBox.SelectedItem is string versionId && !Equals(VersionsList.SelectedItem, versionId))
-        {
-            VersionsList.SelectedItem = versionId;
-        }
-    }
 
     private async void SaveSettings(object sender, RoutedEventArgs e)
     {
@@ -280,7 +328,7 @@ public sealed partial class LaunchPage : Page
         {
             JavaPathBox.Text = path;
             await DetectJavaVersionAsync(path);
-            UpdateVersionSummary(VersionsList.SelectedItem?.ToString());
+            UpdateVersionSummary(SelectedVersionId);
         }
     }
 
@@ -324,7 +372,8 @@ public sealed partial class LaunchPage : Page
             JavaCandidatesBox.ItemsSource = candidates;
             if (candidates.Count > 0)
             {
-                JavaCandidatesBox.SelectedItem = candidates.FirstOrDefault(candidate => SamePathOrText(candidate, javaPath)) ?? candidates[0];
+                var explicitMatch = candidates.FirstOrDefault(candidate => SamePathOrText(candidate, javaPath));
+                JavaCandidatesBox.SelectedItem = explicitMatch ?? PickJavaForSelectedVersion(candidates) ?? candidates[0];
             }
         }
         finally
@@ -333,6 +382,58 @@ public sealed partial class LaunchPage : Page
         }
 
         UpdateJavaVersionStatus(javaPath, await majorTask);
+    }
+
+    /// <summary>
+    /// 按当前选中版本需要的 Java 大版本，从候选里挑最合适的一个。
+    /// 规则：
+    /// 1) 有大版本与需求完全一致的，优先选它（启动成功率最高）；
+    /// 2) 否则选第一个「不低于」需求的（Java 向后兼容，新版能跑旧版本）；
+    /// 3) 都低于需求时返回 null，让调用方回退到原逻辑，同时在状态里提示用户。
+    /// </summary>
+    private string? PickJavaForSelectedVersion(IReadOnlyList<string> candidates)
+    {
+        var versionId = SelectedVersionId;
+        if (string.IsNullOrWhiteSpace(versionId))
+        {
+            return null;
+        }
+
+        var required = _launcher.InferRequiredJavaVersion(GameDirectoryBox.Text.Trim(), versionId);
+        if (required <= 0)
+        {
+            return null;
+        }
+
+        var detected = new List<(string Path, int Major)>();
+        foreach (var candidate in candidates)
+        {
+            var major = JavaRuntimeService.GetJavaMajorVersion(candidate);
+            if (major > 0)
+            {
+                detected.Add((candidate, major));
+            }
+        }
+
+        if (detected.Count == 0)
+        {
+            return null;
+        }
+
+        var exact = detected.FirstOrDefault(item => item.Major == required);
+        if (exact.Path is not null)
+        {
+            return exact.Path;
+        }
+
+        // 不做「高版本也能跑」的推断：Java 的向后兼容在实际游戏里很差，
+        // 例如 Java 21 跑 1.12.2 的 Forge 基本必崩。版本对不上就明确提示，
+        // 让用户装对的运行时，而不是选一个看起来能启动、实际会炸的。
+        var found = string.Join("、", detected.Select(item => $"Java {item.Major}").Distinct());
+        SetJavaDownloadStatus(
+            $"当前版本需要 Java {required}，但只找到 {found}。Java 的向后兼容不可靠，请点「下载 Java」安装匹配的运行时。",
+            0);
+        return null;
     }
 
     private async Task<int> DetectJavaVersionAsync(string path)
@@ -351,7 +452,7 @@ public sealed partial class LaunchPage : Page
 
     private async void SaveVersionSettings(object sender, RoutedEventArgs e)
     {
-        if (VersionsList.SelectedItem is not string versionId)
+        if (SelectedVersionId is not string versionId)
         {
             OutputBox.Text = "请先选择一个版本。";
             return;
@@ -386,7 +487,7 @@ public sealed partial class LaunchPage : Page
     {
         var javaPath = JavaPathBox.Text.Trim().Length == 0 ? "java" : JavaPathBox.Text.Trim();
         var major = await DetectJavaVersionAsync(javaPath);
-        var required = VersionsList.SelectedItem is string versionId
+        var required = SelectedVersionId is string versionId
             ? _launcher.InferRequiredJavaVersion(GameDirectoryBox.Text.Trim(), versionId)
             : 0;
         UpdateJavaVersionStatus(javaPath, major);
@@ -409,7 +510,7 @@ public sealed partial class LaunchPage : Page
 
     private void DownloadRecommendedJava(object sender, RoutedEventArgs e)
     {
-        if (VersionsList.SelectedItem is not string versionId)
+        if (SelectedVersionId is not string versionId)
         {
             OutputBox.Text = "请先选择一个本地版本。";
             return;
@@ -491,6 +592,113 @@ public sealed partial class LaunchPage : Page
         }
     }
 
+    /// <summary>
+    /// 单一主按钮：按当前缺口决定动作，让第一次使用的用户不需要理解页面结构。
+    /// 缺账号 → 去加账号；缺版本 → 去下载；都齐了 → 启动游戏。
+    /// </summary>
+    private void PrimaryLaunchAction(object sender, RoutedEventArgs e)
+    {
+        switch (_nextStep)
+        {
+            case LaunchNextStep.Account:
+                NavigateToTag("accounts");
+                return;
+            case LaunchNextStep.Version:
+                NavigateToTag("download");
+                return;
+            default:
+                LaunchGame(sender, e);
+                return;
+        }
+    }
+
+    private void NavigateToTag(string tag)
+    {
+        if (App.MainWindow is MainWindow window)
+        {
+            window.NavigateToTag(tag);
+        }
+    }
+
+    /// <summary>当前选中的版本 ID；列表项是 VersionListItem，统一从这里取。</summary>
+    private string? SelectedVersionId => (VersionsList?.SelectedItem as VersionListItem)?.VersionId;
+
+    private enum LaunchNextStep
+    {
+        Account,
+        Version,
+        Launch,
+    }
+
+    private LaunchNextStep _nextStep = LaunchNextStep.Version;
+
+    /// <summary>
+    /// 刷新左侧身份区与主按钮。
+    /// 主按钮本身承载“现在能不能玩”：缺账号→去加账号，缺版本→去下载，齐了→启动。
+    /// </summary>
+    private void UpdateLaunchReadiness()
+    {
+        if (PrimaryLaunchText is null)
+        {
+            return;
+        }
+
+        var account = SelectedAccount();
+        var hasAccount = account is not null;
+        var versionId = SelectedVersionId;
+        var hasVersion = !string.IsNullOrWhiteSpace(versionId);
+        var javaPath = JavaPathBox.Text.Trim();
+        var javaMajor = JavaRuntimeService.GetJavaMajorVersion(javaPath.Length == 0 ? "java" : javaPath);
+
+        // 身份区：头像用名字首字，符合 Minecraft 玩家习惯
+        var name = SelectedAccountName();
+        AccountNameText.Text = hasAccount ? name ?? "未命名" : "未登录";
+        AccountTypeText.Text = hasAccount
+            ? AccountTypeLabel(account!) + (javaMajor > 0 ? $" · Java {javaMajor}" : "")
+            : "还没有账号";
+        AvatarText.Text = string.IsNullOrWhiteSpace(name)
+            ? "?"
+            : name.Trim()[..1].ToUpperInvariant();
+
+        if (!hasAccount)
+        {
+            _nextStep = LaunchNextStep.Account;
+            PrimaryLaunchText.Text = "添加账号";
+            PrimaryLaunchIcon.Symbol = Symbol.Contact;
+            PrimaryLaunchSubText.Text = "离线账号只需一个用户名";
+            return;
+        }
+
+        if (!hasVersion)
+        {
+            _nextStep = LaunchNextStep.Version;
+            PrimaryLaunchText.Text = "下载版本";
+            PrimaryLaunchIcon.Symbol = Symbol.Download;
+            PrimaryLaunchSubText.Text = "还没有可启动的版本";
+            return;
+        }
+
+        _nextStep = LaunchNextStep.Launch;
+        PrimaryLaunchText.Text = "启动游戏";
+        PrimaryLaunchIcon.Symbol = Symbol.Play;
+        PrimaryLaunchSubText.Text = versionId!;
+    }
+
+    /// <summary>左侧的“版本选择 / 版本设置”把注意力带到右侧对应分段。</summary>
+    private void ShowVersionSelectorTab(object sender, RoutedEventArgs e)
+    {
+        VersionSectionBar.SelectedItem = VersionSectionBar.Items[0];
+        VersionCenterPanel.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false });
+    }
+
+    private void ShowVersionSettingsTab(object sender, RoutedEventArgs e)
+    {
+        VersionSectionBar.SelectedItem = VersionSectionBar.Items[1];
+        VersionCenterPanel.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false });
+    }
+
+    private void GoAccounts(object sender, RoutedEventArgs e) => NavigateToTag("accounts");
+
     private async void LaunchGame(object sender, RoutedEventArgs e)
     {
         try
@@ -539,7 +747,7 @@ public sealed partial class LaunchPage : Page
 
     private void RunPreLaunchCommand()
     {
-        if (VersionsList.SelectedItem is not string versionId)
+        if (SelectedVersionId is not string versionId)
         {
             return;
         }
@@ -568,7 +776,7 @@ public sealed partial class LaunchPage : Page
 
     private LaunchPreflightResult ValidateSelectedLaunchPreflight()
     {
-        if (VersionsList.SelectedItem is not string versionId)
+        if (SelectedVersionId is not string versionId)
         {
             return new LaunchPreflightResult([new LaunchPreflightIssue("version", "请先选择本地游戏版本。")], 0, 1);
         }
@@ -578,7 +786,7 @@ public sealed partial class LaunchPage : Page
 
     private void RepairSelectedVersion(object sender, RoutedEventArgs e)
     {
-        if (VersionsList.SelectedItem is not string versionId)
+        if (SelectedVersionId is not string versionId)
         {
             UpdateLaunchStatus("请先选择一个本地版本。", 0, "当前步骤：补全/校验");
             OutputBox.Text = "请先选择一个本地版本。";
@@ -655,7 +863,7 @@ public sealed partial class LaunchPage : Page
 
     private void OpenVersionFolder(object sender, RoutedEventArgs e)
     {
-        if (VersionsList.SelectedItem is not string versionId)
+        if (SelectedVersionId is not string versionId)
         {
             OutputBox.Text = "请先选择一个本地版本。";
             return;
@@ -670,7 +878,7 @@ public sealed partial class LaunchPage : Page
     private void RefreshVersionMods()
     {
         _versionModsByLabel.Clear();
-        if (VersionsList.SelectedItem is not string versionId)
+        if (SelectedVersionId is not string versionId)
         {
             VersionModsList.ItemsSource = null;
             SetVersionModControls(false, "请先选择一个本地版本。");
@@ -727,20 +935,11 @@ public sealed partial class LaunchPage : Page
             return;
         }
 
-        var dialog = new ContentDialog
-        {
-            XamlRoot = XamlRoot,
-            Title = "删除 Mod",
-            Content = $"确定要永久删除 {mod.Title} 吗？",
-            PrimaryButtonText = "删除",
-            CloseButtonText = "取消",
-            DefaultButton = ContentDialogButton.Close,
-        };
+        var dialog = AppDialog.Create(this, "删除 Mod", $"确定要永久删除 {mod.Title} 吗？", "删除", "取消");
         if (await dialog.ShowAsync() != ContentDialogResult.Primary)
         {
             return;
         }
-
         try
         {
             ResourceMarketService.DeleteLocalResource(mod.Path);
@@ -862,7 +1061,7 @@ public sealed partial class LaunchPage : Page
 
     private void SetVersionModBusy(bool busy, string status = "")
     {
-        var enabled = !busy && VersionsList.SelectedItem is string versionId && VersionSupportsModManagement(versionId);
+        var enabled = !busy && SelectedVersionId is string versionId && VersionSupportsModManagement(versionId);
         ToggleVersionModButton.IsEnabled = enabled;
         DeleteVersionModButton.IsEnabled = enabled;
         RepairVersionModDependenciesButton.IsEnabled = enabled;
@@ -885,8 +1084,10 @@ public sealed partial class LaunchPage : Page
 
     internal void RunSmokeChecks()
     {
-        ApplyResponsiveLayout(ResponsiveLayoutRoot.ActualWidth);
-        var wide = ResponsiveLayoutRoot.ActualWidth >= 1000;
+        var pageWidth = ViewportWidth;
+        ApplyResponsiveLayout(pageWidth);
+        var wide = pageWidth >= 900;
+
         if (Grid.GetRow(VersionCenterPanel) != (wide ? 0 : 1) || Grid.GetColumn(VersionCenterPanel) != (wide ? 1 : 0))
         {
             throw new InvalidOperationException("启动页响应式布局状态不正确。");
@@ -901,6 +1102,17 @@ public sealed partial class LaunchPage : Page
         if (VersionSectionBar.Items.Count != 2)
         {
             throw new InvalidOperationException("启动页版本中心缺少选择版本或版本设置分段。");
+        }
+
+        UpdateLaunchReadiness();
+        if (AccountNameText is null || AvatarText is null || PrimaryLaunchSubText is null)
+        {
+            throw new InvalidOperationException("启动页缺少身份区控件。");
+        }
+
+        if (PrimaryLaunchText.Text.Length == 0 || PrimaryLaunchSubText.Text.Length == 0)
+        {
+            throw new InvalidOperationException("启动页主按钮没有说明当前状态。");
         }
 
         VersionSectionBar.SelectedItem = VersionSectionBar.Items[1];
@@ -960,7 +1172,7 @@ public sealed partial class LaunchPage : Page
 
     private void OpenModpackTask(string section)
     {
-        if (VersionsList.SelectedItem is not string versionId)
+        if (SelectedVersionId is not string versionId)
         {
             OutputBox.Text = "请先选择一个本地版本。";
             return;
@@ -993,7 +1205,7 @@ public sealed partial class LaunchPage : Page
 
     private async void ExportLaunchScript(object sender, RoutedEventArgs e)
     {
-        if (VersionsList.SelectedItem is not string versionId)
+        if (SelectedVersionId is not string versionId)
         {
             OutputBox.Text = "请先选择一个本地版本。";
             return;
@@ -1021,26 +1233,17 @@ public sealed partial class LaunchPage : Page
 
     private async void DeleteSelectedVersion(object sender, RoutedEventArgs e)
     {
-        if (VersionsList.SelectedItem is not string versionId)
+        if (SelectedVersionId is not string versionId)
         {
             OutputBox.Text = "请先选择一个本地版本。";
             return;
         }
 
-        var dialog = new ContentDialog
-        {
-            Title = "删除版本",
-            Content = $"确定要删除版本 {VersionSettingsService.VersionDisplayName(_versionSettings, versionId)} 吗？",
-            PrimaryButtonText = "删除",
-            CloseButtonText = "取消",
-            DefaultButton = ContentDialogButton.Close,
-            XamlRoot = XamlRoot,
-        };
+        var dialog = AppDialog.Create(this, "删除版本", $"确定要删除版本 {VersionSettingsService.VersionDisplayName(_versionSettings, versionId)} 吗？", "删除", "取消");
         if (await dialog.ShowAsync() != ContentDialogResult.Primary)
         {
             return;
         }
-
         try
         {
             var result = VersionManagementService.DeleteVersion(GameDirectoryBox.Text.Trim(), versionId);
@@ -1058,12 +1261,12 @@ public sealed partial class LaunchPage : Page
     }
 
     private string CurrentRuntimeDirectory()
-        => VersionsList.SelectedItem is string versionId
+        => SelectedVersionId is string versionId
             ? VersionSettingsService.RuntimeDirectoryForVersion(GameDirectoryBox.Text.Trim(), _versionSettings, versionId, _settings.Config.GetBool("GAME", "enable_resource_isolation", true))
             : "";
 
     private string CurrentModsDirectory()
-        => VersionsList.SelectedItem is string versionId
+        => SelectedVersionId is string versionId
             ? VersionSettingsService.ModsDirectoryForVersion(GameDirectoryBox.Text.Trim(), _versionSettings, versionId, _settings.Config.GetBool("GAME", "enable_resource_isolation", true))
             : "";
 
@@ -1092,7 +1295,7 @@ public sealed partial class LaunchPage : Page
 
     private List<string> BuildSelectedLaunchCommand(JsonObject? selectedAccount = null)
     {
-        if (VersionsList.SelectedItem is not string versionId)
+        if (SelectedVersionId is not string versionId)
         {
             throw new InvalidOperationException("请先选择一个版本。");
         }
@@ -1153,7 +1356,7 @@ public sealed partial class LaunchPage : Page
         QuickPlayBox.ItemsSource = labels;
         var index = string.IsNullOrWhiteSpace(selectedWorld) ? 0 : _quickPlayWorldIds.FindIndex(item => string.Equals(item, selectedWorld, StringComparison.OrdinalIgnoreCase));
         QuickPlayBox.SelectedIndex = index >= 0 ? index : 0;
-        UpdateVersionSummary(VersionsList.SelectedItem?.ToString());
+        UpdateVersionSummary(SelectedVersionId);
     }
 
     private string CurrentQuickPlayWorld()
@@ -1166,7 +1369,7 @@ public sealed partial class LaunchPage : Page
     {
         if (!_loadingVersion)
         {
-            UpdateVersionSummary(VersionsList.SelectedItem?.ToString());
+            UpdateVersionSummary(SelectedVersionId);
         }
     }
 
@@ -1241,7 +1444,7 @@ public sealed partial class LaunchPage : Page
 
     private void UpdateVersionSummary(string? versionId)
     {
-        if (VersionSummaryText is null || SelectorVersionSummaryText is null)
+        if (VersionSummaryText is null)
         {
             return;
         }
@@ -1263,15 +1466,21 @@ public sealed partial class LaunchPage : Page
             versionId,
             _settings.Config.GetBool("GAME", "enable_resource_isolation", true));
 
-        var parts = new List<string>
+        // 列表里已经显示版本名与类型，这里补上列表看不到、但决定能不能启动的信息
+        var parts = new List<string>();
+        var actualJava = JavaRuntimeService.GetJavaMajorVersion(JavaPathBox.Text.Trim());
+        if (requiredJava > 0)
         {
-            $"当前版本：{displayName}",
-            $"类型：{type}",
-            requiredJava > 0 ? $"需要 Java {requiredJava}" : "Java 需求未知",
-        };
-        if (!string.IsNullOrWhiteSpace(quickPlay))
-        {
-            parts.Add("快速进入：" + quickPlay);
+            // Java 需求是关键信息，且版本不匹配时必须当场说清楚，不能等点了启动才报错
+            if (actualJava > 0 && actualJava != requiredJava)
+            {
+                var direction = actualJava < requiredJava ? "过低" : "过高";
+                parts.Add($"⚠ 需要 Java {requiredJava}，当前 Java {actualJava} {direction}");
+            }
+            else
+            {
+                parts.Add($"需要 Java {requiredJava}");
+            }
         }
 
         parts.Add("运行目录：" + runtime);
@@ -1281,7 +1490,6 @@ public sealed partial class LaunchPage : Page
     private void SetVersionSummaryText(string text)
     {
         VersionSummaryText.Text = text;
-        SelectorVersionSummaryText.Text = text;
     }
 
     private void UpdateLaunchStatus(string message, int progress, string stage)
@@ -1325,6 +1533,7 @@ public sealed partial class LaunchPage : Page
         LaunchMethodText.Text = account is null
             ? "登录方式：未选择"
             : $"登录方式：{AccountTypeLabel(account)}";
+        UpdateLaunchReadiness();
     }
 
     private static string AccountTypeLabel(JsonObject account)
@@ -1466,6 +1675,11 @@ public sealed partial class LaunchPage : Page
         AddJavaCandidate(candidates, configuredPath);
         AddJavaCandidate(candidates, "java");
         AddJavaCandidate(candidates, JavaRuntimeService.FindJavaInDirectory(Path.Combine(gameDirectory, "java_runtimes")));
+        // 官方启动器自带的运行时（.minecraft\runtime\...），用户装了正版一般都有
+        foreach (var bundled in JavaRuntimeService.FindBundledRuntimeCandidates())
+        {
+            AddJavaCandidate(candidates, bundled);
+        }
 
         foreach (var pathDir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
@@ -1551,14 +1765,32 @@ public sealed partial class LaunchPage : Page
 
     private sealed record LocalVersionCandidate(string VersionId, string DetectedType);
 
+    // 断点必须按页面实际宽度计算：StackPanel 会按内容收缩，
+    // 用它自己的 ActualWidth 会在宽屏上误判成窄屏。
     private void ResponsiveLayoutRoot_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        ApplyResponsiveLayout(e.NewSize.Width);
+        ApplyResponsiveLayout(ViewportWidth);
     }
 
     private void ResponsiveLayoutRoot_LayoutUpdated(object? sender, object e)
     {
-        ApplyResponsiveLayout(ResponsiveLayoutRoot.ActualWidth);
+        // XamlRoot.Size 在首次 Loaded 之前可能为 0，这里持续校正到真实视口宽度。
+        ApplyResponsiveLayout(ViewportWidth);
+    }
+
+    /// <summary>视口宽度：Page/容器可能按内容收缩，XamlRoot.Size 才是真实窗口客户区。</summary>
+    private double ViewportWidth
+    {
+        get
+        {
+            var root = XamlRoot?.Size.Width ?? 0;
+            if (root > 0)
+            {
+                return root;
+            }
+
+            return XamlRoot?.Size.Width ?? ResponsiveLayoutRoot.ActualWidth;
+        }
     }
 
     private void ApplyResponsiveLayout(double width)
@@ -1568,7 +1800,7 @@ public sealed partial class LaunchPage : Page
             return;
         }
 
-        var wide = width >= 1000;
+        var wide = width >= 900;
         if (_responsiveLayoutInitialized && _wideLayout == wide)
         {
             return;

@@ -1,4 +1,4 @@
-using System.Text.Json.Nodes;
+﻿using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using McGo.Core.Storage;
 
@@ -139,11 +139,10 @@ public sealed class VersionSettingsService
                 }
             }
 
-            var assetId = versionJson["assetIndex"]?["id"]?.GetValue<string>()?.Trim();
-            if (LooksLikeMinecraftVersion(assetId))
-            {
-                return assetId!;
-            }
+            // 注意：assetIndex.id 不能当版本号用！
+            // 1.8.9 的资源索引 id 就是 "1.8"，用它会把 1.8.9 误判成 1.8，
+            // 导致 Forge 安装器装到错误的基础版本上（真实事故）。
+            // 1.16.5 的索引 id 甚至是纯数字 "5"，更不可能等于版本号。
         }
 
         var detected = ExtractMinecraftVersionFromText(versionId, strict: true);
@@ -185,14 +184,48 @@ public sealed class VersionSettingsService
             return "Forge";
         }
 
-        return lowered.Contains("optifine") ? "OptiFine" : "原版";
+        if (lowered.Contains("optifine"))
+        {
+            return "OptiFine";
+        }
+
+        // 没有加载器时，按 version.json 的 type 区分正式版 / 快照 / 远古版本，
+        // 全部归成「原版」会让用户看不出这是快照（Java 需求也不一样）。
+        var officialType = versionJson["type"]?.GetValue<string>()?.ToLowerInvariant() ?? "";
+        var byType = officialType switch
+        {
+            "snapshot" => "快照",
+            "old_beta" => "远古 Beta",
+            "old_alpha" => "远古 Alpha",
+            _ => "",
+        };
+        if (byType.Length > 0)
+        {
+            return byType;
+        }
+
+        // 有些版本清单没写 type，靠版本号形态兜底（如 24w14a、b1.7.3、a1.2.6）
+        var trimmedId = versionId.Trim();
+        if (Regex.IsMatch(trimmedId, @"^\d{2}w\d{2}[a-z]$", RegexOptions.IgnoreCase))
+        {
+            return "快照";
+        }
+
+        if (Regex.IsMatch(trimmedId, @"^[ab]\d+\.\d+", RegexOptions.IgnoreCase))
+        {
+            return trimmedId.StartsWith("b", StringComparison.OrdinalIgnoreCase) ? "远古 Beta" : "远古 Alpha";
+        }
+
+        return "正式版";
     }
 
     public bool VersionMatchesCategory(string gameDir, string versionId, string category)
         => category switch
         {
             "全部版本" or "收藏" or "隐藏" => true,
-            "原版" => DetectVersionType(gameDir, versionId) == "原版",
+            "原版" => DetectVersionType(gameDir, versionId) == "正式版",
+            "快照" => DetectVersionType(gameDir, versionId) == "快照",
+            "远古版本" => DetectVersionType(gameDir, versionId) is "远古 Beta" or "远古 Alpha",
             "仅 OptiFine" => DetectVersionType(gameDir, versionId) == "OptiFine",
             "可安装 Mod" => new[] { "Fabric", "Forge", "NeoForge", "OptiFine" }.Contains(DetectVersionType(gameDir, versionId)),
             _ => true,

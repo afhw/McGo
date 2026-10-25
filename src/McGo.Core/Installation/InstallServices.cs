@@ -219,16 +219,66 @@ public sealed class InstallServices
         }
     }
 
+    /// <summary>
+    /// Fabric 的加载器元数据不在 Mojang 的 launchermeta 上：
+    /// 官方源必须走 meta.fabricmc.net，BMCLAPI 源才有 /fabric-meta 镜像。
+    /// 以前统一拼 launchermeta.mojang.com/fabric-meta/...，官方源下必然是 404
+    /// （"The specified blob does not exist."），这就是"刷新安装器版本"失败的原因。
+    /// </summary>
+    public static string FabricMetaRoot(string mirrorSource)
+        => mirrorSource == "bmclapi"
+            ? MirrorRoot(mirrorSource) + "/fabric-meta"
+            : "https://meta.fabricmc.net";
+
+    /// <summary>Fabric 官方支持的游戏版本清单（用于区分"该版本没有 Fabric"和"网络出错"）。</summary>
+    public async Task<IReadOnlyList<string>> GetFabricSupportedGameVersionsAsync(string mirrorSource, CancellationToken cancellationToken = default)
+    {
+        var data = await _httpClient.GetFromJsonAsync<JsonArray>($"{FabricMetaRoot(mirrorSource)}/v2/versions/game", cancellationToken);
+        return data?.OfType<JsonObject>()
+            .Select(item => item["version"]?.GetValue<string>() ?? "")
+            .Where(value => value.Length > 0)
+            .ToList() ?? [];
+    }
+
+    /// <summary>
+    /// 返回该 Minecraft 版本可用的 Fabric Loader 列表。
+    /// 两个源对"该版本没有 Fabric"的表达方式不同：官方 meta.fabricmc.net 返回 400，
+    /// BMCLAPI 返回 404，都不是空数组。这里统一吞成空列表，
+    /// 让调用方能把"没有版本"和"真的请求失败"区分开。
+    /// </summary>
     public async Task<JsonArray> GetFabricLoaderVersionsAsync(string gameVersion, string mirrorSource, CancellationToken cancellationToken = default)
-        => await _httpClient.GetFromJsonAsync<JsonArray>($"{MirrorRoot(mirrorSource)}/fabric-meta/v2/versions/loader/{gameVersion}", cancellationToken) ?? [];
+    {
+        var url = FabricLoaderUrl(gameVersion, mirrorSource);
+        try
+        {
+            return await _httpClient.GetFromJsonAsync<JsonArray>(url, cancellationToken) ?? [];
+        }
+        catch (HttpRequestException exc) when (exc.StatusCode is System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.BadRequest)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>某个 Minecraft 版本的 Fabric Loader 元数据地址。</summary>
+    public static string FabricLoaderUrl(string gameVersion, string mirrorSource)
+        => $"{FabricMetaRoot(mirrorSource)}/v2/versions/loader/{Uri.EscapeDataString(gameVersion)}";
 
     public async Task<JsonNode?> GetForgePromosAsync(string mirrorSource, CancellationToken cancellationToken = default)
     {
+        // 两个源的返回结构不一样：官方 promotions_slim.json 是 {"promos": {...}}，
+        // BMCLAPI 的 /forge/promos 直接是 [{name, build:{mcversion, version}}] 数组。
+        // 以前无条件 data["promos"]，遇到数组节点会抛
+        // "The node must be of type 'JsonObject'"——这正是切到 bmclapi 时列表刷新失败的原因。
         var url = mirrorSource == "bmclapi"
             ? $"{MirrorRoot(mirrorSource)}/forge/promos"
             : "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json";
         var data = await _httpClient.GetFromJsonAsync<JsonNode>(url, cancellationToken);
-        return data?["promos"] ?? data;
+        return data switch
+        {
+            JsonArray array => array,
+            JsonObject obj => obj["promos"] ?? obj,
+            _ => null,
+        };
     }
 
     public async Task<string?> GetForgeVersionForMcAsync(string gameVersion, string mirrorSource, CancellationToken cancellationToken = default)
@@ -258,12 +308,20 @@ public sealed class InstallServices
                 }
             }
 
-            return candidates
-                .OrderByDescending(item => item.Recommended)
-                .ThenByDescending(item => item.Version, Comparer<string>.Create(CompareVersionKey))
-                .Select(item => item.Version)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            if (candidates.Count > 0)
+            {
+                return candidates
+                    .OrderByDescending(item => item.Recommended)
+                    .ThenByDescending(item => item.Version, Comparer<string>.Create(CompareVersionKey))
+                    .Select(item => item.Version)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
+
+            // promos 只收录 recommended/latest 两类构建，老的正式版（1.13.2 等）
+            // 往往只有 latest 一条甚至完全没有。这时退回 Maven 元数据，
+            // 否则明明能装的版本会被当成"没有 Forge"。
+            return await GetForgeMavenVersionsForMcAsync(gameVersion, mirrorSource, cancellationToken);
         }
 
         if (promos is JsonObject obj)
@@ -281,31 +339,128 @@ public sealed class InstallServices
                 versions.Add(latest);
             }
 
-            return versions.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (versions.Count > 0)
+            {
+                return versions.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            }
+
+            return await GetForgeMavenVersionsForMcAsync(gameVersion, mirrorSource, cancellationToken);
         }
 
         return [];
     }
 
-    public async Task<JsonArray> GetNeoForgeListAsync(string gameVersion, string mirrorSource, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// 从 Forge 的 Maven 元数据里筛出指定 Minecraft 版本的构建号（5000+ 条，可覆盖 promos 缺失的老版本）。
+    /// 元数据一次约 200KB，切换游戏版本时会被反复请求，所以按镜像缓存原文。
+    /// </summary>
+    public async Task<IReadOnlyList<string>> GetForgeMavenVersionsForMcAsync(string gameVersion, string mirrorSource, CancellationToken cancellationToken = default)
     {
-        if (mirrorSource != "bmclapi")
+        if (string.IsNullOrWhiteSpace(gameVersion))
         {
-            throw new InvalidOperationException("NeoForge 安装当前仅支持 BMCLAPI 镜像。");
+            return [];
         }
 
-        return await _httpClient.GetFromJsonAsync<JsonArray>($"{MirrorRoot(mirrorSource)}/neoforge/list/{gameVersion}", cancellationToken) ?? [];
+        var xml = await GetForgeMavenMetadataAsync(mirrorSource, cancellationToken);
+        var prefix = gameVersion + "-";
+        var versions = new List<string>();
+        foreach (Match match in Regex.Matches(xml, "<version>([^<]+)</version>"))
+        {
+            var value = match.Groups[1].Value.Trim();
+            if (value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                versions.Add(value[prefix.Length..]);
+            }
+        }
+
+        return versions
+            .Where(value => value.Length > 0 && char.IsDigit(value[0]))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(value => value, Comparer<string>.Create(CompareVersionKey))
+            .ToList();
     }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> ForgeMavenMetadataCache = new(StringComparer.OrdinalIgnoreCase);
+
+    private async Task<string> GetForgeMavenMetadataAsync(string mirrorSource, CancellationToken cancellationToken)
+    {
+        if (ForgeMavenMetadataCache.TryGetValue(mirrorSource, out var cached))
+        {
+            return cached;
+        }
+
+        var xml = await _httpClient.GetStringAsync($"{ForgeMavenRoot(mirrorSource)}/net/minecraftforge/forge/maven-metadata.xml", cancellationToken);
+        ForgeMavenMetadataCache[mirrorSource] = xml;
+        return xml;
+    }
+
+    /// <summary>Forge 的 Maven 根地址：官方是 maven.minecraftforge.net，BMCLAPI 是其 /maven 镜像。</summary>
+    public static string ForgeMavenRoot(string mirrorSource)
+        => mirrorSource == "bmclapi" ? MirrorRoot("bmclapi") + "/maven" : "https://maven.minecraftforge.net";
+
+    /// <summary>
+    /// NeoForge / OptiFine 没有官方 JSON API，目前只有 BMCLAPI 提供列表。
+    /// 官方源下也要去 BMCLAPI 取元数据：这只是一个很小的 JSON，
+    /// 而"官方源直接报错说仅支持 BMCLAPI"会让用户在默认设置下完全装不了。
+    /// </summary>
+    public static string LoaderMetaRoot()
+        => MirrorRoot("bmclapi");
+
+    public async Task<JsonArray> GetNeoForgeListAsync(string gameVersion, string mirrorSource, CancellationToken cancellationToken = default)
+        => await _httpClient.GetFromJsonAsync<JsonArray>($"{LoaderMetaRoot()}/neoforge/list/{Uri.EscapeDataString(gameVersion)}", cancellationToken) ?? [];
 
     public async Task<JsonArray> GetOptifineListAsync(string mirrorSource, CancellationToken cancellationToken = default)
+        => await _httpClient.GetFromJsonAsync<JsonArray>($"{LoaderMetaRoot()}/optifine/versionList", cancellationToken) ?? [];
+
+    /// <summary>
+    /// NeoForge 安装器地址。BMCLAPI 返回的是 /maven/... 形式的相对路径，
+    /// 直接拼在当前镜像根上；官方源要换成 NeoForged 的 Maven 主机，
+    /// 否则会把 /maven/... 拼到 launchermeta.mojang.com 上（必然 404）。
+    /// </summary>
+    public static string NeoForgeInstallerUrl(string installerPath, string mirrorSource)
     {
-        if (mirrorSource != "bmclapi")
+        var path = installerPath.Trim();
+        if (path.Length == 0)
         {
-            throw new InvalidOperationException("OptiFine 安装当前仅支持 BMCLAPI 镜像。");
+            return "";
         }
 
-        return await _httpClient.GetFromJsonAsync<JsonArray>($"{MirrorRoot(mirrorSource)}/optifine/versionList", cancellationToken) ?? [];
+        if (mirrorSource == "bmclapi")
+        {
+            return MirrorRoot("bmclapi") + path;
+        }
+
+        return path.StartsWith("/maven/", StringComparison.OrdinalIgnoreCase)
+            ? NeoForgedMavenRoot + "/" + path["/maven/".Length..]
+            : path;
     }
+
+    public const string NeoForgedMavenRoot = "https://maven.neoforged.net/releases";
+
+    /// <summary>
+    /// 没有 installerPath 时按 Maven 布局推导 NeoForge 安装器地址。
+    /// 1.20.1 时代的 NeoForge 发布在 net/neoforged/forge 下（版本形如
+    /// 1.20.1-47.1.5 / 1.20.1-forge-47.1.105），而 1.20.2 之后是
+    /// net/neoforged/neoforge（版本形如 20.2.93）。硬套后者会让 1.20.1 直接 404。
+    /// </summary>
+    public static string NeoForgeInstallerUrl(string minecraftVersion, string rawVersion, string version, string mirrorSource)
+    {
+        var artifact = (rawVersion.Length > 0 ? rawVersion : version).Trim();
+        if (artifact.Length == 0)
+        {
+            return "";
+        }
+
+        var legacy = artifact.StartsWith(minecraftVersion + "-", StringComparison.OrdinalIgnoreCase);
+        var root = mirrorSource == "bmclapi" ? MirrorRoot("bmclapi") + "/maven" : NeoForgedMavenRoot;
+        return legacy
+            ? $"{root}/net/neoforged/forge/{artifact}/forge-{artifact}-installer.jar"
+            : $"{root}/net/neoforged/neoforge/{artifact}/neoforge-{artifact}-installer.jar";
+    }
+
+    /// <summary>OptiFine 安装包只有 BMCLAPI 有加速镜像，官方源也走这里（optifine.net 有防盗链）。</summary>
+    public static string OptifineInstallerUrl(string minecraftVersion, string type, string patch, string mirrorSource = "official")
+        => $"{LoaderMetaRoot()}/optifine/{minecraftVersion}/{type}/{patch}";
 
     public async Task<JsonArray> GetFabricApiVersionsAsync(string gameVersion, CancellationToken cancellationToken = default)
     {

@@ -1,3 +1,4 @@
+﻿using McGo.Core.Java;
 using System.Text.Json.Nodes;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -20,8 +21,30 @@ public sealed partial class DownloadPage : Page
     private readonly VersionSettingsService _versionSettingsService;
     private readonly DownloadTaskManager _taskManager = DownloadTaskManager.Current;
     private bool _loadingSettings;
+    private bool _autoLoadAttempted;
+    private bool _autoLoadingVersions;
     private bool _initialized;
     private int _localVersionScanRequest;
+    private IReadOnlyList<string>? _renderedTaskRecords;
+    private readonly Dictionary<LoaderPanel, string> _loaderSupportSignatures = [];
+    private readonly Dictionary<(string Version, string Mirror), IReadOnlySet<string>> _loaderProbeCache = [];
+    private IReadOnlyList<string> _localInstallVersions = [];
+    private int _loaderProbeRequest;
+    private bool _loadingLocalTargets;
+
+    /// <summary>两个面板各有一份加载器下拉框，可用性要分别计算。</summary>
+    private enum LoaderPanel
+    {
+        Vanilla,
+        Addon,
+    }
+
+    /// <summary>
+    /// 冒烟测试模式下跳过联网探测：截图必须是确定性的，
+    /// 而且规则层已经覆盖了「确定不支持」的硬事实。
+    /// </summary>
+    private static bool IsSmokeMode
+        => Environment.GetCommandLineArgs().Contains("--smoke-pages", StringComparer.OrdinalIgnoreCase);
 
     private static readonly IReadOnlyDictionary<string, DownloadPreset> DownloadPresets = new Dictionary<string, DownloadPreset>
     {
@@ -35,10 +58,12 @@ public sealed partial class DownloadPage : Page
         InitializeComponent();
         _versionSettingsService = new VersionSettingsService(_launcher);
         _taskManager.StateChanged += DownloadTaskManagerStateChanged;
+        DownloadLogExpander.RegisterPropertyChangedCallback(Expander.IsExpandedProperty, DownloadLogExpanderChanged);
         _initialized = true;
         DownloadSectionBar.SelectedItem = DownloadSectionBar.Items[0];
         LoadSettings();
         Loaded += DownloadPage_Loaded;
+        SizeChanged += (_, args) => DownloadRootSizeChanged(this, args);
     }
 
     private void DownloadTaskManagerStateChanged(object? sender, EventArgs e)
@@ -48,6 +73,50 @@ public sealed partial class DownloadPage : Page
     {
         Loaded -= DownloadPage_Loaded;
         await RefreshLocalInstallTargetsAsync();
+        await AutoLoadRemoteVersionsAsync();
+    }
+
+    /// <summary>
+    /// 进入下载页就静默拉取版本列表，用户不必先点一次“获取列表”。
+    /// 失败不弹窗打扰：只写日志并在按钮副标题提示，可手动刷新重试。
+    /// </summary>
+    private async Task AutoLoadRemoteVersionsAsync()
+    {
+        if (_autoLoadAttempted)
+        {
+            return;
+        }
+
+        _autoLoadAttempted = true;
+        if (RemoteVersionsBox.Items.Count > 0)
+        {
+            return;
+        }
+
+        _autoLoadingVersions = true;
+        UpdateDownloadButtonState();
+        try
+        {
+            var versions = await _installServices.GetRemoteVersionsAsync(ComboText(VersionTypeBox, "release"), ComboText(MirrorBox, "official"));
+            if (versions.Count > 0)
+            {
+                var previous = RemoteVersionsBox.SelectedItem?.ToString();
+                RemoteVersionsBox.ItemsSource = versions;
+                var index = previous is null ? 0 : versions.ToList().IndexOf(previous);
+                RemoteVersionsBox.SelectedIndex = index >= 0 ? index : 0;
+            }
+
+            AppendDownload($"已自动获取 {versions.Count} 个远程版本。");
+        }
+        catch (Exception exc)
+        {
+            AppendDownload("自动获取版本列表失败：" + exc.Message + "（可点“刷新”重试）");
+        }
+        finally
+        {
+            _autoLoadingVersions = false;
+            UpdateDownloadButtonState();
+        }
     }
 
     private void DownloadSectionChanged(SelectorBar sender, SelectorBarSelectionChangedEventArgs e)
@@ -87,6 +156,8 @@ public sealed partial class DownloadPage : Page
         UpdateDownloadMetrics("等待下载");
         UpdateDownloadQueueSummary();
         UpdateInstallStatus("等待安装任务", "尚未开始安装");
+        UpdateDownloadButtonState();
+        UpdateSettingsSummary();
         _loadingSettings = false;
     }
 
@@ -127,23 +198,90 @@ public sealed partial class DownloadPage : Page
             throw new InvalidOperationException("下载调优控件可见性与高级模式不一致。");
         }
 
-        SetComboTag(InstallTypeBox, "");
+        SelectNoLoader(InstallTypeBox);
         UpdateInstallAddonControls();
-        if (InstallVersionPanel.Visibility != Visibility.Collapsed || Grid.GetColumn(InstallExtrasPanel) != 0 || Grid.GetColumnSpan(InstallExtrasPanel) != 2)
+        if (InstallVersionPanel.Visibility != Visibility.Collapsed || InstallFabricApiCheckBox.IsEnabled)
         {
-            throw new InvalidOperationException("未选择加载器时安装选项布局不正确。");
+            throw new InvalidOperationException("未选择加载器时安装选项状态不正确。");
         }
 
         SetComboTag(InstallTypeBox, "fabric");
         UpdateInstallAddonControls();
-        if (InstallVersionPanel.Visibility != Visibility.Visible || Grid.GetColumn(InstallExtrasPanel) != 1 || InstallFabricApiCheckBox.IsEnabled == false)
+        if (InstallVersionPanel.Visibility != Visibility.Visible || !InstallFabricApiCheckBox.IsEnabled)
         {
-            throw new InvalidOperationException("选择 Fabric 后安装选项布局不正确。");
+            throw new InvalidOperationException("选择 Fabric 后安装选项状态不正确。");
         }
 
-        SetComboTag(InstallTypeBox, "");
+        // 主按钮必须写出当前将要安装的版本与加载器
+        RemoteVersionsBox.ItemsSource = new[] { "1.20.1" };
+        RemoteVersionsBox.SelectedIndex = 0;
+        UpdateDownloadButtonState();
+        if (!DownloadButtonText.Text.Contains("1.20.1", StringComparison.Ordinal) ||
+            !DownloadButtonText.Text.Contains("Fabric", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("下载主按钮没有说明将要安装的版本与加载器。");
+        }
+
+        CheckLoaderAvailability();
+
+        RemoteVersionsBox.ItemsSource = null;
+        SelectNoLoader(InstallTypeBox);
         UpdateInstallAddonControls();
     }
+
+    /// <summary>
+    /// 「加载器 × 版本」禁用规则的确定性检查（不联网，只用规则层）。
+    /// 1.21.1 四个加载器都真实存在 → 一个都不许灰；
+    /// 1.12.2 只有 Forge/OptiFine（Fabric 1.14 起、NeoForge 1.20.1 起）→ 这两个必须灰；
+    /// 「只装原版」永远不许灰。
+    /// </summary>
+    private void CheckLoaderAvailability()
+    {
+        ApplyLoaderAvailability(LoaderPanel.Vanilla, "1.21.1", LoaderSupportRules.UnavailableLoaders("1.21.1"));
+        if (IsLoaderDisabled(InstallTypeBox, item => item.Tag?.ToString() ?? "", "fabric") ||
+            IsLoaderDisabled(InstallTypeBox, item => item.Tag?.ToString() ?? "", "forge") ||
+            IsLoaderDisabled(InstallTypeBox, item => item.Tag?.ToString() ?? "", "neoforge") ||
+            IsLoaderDisabled(InstallTypeBox, item => item.Tag?.ToString() ?? "", "optifine"))
+        {
+            throw new InvalidOperationException("1.21.1 上不应禁用任何加载器。");
+        }
+
+        // 「只装原版」是合法默认值，任何情况下都必须可用。
+        var vanillaItem = InstallTypeBox.Items.OfType<ComboBoxItem>().First();
+        if (vanillaItem.IsEnabled == false || (vanillaItem.Tag?.ToString() ?? "") != "")
+        {
+            throw new InvalidOperationException("「只装原版」选项不能失能或改标签。");
+        }
+
+        ApplyLoaderAvailability(LoaderPanel.Addon, "1.12.2", LoaderSupportRules.UnavailableLoaders("1.12.2"));
+        if (!IsLoaderDisabled(AddonInstallTypeBox, item => item.Content?.ToString() ?? "", "fabric") ||
+            !IsLoaderDisabled(AddonInstallTypeBox, item => item.Content?.ToString() ?? "", "neoforge") ||
+            IsLoaderDisabled(AddonInstallTypeBox, item => item.Content?.ToString() ?? "", "forge") ||
+            IsLoaderDisabled(AddonInstallTypeBox, item => item.Content?.ToString() ?? "", "optifine"))
+        {
+            throw new InvalidOperationException("1.12.2 上加载器禁用状态不正确。");
+        }
+
+        // Fabric 不可用时 Fabric API 必须一起禁用（它依赖 Fabric）。
+        if (!IsLoaderDisabled(AddonInstallTypeBox, item => item.Content?.ToString() ?? "", "fabric_api"))
+        {
+            throw new InvalidOperationException("Fabric 不可用时 Fabric API 仍可选。");
+        }
+
+        // 选中项被禁用时必须退回一个仍然可用项，不能留下灰色选中态。
+        if (AddonInstallTypeBox.SelectedItem is ComboBoxItem selectedAddon && selectedAddon.IsEnabled == false)
+        {
+            throw new InvalidOperationException("加载器被禁用后仍停留在灰色选中项。");
+        }
+
+        // 回到正常状态，避免把测试用的禁用状态留给后续截图。
+        ApplyLoaderAvailability(LoaderPanel.Addon, "1.21.1", LoaderSupportRules.UnavailableLoaders("1.21.1"));
+    }
+
+    private static bool IsLoaderDisabled(ComboBox combo, Func<ComboBoxItem, string> typeOf, string type)
+        => combo.Items.OfType<ComboBoxItem>()
+            .FirstOrDefault(item => string.Equals(typeOf(item), type, StringComparison.OrdinalIgnoreCase))
+            ?.IsEnabled == false;
 
     internal void SelectDownloadSectionForSmoke(string section)
     {
@@ -162,7 +300,7 @@ public sealed partial class DownloadPage : Page
 
     internal void BringDownloadSectionIntoViewForSmoke(string section)
     {
-        var target = section switch
+        FrameworkElement target = section switch
         {
             "addons" => DownloadAddonPanel,
             "tasks" => DownloadTasksPanel,
@@ -175,6 +313,25 @@ public sealed partial class DownloadPage : Page
         });
     }
 
+    /// <summary>
+    /// 窄窗口把右栏（进度/日志）下沉到主内容下方并占满整行；
+    /// 否则两列会在 <900 DIP 时重叠。
+    /// </summary>
+    private void DownloadRootSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        var width = XamlRoot?.Size.Width ?? e.NewSize.Width;
+        if (width <= 0)
+        {
+            return;
+        }
+
+        var wide = width >= 900;
+        DownloadSideColumn.Width = wide ? new GridLength(320) : new GridLength(0);
+        Grid.SetRow(DownloadSidePanel, wide ? 2 : 3);
+        Grid.SetColumn(DownloadSidePanel, wide ? 1 : 0);
+        Grid.SetColumnSpan(DownloadSidePanel, wide ? 1 : 2);
+    }
+
     private static void Navigate(string tag)
     {
         if (App.MainWindow is MainWindow window)
@@ -183,12 +340,36 @@ public sealed partial class DownloadPage : Page
         }
     }
 
+    /// <summary>
+    /// 窄窗口下右栏会下沉到任务卡下方，展开后的日志区可能整个落在视口之外，
+    /// 用户看到的就是"点了没反应"。展开后把自己滚进视野，保证日志真的出现在眼前。
+    /// 用属性变化回调而不是 XAML 的 Expanded 事件：后者会让 XamlCompiler 静默崩溃。
+    /// </summary>
+    private static void DownloadLogExpanderChanged(DependencyObject sender, DependencyProperty args)
+    {
+        if (sender is not Expander expander || !expander.IsExpanded)
+        {
+            return;
+        }
+
+        expander.DispatcherQueue.TryEnqueue(() => expander.StartBringIntoView(new BringIntoViewOptions
+        {
+            AnimationDesired = true,
+            VerticalAlignmentRatio = 0.25,
+        }));
+    }
+
     private void StayOnDownloads(object sender, RoutedEventArgs e) => AppendDownload("已停留在下载任务页。");
     private void OpenResources(object sender, RoutedEventArgs e) => Navigate("resources");
     private void OpenModpacks(object sender, RoutedEventArgs e) => Navigate("modpacks");
 
     private async void RefreshRemoteVersions(object sender, RoutedEventArgs e)
     {
+        if (_autoLoadingVersions)
+        {
+            return;
+        }
+
         try
         {
             DownloadButton.IsEnabled = false;
@@ -212,6 +393,239 @@ public sealed partial class DownloadPage : Page
         }
     }
 
+    private void RemoteVersionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        UpdateDownloadButtonState();
+        // 选定版本变化后必须重新算「加载器 × 版本」可用性：
+        // 老版本/快照上 Fabric、NeoForge 往往根本不存在，提前置灰比让用户选完再报错好。
+        RefreshLoaderAvailability(LoaderPanel.Vanilla);
+    }
+
+    /// <summary>本地目标版本变化时，重新计算「安装扩展」面板里的加载器可用性。</summary>
+    private void InstallTargetVersionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_initialized || _loadingLocalTargets)
+        {
+            return;
+        }
+
+        RefreshLoaderAvailability(LoaderPanel.Addon);
+    }
+
+    /// <summary>当前面板对应的原版 Minecraft 版本：远程版本直接用，本地版本要反推原版。</summary>
+    private string LoaderVersionFor(LoaderPanel panel)
+    {
+        if (panel == LoaderPanel.Vanilla)
+        {
+            return RemoteVersionsBox.SelectedItem?.ToString() ?? "";
+        }
+
+        var selected = InstallTargetVersionBox.SelectedItem?.ToString() ?? "";
+        if (selected.Length == 0 || !_localInstallVersions.Contains(selected, StringComparer.OrdinalIgnoreCase))
+        {
+            return "";
+        }
+
+        return _versionSettingsService.ResolveBaseMinecraftVersion(GameDirectoryBox.Text.Trim(), selected);
+    }
+
+    /// <summary>
+    /// 刷新对应面板的加载器可用性。
+    /// 先用纯规则立刻出结果（不联网、不闪烁），再用真实元数据补一次确认。
+    /// 任何网络失败都保持可用：错误置灰一个本来能装的加载器，比让用户点一下再看到失败更糟。
+    /// </summary>
+    private async void RefreshLoaderAvailability(LoaderPanel panel)
+    {
+        var versionId = LoaderVersionFor(panel);
+        ApplyLoaderAvailability(panel, versionId, LoaderSupportRules.UnavailableLoaders(versionId));
+
+        // 冒烟测试跑在无网络/真实网络的混合环境里，联网探测会让截图不稳定；
+        // 规则层已经覆盖了「确定不支持」的硬事实，这里直接跳过在线确认。
+        if (versionId.Length == 0 || IsSmokeMode)
+        {
+            return;
+        }
+
+        // 结果按「版本 + 镜像」缓存：用户在版本列表里上下滚动时，
+        // 每个版本都要打 3~4 个网络请求会明显卡顿，而同一个版本的答案是稳定的。
+        var cacheKey = (versionId, ComboText(MirrorBox, "official"));
+        if (_loaderProbeCache.TryGetValue(cacheKey, out var cached))
+        {
+            ApplyLoaderAvailability(panel, versionId, cached);
+            return;
+        }
+
+        var request = ++_loaderProbeRequest;
+        var mirror = cacheKey.Item2;
+        IReadOnlySet<string> confirmed;
+        try
+        {
+            confirmed = await Task.Run(() => ProbeUnavailableLoadersAsync(versionId, mirror));
+        }
+        catch
+        {
+            return;
+        }
+
+        if (request != _loaderProbeRequest)
+        {
+            return;
+        }
+
+        _loaderProbeCache[cacheKey] = confirmed;
+        ApplyLoaderAvailability(panel, versionId, confirmed);
+    }
+
+    /// <summary>
+    /// 用真实元数据确认哪些加载器在该版本上确实不存在。
+    /// 只有"查询成功但结果为空"才算不存在；查询抛异常一律视为不确定（保持可用）。
+    /// </summary>
+    private async Task<IReadOnlySet<string>> ProbeUnavailableLoadersAsync(string versionId, string mirror)
+    {
+        var unavailable = new HashSet<string>(LoaderSupportRules.UnavailableLoaders(versionId), StringComparer.OrdinalIgnoreCase);
+        var checks = new List<Task>();
+
+        if (!unavailable.Contains("fabric"))
+        {
+            checks.Add(CountAsync("fabric", async () => (await _installServices.GetFabricLoaderVersionsAsync(versionId, mirror)).Count));
+        }
+
+        if (!unavailable.Contains("neoforge"))
+        {
+            checks.Add(CountAsync("neoforge", async () => (await _installServices.GetNeoForgeListAsync(versionId, mirror)).Count));
+        }
+
+        if (!unavailable.Contains("forge"))
+        {
+            checks.Add(CountAsync("forge", async () => (await _installServices.GetForgeMavenVersionsForMcAsync(versionId, mirror)).Count));
+        }
+
+        if (!unavailable.Contains("optifine"))
+        {
+            checks.Add(CountAsync("optifine", async () =>
+            {
+                var list = await _installServices.GetOptifineListAsync(mirror);
+                return list.OfType<JsonObject>().Count(item =>
+                    string.Equals(item["mcversion"]?.GetValue<string>() ?? "", versionId, StringComparison.OrdinalIgnoreCase));
+            }));
+        }
+
+        await Task.WhenAll(checks).ConfigureAwait(false);
+        return unavailable;
+
+        async Task CountAsync(string type, Func<Task<int>> load)
+        {
+            try
+            {
+                if (await load().ConfigureAwait(false) == 0)
+                {
+                    lock (unavailable)
+                    {
+                        unavailable.Add(type);
+                    }
+                }
+            }
+            catch
+            {
+                // 网络/解析失败：不确定，保持可用。
+            }
+        }
+    }
+
+    private void ApplyLoaderAvailability(LoaderPanel panel, string versionId, IReadOnlySet<string> unavailable)
+    {
+        var signature = versionId + "|" + string.Join(',', unavailable.OrderBy(value => value, StringComparer.Ordinal));
+        if (string.Equals(_loaderSupportSignatures.GetValueOrDefault(panel), signature, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _loaderSupportSignatures[panel] = signature;
+        if (panel == LoaderPanel.Vanilla)
+        {
+            // InstallTypeBox 用 Tag 标识加载器，「只装原版」的 Tag 为空串，永远不会被禁用。
+            ApplyToCombo(InstallTypeBox, item => item.Tag?.ToString() ?? "", unavailable);
+        }
+        else
+        {
+            ApplyToCombo(AddonInstallTypeBox, item => item.Content?.ToString() ?? "", unavailable);
+        }
+    }
+
+    /// <summary>
+    /// 只禁用「确定不存在」的加载器项，并保留「只装原版」（Tag=""）这类无加载器选项始终可用。
+    /// 已选中的项被禁用时退回第一个仍可用的项：InstallTypeBox 的第一项是「只装原版」，
+    /// 而 AddonInstallTypeBox 的第一项就是 fabric，所以不能无脑 SelectedIndex=0
+    /// （否则 1.12.2 这种没有 Fabric 的版本会"退回"到一个灰掉的 Fabric）。
+    /// Fabric API 依赖 Fabric，所以 Fabric 不可用时它同样不可用。
+    /// </summary>
+    private static void ApplyToCombo(ComboBox combo, Func<ComboBoxItem, string> typeOf, IReadOnlySet<string> unavailable)
+    {
+        foreach (var item in combo.Items.OfType<ComboBoxItem>())
+        {
+            var type = typeOf(item);
+            if (type.Length == 0)
+            {
+                continue;
+            }
+
+            var blocked = IsBlocked(type, unavailable);
+            if (item.IsEnabled == !blocked)
+            {
+                continue;
+            }
+
+            item.IsEnabled = !blocked;
+        }
+
+        if (combo.SelectedItem is ComboBoxItem selected && IsBlocked(typeOf(selected), unavailable))
+        {
+            var fallback = combo.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.IsEnabled);
+            if (fallback is not null)
+            {
+                combo.SelectedItem = fallback;
+            }
+        }
+    }
+
+    private static bool IsBlocked(string loaderType, IReadOnlySet<string> unavailable)
+        => loaderType.Length > 0 &&
+           (loaderType == "fabric_api" ? unavailable.Contains("fabric") : unavailable.Contains(loaderType));
+
+    /// <summary>
+    /// 刷新安装器版本后顺手更新下拉框的置灰状态：
+    /// 查到版本 → 恢复可用，查不到 → 置灰。只影响刚刚查过的那个加载器。
+    /// </summary>
+    private void MarkLoaderAvailability(LoaderPanel panel, string loaderType, bool available)
+    {
+        if (loaderType.Length == 0)
+        {
+            return;
+        }
+
+        var combo = panel == LoaderPanel.Vanilla ? InstallTypeBox : AddonInstallTypeBox;
+        var typeOf = panel == LoaderPanel.Vanilla
+            ? (Func<ComboBoxItem, string>)(item => item.Tag?.ToString() ?? "")
+            : item => item.Content?.ToString() ?? "";
+        var item = combo.Items.OfType<ComboBoxItem>()
+            .FirstOrDefault(candidate => string.Equals(typeOf(candidate), loaderType, StringComparison.OrdinalIgnoreCase));
+        if (item is null || item.IsEnabled == available)
+        {
+            return;
+        }
+
+        item.IsEnabled = available;
+        if (!available)
+        {
+            // 手动结论优先于缓存签名，下次版本变化时重新判断。
+            _loaderSupportSignatures.Remove(panel);
+            if (ReferenceEquals(combo.SelectedItem, item))
+            {
+                combo.SelectedIndex = 0;
+            }
+        }
+    }
+
     private async void DownloadSelectedVersion(object sender, RoutedEventArgs e)
     {
         var versionId = RemoteVersionsBox.SelectedItem?.ToString() ?? "";
@@ -223,7 +637,7 @@ public sealed partial class DownloadPage : Page
 
         var mirror = ComboText(MirrorBox, "official");
         var gameDir = GameDirectoryBox.Text.Trim();
-        var javaPath = JavaPathBox.Text.Trim();
+        var javaPath = PickInstallerJava(JavaPathBox.Text.Trim());
         var installTypes = SelectedInstallTypes();
         if (installTypes.Any(type => type is "forge" or "neoforge") && string.IsNullOrWhiteSpace(javaPath))
         {
@@ -426,16 +840,25 @@ public sealed partial class DownloadPage : Page
             var versions = await LoadInstallVersionsAsync(installType, versionId, mirror);
             InstallVersionBox.ItemsSource = new[] { "自动选择最新" }.Concat(versions).ToList();
             InstallVersionBox.SelectedIndex = 0;
-            AppendDownload(versions.Count == 0
-                ? $"未找到 {installType} 的安装器版本，将使用自动选择。"
-                : $"已获取 {installType} 安装器版本 {versions.Count} 个。");
+            if (versions.Count == 0)
+            {
+                AppendDownload($"未找到 {InstallTypeLabel(installType)} 适用于 {versionId} 的安装器版本，将使用自动选择。");
+            }
+            else
+            {
+                AppendDownload($"已获取 {InstallTypeLabel(installType)} 安装器版本 {versions.Count} 个。");
+            }
+
+            // 刷新结果本身就是最可靠的可用性证据：查不到就是该版本真的没有这个加载器。
+            MarkLoaderAvailability(LoaderPanel.Vanilla, installType, versions.Count > 0);
         }
         catch (Exception exc)
         {
             ResetInstallVersionChoices("自动选择最新");
-            AppendDownload("刷新安装器版本失败：" + exc.Message);
+            AppendDownload($"刷新{InstallTypeLabel(installType)}安装器版本失败：{AppSettings.ConciseDownloadError(exc.Message)}");
         }
     }
+
 
     private async void RefreshLocalInstallVersions(object sender, RoutedEventArgs e)
     {
@@ -448,6 +871,7 @@ public sealed partial class DownloadPage : Page
         var request = ++_localVersionScanRequest;
         var gameDirectory = GameDirectoryBox.Text.Trim();
         IReadOnlyList<string> versions;
+        _loadingLocalTargets = true;
         try
         {
             versions = await Task.Run(() => _launcher.GetLocalVersions(gameDirectory).ToList());
@@ -458,10 +882,15 @@ public sealed partial class DownloadPage : Page
             {
                 InstallTargetVersionBox.ItemsSource = new[] { "本地版本扫描失败" };
                 InstallTargetVersionBox.SelectedIndex = 0;
+                _localInstallVersions = [];
                 UpdateInstallStatus("本地版本扫描失败", exc.Message);
             }
 
             return;
+        }
+        finally
+        {
+            _loadingLocalTargets = false;
         }
 
         if (request != _localVersionScanRequest)
@@ -469,9 +898,13 @@ public sealed partial class DownloadPage : Page
             return;
         }
 
+        // 先记下版本清单再设 ItemsSource/SelectedIndex：
+        // 赋值会同步触发 SelectionChanged，而它要靠 _localInstallVersions 才能反推出原版版本号。
+        _localInstallVersions = versions;
         InstallTargetVersionBox.ItemsSource = versions.Count == 0 ? new[] { "请先下载本地版本" } : versions;
         InstallTargetVersionBox.SelectedIndex = 0;
         UpdateInstallStatus(versions.Count == 0 ? "没有可安装扩展的本地版本" : "等待安装任务", versions.Count == 0 ? "请先下载原版或选择已有版本目录" : $"发现 {versions.Count} 个本地版本");
+        RefreshLoaderAvailability(LoaderPanel.Addon);
     }
 
     private void AddonInstallTypeChanged(object sender, SelectionChangedEventArgs e)
@@ -515,15 +948,16 @@ public sealed partial class DownloadPage : Page
             AddonInstallVersionBox.SelectedIndex = 0;
             UpdateInstallStatus("安装器版本已刷新", versions.Count == 0 ? "未找到可选版本，将使用自动选择" : $"已获取 {versions.Count} 个版本");
             AppendDownload(versions.Count == 0
-                ? $"未找到 {installType} 的安装器版本，将使用自动选择。"
-                : $"已获取 {installType} 安装器版本 {versions.Count} 个。");
+                ? $"未找到 {InstallTypeLabel(installType)} 适用于 {minecraftVersion} 的安装器版本，将使用自动选择。"
+                : $"已获取 {InstallTypeLabel(installType)} 安装器版本 {versions.Count} 个。");
+            MarkLoaderAvailability(LoaderPanel.Addon, installType, versions.Count > 0);
         }
         catch (Exception exc)
         {
             ResetAddonInstallVersionChoices("自动选择最新");
             var message = AppSettings.ConciseDownloadError(exc.Message);
             UpdateInstallStatus("刷新安装器版本失败", message);
-            AppendDownload("刷新安装器版本失败：" + message);
+            AppendDownload($"刷新{InstallTypeLabel(installType)}安装器版本失败：{message}");
         }
     }
 
@@ -532,7 +966,7 @@ public sealed partial class DownloadPage : Page
         var installType = ComboText(AddonInstallTypeBox, "fabric");
         var targetVersion = InstallTargetVersionBox.SelectedItem?.ToString() ?? "";
         var gameDir = GameDirectoryBox.Text.Trim();
-        var javaPath = JavaPathBox.Text.Trim();
+        var javaPath = PickInstallerJava(JavaPathBox.Text.Trim());
         var minecraftVersion = NormalizeInstallTargetVersion(gameDir, installType, targetVersion);
         if (string.IsNullOrWhiteSpace(minecraftVersion))
         {
@@ -646,14 +1080,40 @@ public sealed partial class DownloadPage : Page
         var isFabric = installType == "fabric";
         var hasInstaller = installType.Length > 0;
         InstallVersionPanel.Visibility = hasInstaller ? Visibility.Visible : Visibility.Collapsed;
-        Grid.SetColumn(InstallExtrasPanel, hasInstaller ? 1 : 0);
-        Grid.SetColumnSpan(InstallExtrasPanel, hasInstaller ? 1 : 2);
         InstallFabricApiCheckBox.IsEnabled = isFabric;
         if (!isFabric)
         {
             InstallFabricApiCheckBox.IsChecked = false;
         }
+
+        UpdateDownloadButtonState();
     }
+
+    /// <summary>
+    /// 主按钮直接说明将要发生什么：没列表时提示获取，选好版本后把版本名印在按钮上。
+    /// </summary>
+    private void UpdateDownloadButtonState()
+    {
+        if (DownloadButtonText is null)
+        {
+            return;
+        }
+
+        var versionId = RemoteVersionsBox?.SelectedItem?.ToString() ?? "";
+        var installType = ComboTag(InstallTypeBox, "");
+        var loader = installType.Length == 0 ? "" : " + " + InstallTypeLabel(installType);
+        if (string.IsNullOrWhiteSpace(versionId))
+        {
+            DownloadButtonText.Text = "下载所选版本";
+            DownloadButtonSubText.Text = RemoteVersionsBox?.Items.Count > 0 ? "请选择一个版本" : "版本列表加载中，可点刷新重试";
+            return;
+        }
+
+        DownloadButtonText.Text = $"下载 {versionId}{loader}";
+        DownloadButtonSubText.Text = $"{ComboText(MirrorBox, "official")} · {GameDirectoryBox?.Text.Trim()}".Trim();
+    }
+
+
 
     private void ResetInstallVersionChoices(string label)
     {
@@ -691,10 +1151,24 @@ public sealed partial class DownloadPage : Page
 
     private void UpdateAddonInstallButtonText()
     {
-        if (InstallAddonButton is not null)
+        if (AddonButtonText is not null)
         {
-            InstallAddonButton.Content = $"开始安装 {InstallTypeLabel(ComboText(AddonInstallTypeBox, "fabric"))}";
+            AddonButtonText.Text = $"安装 {InstallTypeLabel(ComboText(AddonInstallTypeBox, "fabric"))}";
         }
+    }
+
+    /// <summary>折叠面板标题只写最关键的三个设置，避免用户为了确认而展开。</summary>
+    private void UpdateSettingsSummary()
+    {
+        if (DownloadSettingsSummary is null)
+        {
+            return;
+        }
+
+        var mirror = ComboText(MirrorBox, "official") == "bmclapi" ? "BMCLAPI" : "官方源";
+        var preset = ComboText(DownloadPresetBox, "均衡");
+        var dir = GameDirectoryBox?.Text.Trim() ?? "";
+        DownloadSettingsSummary.Text = $"{mirror} · {preset} · {dir}";
     }
 
     private void AppendDownload(string message)
@@ -780,12 +1254,32 @@ public sealed partial class DownloadPage : Page
             DownloadProgressBar.Value = active.Progress;
             UpdateDownloadMetrics(active.Detail);
         }
-        else if (_taskManager.QueuedCount == 0)
+        else
         {
-            DownloadProgressBar.Value = _taskManager.Records.LastOrDefault()?.Progress ?? 0;
+            // 没有正在运行的任务时必须清掉上一轮的实时指标，
+            // 否则「正在取消…」这类旧文案会一直挂着，和「当前任务：无」自相矛盾。
+            var lastRecord = _taskManager.Records.LastOrDefault();
+            DownloadProgressBar.Value = _taskManager.QueuedCount == 0 ? lastRecord?.Progress ?? 0 : 0;
+            UpdateDownloadMetrics(lastRecord is null ? "等待下载" : "已结束：" + StatusLabel(lastRecord.Status));
+        }
+        RefreshTaskRecords();
+    }
+
+    /// <summary>
+    /// 任务列表只在内容真正变化时重设 ItemsSource。
+    /// 进度回调一秒能来几十次，而每次重设 ItemsSource 都会把 ListView 的容器全部丢弃重建，
+    /// 表现为整块列表肉眼可见的闪烁跳动；内容一模一样时刷新纯属浪费。
+    /// </summary>
+    private void RefreshTaskRecords()
+    {
+        var records = RenderTaskRecords();
+        if (_renderedTaskRecords is not null && _renderedTaskRecords.SequenceEqual(records, StringComparer.Ordinal))
+        {
+            return;
         }
 
-        TaskRecordsList.ItemsSource = RenderTaskRecords();
+        _renderedTaskRecords = records;
+        TaskRecordsList.ItemsSource = records;
     }
 
     private void UpdateDownloadMetrics(string message)
@@ -845,33 +1339,12 @@ public sealed partial class DownloadPage : Page
                      .ThenBy(record => record.Status is "running" or "queued" ? record.Id : -record.Id)
                      .Take(50))
         {
+            // 列表只放稳定的信息（状态 + 标题）。进度、速度、文件计数每秒都在变，
+            // 放进来会让 ItemsSource 每秒重设一次，ListView 不停重建容器导致整块不显示。
+            // 实时进度统一在右侧「进度」卡片展示。
             var builder = new System.Text.StringBuilder();
             builder.Append('[').Append(StatusLabel(record.Status)).Append("] ")
-                .Append(record.Title).AppendLine();
-            builder.Append(record.Progress).Append("%");
-            if (record.TotalFiles > 0)
-            {
-                builder.Append(" | ")
-                    .Append(record.CompletedFiles).Append('/').Append(record.TotalFiles)
-                    .Append(" | 复用 ").Append(record.ReusedFiles);
-            }
-
-            if (record.DownloadedBytes > 0)
-            {
-                builder.Append(" | 写入 ").Append(AppFormatter.FormatBytes(record.DownloadedBytes));
-            }
-
-            if (record.SpeedBytes > 0)
-            {
-                builder.Append(" | ").Append(AppFormatter.FormatBytes(record.SpeedBytes)).Append("/s");
-            }
-
-            if (!string.IsNullOrWhiteSpace(record.Detail))
-            {
-                builder.AppendLine();
-                builder.Append(record.Detail);
-            }
-
+                .Append(record.Title);
             items.Add(builder.ToString());
         }
 
@@ -910,7 +1383,13 @@ public sealed partial class DownloadPage : Page
             }
 
             var content = item.Content?.ToString() ?? "";
-            return string.Equals(content, "不安装", StringComparison.OrdinalIgnoreCase) ? fallback : content;
+            if (string.Equals(content, "不安装", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(content, "只装原版", StringComparison.OrdinalIgnoreCase))
+            {
+                return fallback;
+            }
+
+            return content;
         }
 
         return combo.SelectedItem?.ToString() ?? fallback;
@@ -931,6 +1410,9 @@ public sealed partial class DownloadPage : Page
         combo.SelectedIndex = 0;
     }
 
+    /// <summary>选中“只装原版”（即不装加载器）。</summary>
+    private static void SelectNoLoader(ComboBox combo) => combo.SelectedIndex = 0;
+
     private static void SetComboTag(ComboBox combo, string value)
     {
         foreach (var item in combo.Items.OfType<ComboBoxItem>())
@@ -944,6 +1426,8 @@ public sealed partial class DownloadPage : Page
 
         combo.SelectedIndex = 0;
     }
+
+    /// <summary>选中“只装原版”（即不装加载器）。</summary>
 
     private static int NumberValue(NumberBox box, int min, int max, int fallback)
     {
@@ -968,6 +1452,52 @@ public sealed partial class DownloadPage : Page
         var type = item["type"]?.GetValue<string>()?.Trim() ?? "";
         var patch = item["patch"]?.GetValue<string>()?.Trim() ?? "";
         return string.Join('_', new[] { type, patch }.Where(value => value.Length > 0));
+    }
+
+    /// <summary>
+    /// 为加载器安装器挑选合适的 Java。
+    /// Forge/NeoForge 的安装器与目标 MC 版本强绑定：给 1.8.9 的安装器配 Java 21 会直接失败
+    /// （installer 内部用旧版 ASM/编译器，无法在高版本 JVM 上运行）。
+    /// 策略：优先用能匹配目标版本的 Java，找不到就明确报错而不是硬用当前选中的 Java。
+    /// </summary>
+    private string PickInstallerJava(string configuredJava)
+    {
+        var target = InstallTargetVersionBox.SelectedItem?.ToString() ?? RemoteVersionsBox.SelectedItem?.ToString() ?? "";
+        if (string.IsNullOrWhiteSpace(target))
+        {
+            return configuredJava;
+        }
+
+        var needed = _launcher.InferRequiredJavaVersion(GameDirectoryBox.Text.Trim(), target);
+        var candidates = new List<string>();
+        if (!string.IsNullOrWhiteSpace(configuredJava))
+        {
+            candidates.Add(configuredJava);
+        }
+
+        // 加上官方启动器自带的运行时（常见于 .minecraft\runtime），旧版 Forge 会用到 Java 8
+        candidates.AddRange(JavaRuntimeService.FindBundledRuntimeCandidates());
+        foreach (var pathDir in (Environment.GetEnvironmentVariable("PATH") ?? "")
+                     .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            candidates.Add(Path.Combine(pathDir, OperatingSystem.IsWindows() ? "java.exe" : "java"));
+        }
+
+        foreach (var candidate in candidates.Distinct())
+        {
+            if (JavaRuntimeService.GetJavaMajorVersion(candidate) == needed)
+            {
+                return candidate;
+            }
+        }
+
+        // 没有匹配的运行时：把当前 Java 交给上层，让安装器报出明确错误，
+        // 同时写日志提示用户应该装哪个版本，避免"莫名其妙装失败"。
+        var actual = JavaRuntimeService.GetJavaMajorVersion(configuredJava);
+        AppendDownload(
+            $"提示：安装 {target} 需要 Java {needed}，当前选择的是 Java {(actual > 0 ? actual.ToString() : "未知")}。" +
+            "若安装失败，请在启动页「账号与运行环境」里换成匹配的 Java。");
+        return configuredJava;
     }
 
     private static string InstallTypeLabel(string installType)

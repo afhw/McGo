@@ -1,4 +1,4 @@
-using System.Text.Json.Nodes;
+﻿using System.Text.Json.Nodes;
 using McGo.Core.Downloads;
 using McGo.Core.Java;
 
@@ -36,9 +36,14 @@ public sealed class LaunchPreflightService
             {
                 issues.Add(new LaunchPreflightIssue("java", $"无法识别 Java 版本：{javaPath}"));
             }
-            else if (actualJava < requiredJava)
+            else if (actualJava != requiredJava)
             {
-                issues.Add(new LaunchPreflightIssue("java", $"Minecraft {versionId} 至少需要 Java {requiredJava}，当前选择的是 Java {actualJava}。"));
+                // 不做「更高版本也能跑」的放行：Java 向后兼容在 Mod 环境下很差
+                // （例如 Java 21 跑 1.12.2 的 Forge 基本必崩），这里只接受精确匹配。
+                var direction = actualJava < requiredJava ? "过低" : "过高";
+                issues.Add(new LaunchPreflightIssue(
+                    "java",
+                    $"Java 版本{direction}：Minecraft {versionId} 需要 Java {requiredJava}，当前选择的是 Java {actualJava}。请换用 Java {requiredJava}。"));
             }
         }
 

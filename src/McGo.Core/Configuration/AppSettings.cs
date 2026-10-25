@@ -8,6 +8,10 @@ namespace McGo.Core.Configuration;
 
 public sealed class AppSettings
 {
+    public const int DefaultMaxCoreThreads = 12;
+    public const int DefaultMaxAssetThreads = 24;
+    public const int MaxConcurrencyLimit = 64;
+
     public IniDocument Config { get; private set; } = new();
     public string ConfigPath { get; }
     public string AccountsPath { get; }
@@ -131,12 +135,44 @@ public sealed class AppSettings
     public void SaveAccounts(IEnumerable<JsonObject> accounts)
         => AtomicStorage.SaveJsonAtomic(AccountsPath, SecureStore.RedactAccounts(accounts), indented: true);
 
+    /// <summary>核心文件（客户端 jar、libraries、natives 等）的下载并发上限，来自 DOWNLOAD/max_core_threads。</summary>
+    public int MaxCoreConcurrency => NormalizeConcurrency(Config.GetInt("DOWNLOAD", "max_core_threads", DefaultMaxCoreThreads));
+
+    /// <summary>资源文件（assets 对象）的下载并发上限，来自 DOWNLOAD/max_asset_threads。</summary>
+    public int MaxAssetConcurrency => NormalizeConcurrency(Config.GetInt("DOWNLOAD", "max_asset_threads", DefaultMaxAssetThreads));
+
     public DownloadOptions ReadDownloadOptions()
         => new(
-            Math.Max(1, Config.GetInt("DOWNLOAD", "max_core_threads", 12)),
-            Math.Max(1, Config.GetInt("DOWNLOAD", "max_asset_threads", 24)),
+            MaxCoreConcurrency,
+            MaxAssetConcurrency,
             Math.Max(0, Config.GetInt("DOWNLOAD", "speed_limit_kbps", 0)),
             Config.Get("DOWNLOAD", "cache_strategy", "reuse"));
+
+    /// <summary>
+    /// 不依赖 <see cref="LoadConfig"/>（因此也不会回写配置文件）地从默认配置路径读取下载选项。
+    /// 供没有 <see cref="AppSettings"/> 实例的核心层服务（例如 Downloads.DownloaderService）使用。
+    /// </summary>
+    public static DownloadOptions DefaultDownloadOptions()
+    {
+        try
+        {
+            return ReadDownloadOptions(IniDocument.Load(AppConstants.ConfigFile));
+        }
+        catch
+        {
+            return DownloadOptions.Default;
+        }
+    }
+
+    private static DownloadOptions ReadDownloadOptions(IniDocument document)
+        => new(
+            NormalizeConcurrency(document.GetInt("DOWNLOAD", "max_core_threads", DefaultMaxCoreThreads)),
+            NormalizeConcurrency(document.GetInt("DOWNLOAD", "max_asset_threads", DefaultMaxAssetThreads)),
+            Math.Max(0, document.GetInt("DOWNLOAD", "speed_limit_kbps", 0)),
+            document.Get("DOWNLOAD", "cache_strategy", "reuse"));
+
+    // 并发数为 0/负数会退化成串行或死锁，过大则可能耗尽套接字与线程池，因此统一夹到有效区间。
+    private static int NormalizeConcurrency(int value) => Math.Clamp(value, 1, MaxConcurrencyLimit);
 
     public static string ConciseDownloadError(string? message)
     {
@@ -218,4 +254,12 @@ public sealed record DownloadOptions(
     int MaxCoreConcurrency,
     int MaxAssetConcurrency,
     int SpeedLimitKbps,
-    string CacheStrategy);
+    string CacheStrategy)
+{
+    /// <summary>配置不可读时使用的默认值（与 DefaultSections 中的默认配置保持一致）。</summary>
+    public static DownloadOptions Default { get; } = new(
+        AppSettings.DefaultMaxCoreThreads,
+        AppSettings.DefaultMaxAssetThreads,
+        0,
+        "reuse");
+}

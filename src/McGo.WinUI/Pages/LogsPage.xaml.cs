@@ -31,9 +31,9 @@ public sealed partial class LogsPage : Page
         await RefreshLogListAsync(loadLatest: true);
     }
 
+    // 顶部“刷新”按钮同时承担了两件事：重新扫描日志列表，并重新读取当前选中的日志。
+    // 原先独立的下方“重新读取”按钮已合并到这里，避免同一页面出现两个重复入口。
     private async void RefreshLogs(object sender, RoutedEventArgs e) => await RefreshLogListAsync(loadLatest: true);
-
-    private async void ReloadSelectedLog(object sender, RoutedEventArgs e) => await LoadSelectedLogAsync();
 
     private void ClearLogOutput(object sender, RoutedEventArgs e)
     {

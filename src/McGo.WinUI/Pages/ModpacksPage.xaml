@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8" ?>
+﻿<?xml version="1.0" encoding="utf-8" ?>
 <Page
     x:Class="McGo.WinUI.Pages.ModpacksPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -7,27 +7,30 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
     <ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled" HorizontalContentAlignment="Stretch">
-        <StackPanel x:Name="ResponsiveLayoutRoot" Padding="24,18,24,24" Spacing="16" MaxWidth="1100" HorizontalAlignment="Stretch">
-            <StackPanel Spacing="4">
-                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="整合包" />
-                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="导入、导出整合包与开黑胶囊，并分析版本崩溃日志。" TextWrapping="Wrap" />
+        <StackPanel
+            x:Name="ResponsiveLayoutRoot"
+            HorizontalAlignment="Stretch"
+            Padding="24,20,24,28"
+            Spacing="16">
+
+            <StackPanel Spacing="3">
+                <TextBlock Style="{StaticResource McgoPageTitleStyle}" Text="整合包" />
+                <TextBlock Style="{StaticResource McgoPageSubtitleStyle}" Text="导入、导出整合包与开黑胶囊，并分析版本崩溃日志。" />
             </StackPanel>
 
-            <StackPanel Spacing="8">
-                <TextBlock Text="整合包任务" FontSize="20" FontWeight="SemiBold" />
-                <SelectorBar x:Name="ModpackSectionBar" SelectionChanged="ModpackSectionChanged">
-                    <SelectorBarItem Text="导入整合包" Tag="import" />
-                    <SelectorBarItem Text="导出整合包" Tag="export" />
-                    <SelectorBarItem Text="开黑胶囊" Tag="capsule" />
-                    <SelectorBarItem Text="崩溃分析" Tag="crash" />
-                </SelectorBar>
-            </StackPanel>
+            <SelectorBar x:Name="ModpackSectionBar" SelectionChanged="ModpackSectionChanged">
+                <SelectorBarItem Text="导入整合包" Tag="import" />
+                <SelectorBarItem Text="导出整合包" Tag="export" />
+                <SelectorBarItem Text="开黑胶囊" Tag="capsule" />
+                <SelectorBarItem Text="崩溃分析" Tag="crash" />
+            </SelectorBar>
 
-            <Border x:Name="ImportPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                <StackPanel Spacing="12">
-                    <StackPanel Spacing="3">
-                        <TextBlock Text="整合包导入" FontSize="20" FontWeight="SemiBold" />
-                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="支持 Modrinth mrpack 和普通 zip 覆写包。" TextWrapping="Wrap" />
+            <!--  ==================== 导入整合包：一个路径 + 一个主按钮  ====================  -->
+            <Border x:Name="ImportPanel" Style="{StaticResource McgoCardStyle}">
+                <StackPanel Spacing="14">
+                    <StackPanel Spacing="2">
+                        <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="整合包导入" />
+                        <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="支持 Modrinth mrpack、CurseForge manifest 和普通 zip 覆写包。" />
                     </StackPanel>
                     <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
@@ -35,43 +38,84 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBox x:Name="ImportPackPathBox" Header="整合包路径" />
-                        <Button Grid.Column="1" Content="选择" Click="ChooseImportPack" VerticalAlignment="Bottom" />
+                        <Button
+                            Grid.Column="1"
+                            Click="ChooseImportPack"
+                            Content="选择"
+                            Style="{StaticResource McgoSecondaryButtonStyle}"
+                            VerticalAlignment="Bottom" />
                     </Grid>
-                    <TextBox x:Name="ImportTargetVersionBox" Header="目标版本" PlaceholderText="可留空，使用整合包名称" />
-                    <Button x:Name="ImportModpackButton" Style="{StaticResource AccentButtonStyle}" Content="导入整合包" Click="ImportModpack" HorizontalAlignment="Left" />
+                    <TextBox x:Name="ImportTargetVersionBox" Header="目标版本" PlaceholderText="留空则用包名" />
+                    <Button
+                        x:Name="ImportModpackButton"
+                        MinHeight="48"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Center"
+                        Click="ImportModpack"
+                        Style="{StaticResource McgoPrimaryButtonStyle}">
+                        <StackPanel HorizontalAlignment="Center" Orientation="Horizontal" Spacing="8">
+                            <SymbolIcon Symbol="Import" />
+                            <TextBlock FontSize="15" FontWeight="SemiBold" Text="导入整合包" />
+                        </StackPanel>
+                    </Button>
                 </StackPanel>
             </Border>
 
-            <Border x:Name="ExportPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" Visibility="Collapsed">
-                <StackPanel Spacing="12">
-                    <StackPanel Spacing="3">
-                        <TextBlock Text="整合包导出" FontSize="20" FontWeight="SemiBold" />
-                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="从本地版本生成 Modrinth 或普通 zip 整合包。" TextWrapping="Wrap" />
+            <!--  ==================== 导出整合包  ====================  -->
+            <Border
+                x:Name="ExportPanel"
+                Style="{StaticResource McgoCardStyle}"
+                Visibility="Collapsed">
+                <StackPanel Spacing="14">
+                    <StackPanel Spacing="2">
+                        <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="整合包导出" />
+                        <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="从本地版本生成 Modrinth 或普通 zip 整合包。" />
                     </StackPanel>
-                    <ComboBox x:Name="PackVersionBox" Header="导出版本" HorizontalAlignment="Stretch" />
+                    <ComboBox x:Name="PackVersionBox" HorizontalAlignment="Stretch" Header="导出版本" />
                     <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBox x:Name="PackTargetBox" Header="目标文件" />
-                        <Button Grid.Column="1" Content="选择" Click="ChoosePackTarget" VerticalAlignment="Bottom" />
+                        <Button
+                            Grid.Column="1"
+                            Click="ChoosePackTarget"
+                            Content="选择"
+                            Style="{StaticResource McgoSecondaryButtonStyle}"
+                            VerticalAlignment="Bottom" />
                     </Grid>
-                    <ComboBox x:Name="PackFormatBox" Header="格式" SelectedIndex="0" HorizontalAlignment="Stretch">
+                    <ComboBox x:Name="PackFormatBox" HorizontalAlignment="Stretch" Header="格式" SelectedIndex="0">
                         <ComboBoxItem Content="modrinth" />
                         <ComboBoxItem Content="zip" />
                     </ComboBox>
-                    <Button x:Name="ExportModpackButton" Style="{StaticResource AccentButtonStyle}" Content="导出整合包" Click="ExportModpack" HorizontalAlignment="Left" />
+                    <Button
+                        x:Name="ExportModpackButton"
+                        MinHeight="48"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Center"
+                        Click="ExportModpack"
+                        Style="{StaticResource McgoPrimaryButtonStyle}">
+                        <StackPanel HorizontalAlignment="Center" Orientation="Horizontal" Spacing="8">
+                            <SymbolIcon Symbol="Share" />
+                            <TextBlock FontSize="15" FontWeight="SemiBold" Text="导出整合包" />
+                        </StackPanel>
+                    </Button>
                 </StackPanel>
             </Border>
 
-            <StackPanel x:Name="CapsulePanel" Spacing="12" Visibility="Collapsed">
-                <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                    <StackPanel Spacing="12">
-                        <StackPanel Spacing="3">
-                            <TextBlock Text="开黑胶囊" FontSize="20" FontWeight="SemiBold" />
-                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="导入、导出私有文件清单，并通过补包服务同步缺失文件。" TextWrapping="Wrap" />
+            <!--  ==================== 开黑胶囊：主流程在上，联机信息折叠  ====================  -->
+            <StackPanel
+                x:Name="CapsulePanel"
+                Spacing="12"
+                Visibility="Collapsed">
+                <Border Style="{StaticResource McgoCardStyle}">
+                    <StackPanel Spacing="14">
+                        <StackPanel Spacing="2">
+                            <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="开黑胶囊" />
+                            <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="导入、导出私有文件清单，并通过补包服务同步缺失文件。" />
                         </StackPanel>
+
                         <Grid ColumnSpacing="8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
@@ -79,10 +123,24 @@
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <TextBox x:Name="CapsulePathBox" Header="胶囊路径" />
-                            <Button Grid.Column="1" Content="选择" Click="ChooseCapsulePath" VerticalAlignment="Bottom" />
-                            <Button Grid.Column="2" Content="另存" Click="ChooseCapsuleTarget" VerticalAlignment="Bottom" />
+                            <Button
+                                Grid.Column="1"
+                                Click="ChooseCapsulePath"
+                                Content="选择"
+                                Style="{StaticResource McgoSecondaryButtonStyle}"
+                                VerticalAlignment="Bottom" />
+                            <Button
+                                Grid.Column="2"
+                                Click="ChooseCapsuleTarget"
+                                Content="另存"
+                                Style="{StaticResource McgoSecondaryButtonStyle}"
+                                VerticalAlignment="Bottom" />
                         </Grid>
+
                         <TextBox x:Name="CapsuleTargetVersionBox" Header="目标版本" PlaceholderText="导入时可留空" />
+
+                        <Border Style="{StaticResource McgoDividerStyle}" />
+
                         <Grid ColumnSpacing="8" RowSpacing="8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
@@ -93,22 +151,71 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
-                            <Button x:Name="ImportCapsuleButton" Content="导入胶囊" Click="ImportCapsule" HorizontalAlignment="Stretch" />
-                            <Button x:Name="ExportCapsuleButton" Grid.Column="1" Content="导出胶囊" Click="ExportCapsule" HorizontalAlignment="Stretch" />
-                            <Button x:Name="StartCapsuleHostButton" Grid.Row="1" Style="{StaticResource AccentButtonStyle}" Content="启动补包服务" Click="StartCapsuleFileHost" HorizontalAlignment="Stretch" />
-                            <Button x:Name="PullCapsuleFilesButton" Grid.Row="1" Grid.Column="1" Content="补齐胶囊文件" Click="PullCapsuleFiles" HorizontalAlignment="Stretch" />
-                            <Button x:Name="StopCapsuleHostButton" Grid.Row="2" Content="停止补包服务" Click="StopCapsuleFileHost" IsEnabled="False" HorizontalAlignment="Stretch" />
+                            <Button
+                                x:Name="ImportCapsuleButton"
+                                HorizontalAlignment="Stretch"
+                                Click="ImportCapsule"
+                                Content="导入胶囊"
+                                Style="{StaticResource McgoSecondaryButtonStyle}" />
+                            <Button
+                                x:Name="ExportCapsuleButton"
+                                Grid.Column="1"
+                                HorizontalAlignment="Stretch"
+                                Click="ExportCapsule"
+                                Content="导出胶囊"
+                                Style="{StaticResource McgoSecondaryButtonStyle}" />
+                            <Button
+                                x:Name="StartCapsuleHostButton"
+                                Grid.Row="1"
+                                MinHeight="44"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Center"
+                                Click="StartCapsuleFileHost"
+                                Style="{StaticResource McgoPrimaryButtonStyle}">
+                                <StackPanel HorizontalAlignment="Center" Orientation="Horizontal" Spacing="8">
+                                    <SymbolIcon Symbol="Globe" />
+                                    <TextBlock FontWeight="SemiBold" Text="启动补包服务" />
+                                </StackPanel>
+                            </Button>
+                            <Button
+                                x:Name="StopCapsuleHostButton"
+                                Grid.Row="1"
+                                Grid.Column="1"
+                                HorizontalAlignment="Stretch"
+                                Click="StopCapsuleFileHost"
+                                Content="停止补包服务"
+                                IsEnabled="False"
+                                Style="{StaticResource McgoSecondaryButtonStyle}" />
+                            <Button
+                                x:Name="PullCapsuleFilesButton"
+                                Grid.Row="2"
+                                Grid.ColumnSpan="2"
+                                HorizontalAlignment="Stretch"
+                                Click="PullCapsuleFiles"
+                                Content="补齐胶囊文件"
+                                Style="{StaticResource McgoSecondaryButtonStyle}" />
                         </Grid>
-                        <ProgressBar x:Name="CapsulePullProgressBar" Minimum="0" Maximum="100" Height="6" />
+
+                        <ProgressBar x:Name="CapsulePullProgressBar" Height="6" Maximum="100" Minimum="0" />
                     </StackPanel>
                 </Border>
 
-                <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                    <StackPanel Spacing="12">
-                        <StackPanel Spacing="3">
-                            <TextBlock Text="胶囊 P2P 信息" FontSize="20" FontWeight="SemiBold" />
-                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="邀请双方必须使用一致的中继、房间号和口令。" TextWrapping="Wrap" />
-                        </StackPanel>
+                <!--  P2P 细节默认折叠：不影响主流程，需要时再展开  -->
+                <Expander HorizontalAlignment="Stretch" IsExpanded="False">
+                    <Expander.Header>
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <SymbolIcon Symbol="Globe" Style="{StaticResource McgoIconGlyphStyle}" />
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="1">
+                                <TextBlock Text="联机信息" FontWeight="SemiBold" />
+                                <TextBlock Style="{StaticResource McgoStatLabelStyle}" Text="中继、房间号与端口；邀请双方必须保持一致。" />
+                            </StackPanel>
+                        </Grid>
+                    </Expander.Header>
+                    <StackPanel Padding="0,10,0,0" Spacing="12">
                         <Grid ColumnSpacing="12" RowSpacing="10">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
@@ -120,46 +227,113 @@
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
                             <TextBox x:Name="RelayHostBox" Header="中继主机" />
-                            <NumberBox x:Name="RelayPortBox" Grid.Column="1" Header="中继端口" Minimum="1" Maximum="65535" SmallChange="1" LargeChange="100" SpinButtonPlacementMode="Compact" />
+                            <NumberBox
+                                x:Name="RelayPortBox"
+                                Grid.Column="1"
+                                Header="中继端口"
+                                LargeChange="100"
+                                Maximum="65535"
+                                Minimum="1"
+                                SmallChange="1"
+                                SpinButtonPlacementMode="Compact" />
                             <TextBox x:Name="RoomBox" Grid.Row="1" Header="房间号" />
-                            <PasswordBox x:Name="SecretBox" Grid.Row="1" Grid.Column="1" Header="口令" PlaceholderText="可选" />
-                            <NumberBox x:Name="HostPortBox" Grid.Row="2" Header="房主端口" Minimum="1" Maximum="65535" SmallChange="1" LargeChange="100" SpinButtonPlacementMode="Compact" />
-                            <NumberBox x:Name="JoinPortBox" Grid.Row="2" Grid.Column="1" Header="加入端口" Minimum="1" Maximum="65535" SmallChange="1" LargeChange="100" SpinButtonPlacementMode="Compact" />
+                            <PasswordBox
+                                x:Name="SecretBox"
+                                Grid.Row="1"
+                                Grid.Column="1"
+                                Header="口令"
+                                PlaceholderText="可选" />
+                            <NumberBox
+                                x:Name="HostPortBox"
+                                Grid.Row="2"
+                                Header="房主端口"
+                                LargeChange="100"
+                                Maximum="65535"
+                                Minimum="1"
+                                SmallChange="1"
+                                SpinButtonPlacementMode="Compact" />
+                            <NumberBox
+                                x:Name="JoinPortBox"
+                                Grid.Row="2"
+                                Grid.Column="1"
+                                Header="加入端口"
+                                LargeChange="100"
+                                Maximum="65535"
+                                Minimum="1"
+                                SmallChange="1"
+                                SpinButtonPlacementMode="Compact" />
                         </Grid>
-                        <Grid ColumnSpacing="8" RowSpacing="8">
+                        <Grid ColumnSpacing="8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                            </Grid.RowDefinitions>
-                            <Button Content="生成房间号" Click="GenerateCapsuleRoom" HorizontalAlignment="Stretch" />
-                            <Button Grid.Column="1" Content="保存 P2P 信息" Click="SaveCapsuleP2P" HorizontalAlignment="Stretch" />
-                            <Button Grid.Row="1" Grid.ColumnSpan="2" Content="生成邀请信息" Click="BuildCapsuleInvite" HorizontalAlignment="Stretch" />
+                            <Button
+                                HorizontalAlignment="Stretch"
+                                Click="GenerateCapsuleRoom"
+                                Content="生成房间号"
+                                Style="{StaticResource McgoSecondaryButtonStyle}" />
+                            <Button
+                                Grid.Column="1"
+                                HorizontalAlignment="Stretch"
+                                Click="SaveCapsuleP2P"
+                                Content="保存信息"
+                                Style="{StaticResource McgoSecondaryButtonStyle}" />
+                            <Button
+                                Grid.Column="2"
+                                HorizontalAlignment="Stretch"
+                                Click="BuildCapsuleInvite"
+                                Content="生成邀请"
+                                Style="{StaticResource McgoSecondaryButtonStyle}" />
                         </Grid>
                     </StackPanel>
-                </Border>
+                </Expander>
             </StackPanel>
 
-            <Border x:Name="CrashPanel" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" Visibility="Collapsed">
-                <StackPanel Spacing="12">
-                    <StackPanel Spacing="3">
-                        <TextBlock Text="崩溃日志分析" FontSize="20" FontWeight="SemiBold" />
-                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="从当前运行目录读取崩溃报告和最新日志。" TextWrapping="Wrap" />
+            <!--  ==================== 崩溃分析  ====================  -->
+            <Border
+                x:Name="CrashPanel"
+                Style="{StaticResource McgoCardStyle}"
+                Visibility="Collapsed">
+                <StackPanel Spacing="14">
+                    <StackPanel Spacing="2">
+                        <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="崩溃日志分析" />
+                        <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="从当前运行目录读取崩溃报告和最新日志，给出常见原因与处理建议。" />
                     </StackPanel>
                     <TextBox x:Name="CrashRuntimeDirBox" Header="运行目录" PlaceholderText="可留空自动推断" />
-                    <Button Style="{StaticResource AccentButtonStyle}" Content="分析日志" Click="AnalyzeCrashLogs" HorizontalAlignment="Left" />
+                    <Button
+                        MinHeight="46"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Center"
+                        Click="AnalyzeCrashLogs"
+                        Style="{StaticResource McgoPrimaryButtonStyle}">
+                        <StackPanel HorizontalAlignment="Center" Orientation="Horizontal" Spacing="8">
+                            <SymbolIcon Symbol="Document" />
+                            <TextBlock FontWeight="SemiBold" Text="分析日志" />
+                        </StackPanel>
+                    </Button>
                 </StackPanel>
             </Border>
 
-            <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                <StackPanel Spacing="8">
-                    <TextBlock Text="任务状态" FontSize="20" FontWeight="SemiBold" />
-                    <ProgressBar x:Name="PackProgressBar" Minimum="0" Maximum="100" Height="6" />
-                    <TextBlock x:Name="PackStatusText" Text="等待操作" TextWrapping="Wrap" />
-                    <TextBox x:Name="PackOutputBox" MinHeight="160" MaxHeight="320" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
+            <!--  ==================== 任务状态：进度与状态常驻，输出折叠  ====================  -->
+            <Border Style="{StaticResource McgoCardStyle}">
+                <StackPanel Spacing="10">
+                    <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="任务状态" />
+                    <ProgressBar x:Name="PackProgressBar" Height="6" Maximum="100" Minimum="0" />
+                    <TextBlock x:Name="PackStatusText" TextWrapping="Wrap" Text="等待操作" />
+                    <Expander x:Name="PackOutputExpander" HorizontalAlignment="Stretch" IsExpanded="False">
+                        <Expander.Header>
+                            <TextBlock FontSize="13" Text="任务输出" />
+                        </Expander.Header>
+                        <TextBox
+                            x:Name="PackOutputBox"
+                            Margin="0,8,0,0"
+                            MaxHeight="320"
+                            MinHeight="120"
+                            Style="{StaticResource McgoLogBoxStyle}"
+                            TextWrapping="Wrap" />
+                    </Expander>
                 </StackPanel>
             </Border>
         </StackPanel>

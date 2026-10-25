@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8" ?>
+﻿<?xml version="1.0" encoding="utf-8" ?>
 <Page
     x:Class="McGo.WinUI.Pages.AccountsPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -6,47 +6,147 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
-    <ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled" HorizontalContentAlignment="Stretch">
-        <StackPanel x:Name="ResponsiveLayoutRoot" Padding="24,18,24,24" Spacing="16" MaxWidth="1100" HorizontalAlignment="Stretch">
-            <StackPanel Spacing="4">
-                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="账号操作" />
-                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="先选择账号目的，再进入对应账号方式。" TextWrapping="Wrap" />
+    <Grid>
+    <ScrollViewer
+        HorizontalScrollBarVisibility="Disabled"
+        HorizontalContentAlignment="Stretch"
+        HorizontalScrollMode="Disabled"
+        VerticalContentAlignment="Top"
+        VerticalScrollBarVisibility="Auto"
+        VerticalScrollMode="Auto">
+        <StackPanel
+            x:Name="ResponsiveLayoutRoot"
+            HorizontalAlignment="Stretch"
+            Padding="24,16,24,28"
+            Spacing="16">
+
+            <StackPanel Spacing="3">
+                <TextBlock Style="{StaticResource McgoPageTitleStyle}" Text="账号" />
+                <TextBlock Style="{StaticResource McgoPageSubtitleStyle}" Text="选一个账号开玩；没有账号就先加一个离线的，之后随时能换。" />
             </StackPanel>
 
-            <StackPanel Spacing="8">
-                <TextBlock Text="账号任务" FontSize="18" FontWeight="SemiBold" />
-                <SelectorBar x:Name="LoginModeBox" SelectionChanged="LoginModeChanged">
-                    <SelectorBarItem Text="当前账号" Tag="overview" />
-                    <SelectorBarItem Text="离线账号" Tag="offline" />
-                    <SelectorBarItem Text="Microsoft" Tag="microsoft" />
-                    <SelectorBarItem Text="外置登录" Tag="external" />
-                </SelectorBar>
-            </StackPanel>
+            <SelectorBar x:Name="LoginModeBox" SelectionChanged="LoginModeChanged">
+                <SelectorBarItem Text="当前账号" Tag="overview" />
+                <SelectorBarItem Text="离线账号" Tag="offline" />
+                <SelectorBarItem Text="Microsoft" Tag="microsoft" />
+                <SelectorBarItem Text="外置登录" Tag="external" />
+            </SelectorBar>
+
+            <!--  空状态：没有任何账号时，直接给出最快的一步  -->
+            <Border x:Name="EmptyAccountsCard" Style="{StaticResource McgoCardStyle}" Visibility="Collapsed">
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Border Style="{StaticResource McgoIconBadgeStyle}">
+                        <SymbolIcon Symbol="Contact" Style="{StaticResource McgoIconGlyphStyle}" />
+                    </Border>
+                    <StackPanel
+                        Grid.Column="1"
+                        VerticalAlignment="Center"
+                        Spacing="2">
+                        <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="还没有任何账号" />
+                        <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="先加一个离线账号就能开游戏：只需要一个用户名，之后可以随时换成 Microsoft 或外置登录。" />
+                    </StackPanel>
+                    <Button
+                        Grid.Column="2"
+                        VerticalAlignment="Center"
+                        Click="StartOfflineAccountFlow"
+                        Style="{StaticResource McgoPrimaryButtonStyle}">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <SymbolIcon Symbol="Add" />
+                            <TextBlock FontWeight="SemiBold" Text="添加离线账号" />
+                        </StackPanel>
+                    </Button>
+                </Grid>
+            </Border>
 
             <Grid>
-                <Border x:Name="CurrentAccountCard" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" MaxWidth="720" HorizontalAlignment="Stretch" VerticalAlignment="Top">
-                    <StackPanel Spacing="10">
-                        <TextBlock Text="当前账号" FontSize="18" FontWeight="SemiBold" />
-                        <TextBlock x:Name="CurrentAccountStatusText" Text="当前账号：未选择" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
-                        <ComboBox x:Name="CurrentAccountBox" Header="当前使用账号" SelectionChanged="CurrentAccountSelectionChanged" HorizontalAlignment="Stretch" />
-                        <ComboBox x:Name="DeleteAccountBox" Header="准备删除的账号" SelectionChanged="DeleteAccountSelectionChanged" HorizontalAlignment="Stretch" />
-                        <Grid ColumnSpacing="8">
+                <!--  ==================== 当前账号  ====================  -->
+                <Border x:Name="CurrentAccountCard" VerticalAlignment="Top" Style="{StaticResource McgoHeroCardStyle}">
+                    <StackPanel Spacing="14">
+
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Border Style="{StaticResource McgoIconBadgeStyle}">
+                                <SymbolIcon Symbol="Contact" Style="{StaticResource McgoIconGlyphStyle}" />
+                            </Border>
+                            <StackPanel
+                                Grid.Column="1"
+                                VerticalAlignment="Center"
+                                Spacing="2">
+                                <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="当前账号" />
+                                <TextBlock x:Name="CurrentAccountStatusText" Style="{StaticResource McgoCardSubtitleStyle}" Text="当前账号：未选择" />
+                            </StackPanel>
+                        </Grid>
+
+                        <Grid ColumnSpacing="12" RowSpacing="10">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <Button Content="刷新账号列表" Click="RefreshAccounts" HorizontalAlignment="Stretch" />
-                            <Button Grid.Column="1" Content="刷新选中账号" Click="RefreshSelectedAccount" HorizontalAlignment="Stretch" />
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <ComboBox
+                                x:Name="CurrentAccountBox"
+                                HorizontalAlignment="Stretch"
+                                Header="当前使用账号"
+                                SelectionChanged="CurrentAccountSelectionChanged" />
+                            <ComboBox
+                                x:Name="DeleteAccountBox"
+                                Grid.Column="1"
+                                HorizontalAlignment="Stretch"
+                                Header="准备删除的账号"
+                                SelectionChanged="DeleteAccountSelectionChanged" />
+
+                            <Button
+                                Grid.Row="1"
+                                HorizontalAlignment="Stretch"
+                                Click="RefreshAccounts"
+                                Content="刷新账号列表"
+                                Style="{StaticResource McgoSecondaryButtonStyle}" />
+                            <Button
+                                Grid.Row="1"
+                                Grid.Column="1"
+                                HorizontalAlignment="Stretch"
+                                Click="RefreshSelectedAccount"
+                                Content="刷新选中账号"
+                                Style="{StaticResource McgoSecondaryButtonStyle}" />
+                            <Button
+                                Grid.Row="2"
+                                Grid.ColumnSpan="2"
+                                HorizontalAlignment="Left"
+                                Click="DeleteSelectedAccount"
+                                Style="{StaticResource McgoSecondaryButtonStyle}">
+                                <StackPanel Orientation="Horizontal" Spacing="7">
+                                    <SymbolIcon Symbol="Delete" />
+                                    <TextBlock Text="删除选中账号" />
+                                </StackPanel>
+                            </Button>
                         </Grid>
-                        <Button Content="删除选中账号" Click="DeleteSelectedAccount" HorizontalAlignment="Stretch" />
                     </StackPanel>
                 </Border>
 
+                <!--  ==================== 账号编辑：同一时间只显示一张卡  ====================  -->
                 <StackPanel x:Name="AccountEditors" Spacing="14" Visibility="Collapsed">
-                    <Border x:Name="OfflineAccountCard" Padding="16" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                        <StackPanel Spacing="10">
-                            <TextBlock Text="离线账号" FontSize="18" FontWeight="SemiBold" />
-                            <Grid ColumnSpacing="12" RowSpacing="8">
+
+                    <!--  离线账号：一个输入 + 一个按钮  -->
+                    <Border x:Name="OfflineAccountCard" Style="{StaticResource McgoCardStyle}">
+                        <StackPanel Spacing="14">
+                            <StackPanel Spacing="2">
+                                <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="离线账号" />
+                                <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="只在本机使用，只需要一个用户名；同名账号会直接覆盖更新。" />
+                            </StackPanel>
+
+                            <Grid ColumnSpacing="12" RowSpacing="10">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="*" />
@@ -57,41 +157,140 @@
                                 </Grid.RowDefinitions>
                                 <TextBox x:Name="OfflineNameBox" Header="用户名" />
                                 <TextBox x:Name="OfflineUuidBox" Grid.Column="1" Header="UUID（可留空）" />
-                                <PasswordBox x:Name="OfflineAccessTokenBox" Grid.Row="1" Grid.ColumnSpan="2" Header="访问令牌（高级，可留空）" />
+                                <PasswordBox
+                                    x:Name="OfflineAccessTokenBox"
+                                    Grid.Row="1"
+                                    Grid.ColumnSpan="2"
+                                    Header="访问令牌（高级，可留空）" />
                             </Grid>
-                            <Button Content="添加/更新离线账号" Click="AddOfflineAccount" HorizontalAlignment="Left" />
+
+                            <Button
+                                MinHeight="48"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Center"
+                                Click="AddOfflineAccount"
+                                Style="{StaticResource McgoPrimaryButtonStyle}">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <SymbolIcon Symbol="Add" />
+                                    <TextBlock FontSize="15" FontWeight="SemiBold" Text="添加 / 更新离线账号" />
+                                </StackPanel>
+                            </Button>
                         </StackPanel>
                     </Border>
 
-                    <Border x:Name="MicrosoftAccountCard" Padding="16" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" Visibility="Collapsed">
-                        <StackPanel Spacing="10">
-                            <TextBlock Text="Microsoft 登录" FontSize="18" FontWeight="SemiBold" />
+                    <!--  Microsoft：主操作一个，其余降级  -->
+                    <Border x:Name="MicrosoftAccountCard" Style="{StaticResource McgoCardStyle}" Visibility="Collapsed">
+                        <StackPanel Spacing="14">
+                            <StackPanel Spacing="2">
+                                <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="Microsoft 登录" />
+                                <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="走官方 OAuth 流程；授权完成后保持此窗口，等回调自动保存。" />
+                            </StackPanel>
+
                             <CheckBox x:Name="AutoOpenBrowserCheckBox" Content="生成登录链接后自动打开浏览器" />
-                            <TextBox x:Name="MicrosoftLoginLinkBox" Header="登录链接" PlaceholderText="关闭自动打开后，Microsoft 登录链接会显示在这里" IsReadOnly="True" TextWrapping="NoWrap" />
-                            <Grid ColumnSpacing="8" RowSpacing="8" MaxWidth="620" HorizontalAlignment="Left">
+
+                            <Button
+                                MinHeight="52"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Center"
+                                Click="StartMicrosoftLogin"
+                                Style="{StaticResource McgoPrimaryButtonStyle}">
+                                <StackPanel Spacing="1">
+                                    <StackPanel HorizontalAlignment="Center" Orientation="Horizontal" Spacing="8">
+                                        <SymbolIcon Symbol="Contact" />
+                                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="添加 Microsoft 账号" />
+                                    </StackPanel>
+                                    <TextBlock
+                                        HorizontalAlignment="Center"
+                                        FontSize="11.5"
+                                        Opacity="0.85"
+                                        Text="打开浏览器授权，完成后自动保存" />
+                                </StackPanel>
+                            </Button>
+
+                            <Grid ColumnSpacing="8">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
-                                <Button Content="添加 Microsoft 账号" Click="StartMicrosoftLogin" HorizontalAlignment="Stretch" />
-                                <Button Grid.Column="1" Content="生成登录链接" Click="GenerateMicrosoftLogin" HorizontalAlignment="Stretch" />
-                                <Button Grid.Column="2" Content="复制登录链接" Click="CopyMicrosoftLogin" HorizontalAlignment="Stretch" />
-                                <Button Grid.Row="1" Content="打开浏览器" Click="OpenMicrosoftLogin" HorizontalAlignment="Stretch" />
-                                <Button Grid.Row="1" Grid.Column="1" Content="等待回调并登录" Click="WaitMicrosoftCallback" HorizontalAlignment="Stretch" />
+                                <Button
+                                    HorizontalAlignment="Stretch"
+                                    Click="WaitMicrosoftCallback"
+                                    Content="等待回调并登录"
+                                    Style="{StaticResource McgoSecondaryButtonStyle}" />
+                                <Button
+                                    Grid.Column="1"
+                                    HorizontalAlignment="Stretch"
+                                    Click="OpenMicrosoftLogin"
+                                    Content="在浏览器中打开"
+                                    Style="{StaticResource McgoSecondaryButtonStyle}" />
                             </Grid>
-                            <TextBox x:Name="MicrosoftOutputBox" MinHeight="82" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
+
+                            <TextBox
+                                x:Name="MicrosoftOutputBox"
+                                MinHeight="70"
+                                MaxHeight="150"
+                                Style="{StaticResource McgoOutputBoxStyle}" />
+
+                            <!--  手动链接属于高级路径，默认折叠  -->
+                            <Expander HorizontalAlignment="Stretch" IsExpanded="False">
+                                <Expander.Header>
+                                    <Grid ColumnSpacing="10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <SymbolIcon Symbol="Link" Style="{StaticResource McgoIconGlyphStyle}" />
+                                        <StackPanel
+                                            Grid.Column="1"
+                                            VerticalAlignment="Center"
+                                            Spacing="1">
+                                            <TextBlock FontWeight="SemiBold" Text="手动登录链接" />
+                                            <TextBlock
+                                                Style="{StaticResource McgoStatLabelStyle}"
+                                                Text="复制到系统浏览器完成授权"
+                                                TextTrimming="CharacterEllipsis"
+                                                TextWrapping="NoWrap" />
+                                        </StackPanel>
+                                    </Grid>
+                                </Expander.Header>
+                                <StackPanel Padding="0,10,0,0" Spacing="10">
+                                    <TextBox
+                                        x:Name="MicrosoftLoginLinkBox"
+                                        Header="登录链接"
+                                        IsReadOnly="True"
+                                        PlaceholderText="关闭自动打开后，Microsoft 登录链接会显示在这里"
+                                        TextWrapping="NoWrap" />
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Button
+                                            HorizontalAlignment="Stretch"
+                                            Click="GenerateMicrosoftLogin"
+                                            Content="生成登录链接"
+                                            Style="{StaticResource McgoSecondaryButtonStyle}" />
+                                        <Button
+                                            Grid.Column="1"
+                                            HorizontalAlignment="Stretch"
+                                            Click="CopyMicrosoftLogin"
+                                            Content="复制登录链接"
+                                            Style="{StaticResource McgoSecondaryButtonStyle}" />
+                                    </Grid>
+                                </StackPanel>
+                            </Expander>
                         </StackPanel>
                     </Border>
 
-                    <Border x:Name="ExternalAccountCard" Padding="16" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" Visibility="Collapsed">
-                        <StackPanel Spacing="10">
-                            <TextBlock Text="外置登录" FontSize="18" FontWeight="SemiBold" />
-                            <Grid ColumnSpacing="12" RowSpacing="8">
+                    <!--  外置登录：一个主操作，辅助动作贴着字段或收进折叠面板  -->
+                    <Border x:Name="ExternalAccountCard" Style="{StaticResource McgoCardStyle}" Visibility="Collapsed">
+                        <StackPanel Spacing="14">
+                            <StackPanel Spacing="2">
+                                <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="外置登录" />
+                                <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="对接 authlib-injector 认证服务器，需要对应的同名皮肤站账号。" />
+                            </StackPanel>
+
+                            <Grid ColumnSpacing="12" RowSpacing="10">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="*" />
@@ -99,44 +298,152 @@
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
-                                <TextBox x:Name="ExternalServerBox" Header="认证服务器" TextChanged="ExternalFormChanged" />
-                                <TextBox x:Name="ExternalUsernameBox" Grid.Column="1" Header="用户名" TextChanged="ExternalFormChanged" />
+                                <TextBox
+                                    x:Name="ExternalServerBox"
+                                    Header="认证服务器"
+                                    TextChanged="ExternalFormChanged" />
+                                <TextBox
+                                    x:Name="ExternalUsernameBox"
+                                    Grid.Column="1"
+                                    Header="用户名"
+                                    TextChanged="ExternalFormChanged" />
                                 <PasswordBox x:Name="ExternalPasswordBox" Grid.Row="1" Header="密码" />
-                                <TextBox x:Name="AuthlibPathBox" Grid.Row="1" Grid.Column="1" Header="authlib-injector.jar 路径" TextChanged="ExternalFormChanged" />
+                                <Grid Grid.Row="1" Grid.Column="1" ColumnSpacing="6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox
+                                        x:Name="AuthlibPathBox"
+                                        Header="authlib-injector.jar 路径"
+                                        TextChanged="ExternalFormChanged" />
+                                    <Button
+                                        Grid.Column="1"
+                                        VerticalAlignment="Bottom"
+                                        Click="ChooseAuthlibInjector"
+                                        ToolTipService.ToolTip="选择 authlib-injector.jar"
+                                        Style="{StaticResource McgoSecondaryButtonStyle}">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <SymbolIcon Symbol="OpenFile" />
+                                            <TextBlock Text="选择" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button
+                                        Grid.Column="2"
+                                        VerticalAlignment="Bottom"
+                                        Click="DownloadAuthlibInjector"
+                                        ToolTipService.ToolTip="下载 authlib-injector.jar"
+                                        Style="{StaticResource McgoSecondaryButtonStyle}">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <SymbolIcon Symbol="Download" />
+                                            <TextBlock Text="下载" />
+                                        </StackPanel>
+                                    </Button>
+                                </Grid>
                             </Grid>
-                            <TextBlock x:Name="ExternalStatusText" Text="外置登录未连接" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
-                            <Grid ColumnSpacing="8" RowSpacing="8" MaxWidth="560" HorizontalAlignment="Left">
+
+                            <TextBlock x:Name="ExternalStatusText" Style="{StaticResource McgoCardSubtitleStyle}" Text="外置登录未连接" />
+
+                            <Button
+                                MinHeight="48"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Center"
+                                Click="LoginExternalAccount"
+                                Style="{StaticResource McgoPrimaryButtonStyle}">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <SymbolIcon Symbol="Contact" />
+                                    <TextBlock FontSize="15" FontWeight="SemiBold" Text="登录并添加外置账号" />
+                                </StackPanel>
+                            </Button>
+
+                            <Grid ColumnSpacing="8">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
-                                <Button Content="规范化地址" Click="NormalizeExternalServer" HorizontalAlignment="Stretch" />
-                                <Button Grid.Column="1" Content="测试服务器" Click="ProbeExternalServer" HorizontalAlignment="Stretch" />
-                                <Button Grid.Row="1" Content="选择 Jar" Click="ChooseAuthlibInjector" HorizontalAlignment="Stretch" />
-                                <Button Grid.Row="1" Grid.Column="1" Content="自动下载" Click="DownloadAuthlibInjector" HorizontalAlignment="Stretch" />
-                                <Button Grid.Row="2" Content="刷新/验证当前外置账号" Click="RefreshSelectedAccount" HorizontalAlignment="Stretch" />
-                                <Button Grid.Row="2" Grid.Column="1" Content="登录并添加外置账号" Click="LoginExternalAccount" HorizontalAlignment="Stretch" />
-                                <Button Grid.Row="3" Content="生成 JVM 参数" Click="PreviewAuthlibArgs" HorizontalAlignment="Stretch" />
+                                <Button
+                                    HorizontalAlignment="Stretch"
+                                    Click="ProbeExternalServer"
+                                    Content="测试服务器"
+                                    Style="{StaticResource McgoSecondaryButtonStyle}" />
+                                <Button
+                                    Grid.Column="1"
+                                    HorizontalAlignment="Stretch"
+                                    Click="RefreshSelectedAccount"
+                                    Content="刷新 / 验证当前账号"
+                                    Style="{StaticResource McgoSecondaryButtonStyle}" />
                             </Grid>
+
+                            <Expander HorizontalAlignment="Stretch" IsExpanded="False">
+                                <Expander.Header>
+                                    <Grid ColumnSpacing="10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <SymbolIcon Symbol="Setting" Style="{StaticResource McgoIconGlyphStyle}" />
+                                        <StackPanel
+                                            Grid.Column="1"
+                                            VerticalAlignment="Center"
+                                            Spacing="1">
+                                            <TextBlock FontWeight="SemiBold" Text="高级" />
+                                            <TextBlock
+                                                Style="{StaticResource McgoStatLabelStyle}"
+                                                Text="地址规范化 · JVM 参数预览"
+                                                TextTrimming="CharacterEllipsis"
+                                                TextWrapping="NoWrap" />
+                                        </StackPanel>
+                                    </Grid>
+                                </Expander.Header>
+                                <Grid Padding="0,10,0,0" ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Button
+                                        HorizontalAlignment="Stretch"
+                                        Click="NormalizeExternalServer"
+                                        Content="规范化地址"
+                                        Style="{StaticResource McgoSecondaryButtonStyle}" />
+                                    <Button
+                                        Grid.Column="1"
+                                        HorizontalAlignment="Stretch"
+                                        Click="PreviewAuthlibArgs"
+                                        Content="生成 JVM 参数"
+                                        Style="{StaticResource McgoSecondaryButtonStyle}" />
+                                </Grid>
+                            </Expander>
                         </StackPanel>
                     </Border>
 
-                    <Border Padding="16" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
-                        <StackPanel Spacing="10">
-                            <TextBlock Text="账号状态" FontSize="18" FontWeight="SemiBold" />
-                            <TextBox x:Name="OutputBox" MinHeight="120" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" />
-                        </StackPanel>
-                    </Border>
+                    <!--  账号状态：默认折叠  -->
+                    <Expander HorizontalAlignment="Stretch" IsExpanded="False">
+                        <Expander.Header>
+                            <Grid ColumnSpacing="10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <SymbolIcon Symbol="Document" Style="{StaticResource McgoIconGlyphStyle}" />
+                                <TextBlock
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center"
+                                    FontWeight="SemiBold"
+                                    Text="账号状态" />
+                            </Grid>
+                        </Expander.Header>
+                        <TextBox
+                            x:Name="OutputBox"
+                            Margin="0,8,0,0"
+                            MinHeight="100"
+                            MaxHeight="220"
+                            Style="{StaticResource McgoOutputBoxStyle}" />
+                    </Expander>
                 </StackPanel>
             </Grid>
         </StackPanel>
     </ScrollViewer>
+    </Grid>
 </Page>

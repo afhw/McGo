@@ -39,6 +39,92 @@ public static class JavaRuntimeService
             .FirstOrDefault();
     }
 
+    /// <summary>
+    /// 查找 Minecraft 官方启动器自带的 Java 运行时。
+    /// 官方启动器把 JRE 解压到 <c>.minecraft\runtime\&lt;jre&gt;\&lt;平台&gt;\&lt;jre&gt;\bin\java.exe</c>，
+    /// 商店版启动器则放在包容器的 LocalCache 下；这两处都不在 PATH 里，必须单独枚举。
+    /// </summary>
+    /// <param name="roamingAppDataRoot">用于测试注入；为空时取 <see cref="Environment.SpecialFolder.ApplicationData"/>。</param>
+    /// <param name="localAppDataRoot">用于测试注入；为空时取 <see cref="Environment.SpecialFolder.LocalApplicationData"/>。</param>
+    public static IReadOnlyList<string> FindBundledRuntimeCandidates(
+        string? roamingAppDataRoot = null,
+        string? localAppDataRoot = null)
+    {
+        var appData = string.IsNullOrWhiteSpace(roamingAppDataRoot)
+            ? Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)
+            : roamingAppDataRoot;
+        var localAppData = string.IsNullOrWhiteSpace(localAppDataRoot)
+            ? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
+            : localAppDataRoot;
+
+        var roots = new List<string>();
+        if (!string.IsNullOrWhiteSpace(appData))
+        {
+            var minecraft = Path.Combine(appData, ".minecraft");
+            roots.Add(Path.Combine(minecraft, "runtime"));
+            // 部分版本把下载过的运行时缓存留在 cache 下，存在时才值得扫。
+            roots.Add(Path.Combine(minecraft, "cache"));
+        }
+
+        if (!string.IsNullOrWhiteSpace(localAppData))
+        {
+            // Microsoft Store 版启动器被包容器重定向，.minecraft 落在 LocalCache\Roaming 下。
+            roots.Add(Path.Combine(
+                localAppData,
+                "Packages",
+                "Microsoft.4297127D64EC6_8wekyb3d8bbwe",
+                "LocalCache",
+                "Roaming",
+                ".minecraft",
+                "runtime"));
+        }
+
+        var candidates = new List<string>();
+        foreach (var root in roots)
+        {
+            candidates.AddRange(FindJavasUnderRuntimeRoot(root));
+        }
+
+        return candidates
+            .Where(File.Exists)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(40)
+            .ToList();
+    }
+
+    /// <summary>
+    /// 逐个子目录找 java：官方启动器的布局有
+    /// <c>runtime\&lt;jre&gt;\windows-x64\&lt;jre&gt;\bin\java.exe</c>（当前）与
+    /// <c>runtime\&lt;jre&gt;\windows\&lt;jre&gt;\bin\java.exe</c>（旧版）两种，
+    /// 这里不硬编码平台目录名，按 jre 目录整体搜索，新增平台布局也能命中。
+    /// </summary>
+    private static IEnumerable<string> FindJavasUnderRuntimeRoot(string runtimeRoot)
+    {
+        if (string.IsNullOrWhiteSpace(runtimeRoot) || !Directory.Exists(runtimeRoot))
+        {
+            yield break;
+        }
+
+        IEnumerable<string> children;
+        try
+        {
+            children = Directory.EnumerateDirectories(runtimeRoot);
+        }
+        catch
+        {
+            yield break;
+        }
+
+        foreach (var child in children)
+        {
+            var javaPath = FindJavaInDirectory(child);
+            if (!string.IsNullOrWhiteSpace(javaPath))
+            {
+                yield return javaPath;
+            }
+        }
+    }
+
     public static void ExtractJavaArchive(string archivePath, string targetDir)
     {
         Directory.CreateDirectory(targetDir);
@@ -48,7 +134,11 @@ public static class JavaRuntimeService
             return;
         }
 
-        if (archivePath.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase) ||
+        // 优先按内容嗅探 gzip 魔数（1F 8B）。部分下载源（如 Adoptium 的 /eclipse 端点）
+        // URL 与文件名不含扩展名，若响应缺少 content-disposition，仅靠扩展名判断会在
+        // 非 Windows 平台把 tar.gz 兜底误判为 zip，进而抛"格式不受支持"。
+        if (LooksLikeGzip(archivePath) ||
+            archivePath.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase) ||
             archivePath.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase))
         {
             using var file = File.OpenRead(archivePath);
@@ -214,6 +304,20 @@ public static class JavaRuntimeService
                    signature[1] == 0x4B &&
                    signature[2] is 0x03 or 0x05 or 0x07 &&
                    signature[3] is 0x04 or 0x06 or 0x08;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool LooksLikeGzip(string archivePath)
+    {
+        try
+        {
+            using var file = File.OpenRead(archivePath);
+            Span<byte> signature = stackalloc byte[2];
+            return file.Read(signature) == 2 && signature[0] == 0x1F && signature[1] == 0x8B;
         }
         catch
         {
