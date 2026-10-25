@@ -97,7 +97,7 @@ public sealed partial class DownloadPage : Page
         UpdateDownloadButtonState();
         try
         {
-            var versions = await _installServices.GetRemoteVersionsAsync(ComboText(VersionTypeBox, "release"), ComboText(MirrorBox, "official"));
+            var versions = await _installServices.GetRemoteVersionsAsync(UiHelpers.ComboText(VersionTypeBox, "release"), UiHelpers.ComboText(MirrorBox, "official"));
             if (versions.Count > 0)
             {
                 var previous = RemoteVersionsBox.SelectedItem?.ToString();
@@ -140,12 +140,12 @@ public sealed partial class DownloadPage : Page
         GameDirectoryBox.Text = _settings.Config.Get("GAME", "directory", AppConstants.DefaultGameDirectory);
         JavaPathBox.Text = _settings.Config.Get("JAVA", "path", "java");
         MirrorBox.SelectedIndex = _settings.Config.Get("DOWNLOAD", "mirror_source", "official") == "bmclapi" ? 1 : 0;
-        SetComboText(DownloadPresetBox, _settings.Config.Get("DOWNLOAD", "download_preset", "均衡"));
-        SetComboTag(InstallTypeBox, "");
-        SetComboText(CacheStrategyBox, _settings.Config.Get("DOWNLOAD", "cache_strategy", "reuse"));
-        CoreThreadsBox.Value = ClampDouble(_settings.Config.GetInt("DOWNLOAD", "max_core_threads", 12), 1, 64);
-        AssetThreadsBox.Value = ClampDouble(_settings.Config.GetInt("DOWNLOAD", "max_asset_threads", 24), 1, 96);
-        SpeedLimitBox.Value = ClampDouble(_settings.Config.GetInt("DOWNLOAD", "speed_limit_kbps", 0), 0, 1_048_576);
+        UiHelpers.SetComboText(DownloadPresetBox, _settings.Config.Get("DOWNLOAD", "download_preset", "均衡"));
+        UiHelpers.SetComboTag(InstallTypeBox, "");
+        UiHelpers.SetComboText(CacheStrategyBox, _settings.Config.Get("DOWNLOAD", "cache_strategy", "reuse"));
+        CoreThreadsBox.Value = UiHelpers.ClampDouble(_settings.Config.GetInt("DOWNLOAD", "max_core_threads", 12), 1, 64);
+        AssetThreadsBox.Value = UiHelpers.ClampDouble(_settings.Config.GetInt("DOWNLOAD", "max_asset_threads", 24), 1, 96);
+        SpeedLimitBox.Value = UiHelpers.ClampDouble(_settings.Config.GetInt("DOWNLOAD", "speed_limit_kbps", 0), 0, 1_048_576);
         ApplyAdvancedVisibility();
         UpdateInstallAddonControls();
         ResetInstallVersionChoices("不安装");
@@ -205,7 +205,7 @@ public sealed partial class DownloadPage : Page
             throw new InvalidOperationException("未选择加载器时安装选项状态不正确。");
         }
 
-        SetComboTag(InstallTypeBox, "fabric");
+        UiHelpers.SetComboTag(InstallTypeBox, "fabric");
         UpdateInstallAddonControls();
         if (InstallVersionPanel.Visibility != Visibility.Visible || !InstallFabricApiCheckBox.IsEnabled)
         {
@@ -374,7 +374,7 @@ public sealed partial class DownloadPage : Page
         {
             DownloadButton.IsEnabled = false;
             AppendDownload("正在刷新远程版本...");
-            var versions = await _installServices.GetRemoteVersionsAsync(ComboText(VersionTypeBox, "release"), ComboText(MirrorBox, "official"));
+            var versions = await _installServices.GetRemoteVersionsAsync(UiHelpers.ComboText(VersionTypeBox, "release"), UiHelpers.ComboText(MirrorBox, "official"));
             RemoteVersionsBox.ItemsSource = versions;
             if (versions.Count > 0)
             {
@@ -448,7 +448,7 @@ public sealed partial class DownloadPage : Page
 
         // 结果按「版本 + 镜像」缓存：用户在版本列表里上下滚动时，
         // 每个版本都要打 3~4 个网络请求会明显卡顿，而同一个版本的答案是稳定的。
-        var cacheKey = (versionId, ComboText(MirrorBox, "official"));
+        var cacheKey = (versionId, UiHelpers.ComboText(MirrorBox, "official"));
         if (_loaderProbeCache.TryGetValue(cacheKey, out var cached))
         {
             ApplyLoaderAvailability(panel, versionId, cached);
@@ -635,7 +635,7 @@ public sealed partial class DownloadPage : Page
             return;
         }
 
-        var mirror = ComboText(MirrorBox, "official");
+        var mirror = UiHelpers.ComboText(MirrorBox, "official");
         var gameDir = GameDirectoryBox.Text.Trim();
         var javaPath = PickInstallerJava(JavaPathBox.Text.Trim());
         var installTypes = SelectedInstallTypes();
@@ -648,11 +648,11 @@ public sealed partial class DownloadPage : Page
         _settings.Config.Set("GAME", "directory", gameDir);
         _settings.Config.Set("JAVA", "path", javaPath);
         _settings.Config.Set("DOWNLOAD", "mirror_source", mirror);
-        _settings.Config.Set("DOWNLOAD", "download_preset", ComboText(DownloadPresetBox, "均衡"));
-        _settings.Config.Set("DOWNLOAD", "max_core_threads", NumberValue(CoreThreadsBox, 1, 64, 12).ToString());
-        _settings.Config.Set("DOWNLOAD", "max_asset_threads", NumberValue(AssetThreadsBox, 1, 96, 24).ToString());
-        _settings.Config.Set("DOWNLOAD", "speed_limit_kbps", NumberValue(SpeedLimitBox, 0, 1_048_576, 0).ToString());
-        _settings.Config.Set("DOWNLOAD", "cache_strategy", ComboText(CacheStrategyBox, "reuse"));
+        _settings.Config.Set("DOWNLOAD", "download_preset", UiHelpers.ComboText(DownloadPresetBox, "均衡"));
+        _settings.Config.Set("DOWNLOAD", "max_core_threads", UiHelpers.NumberValue(CoreThreadsBox, 1, 64, 12).ToString());
+        _settings.Config.Set("DOWNLOAD", "max_asset_threads", UiHelpers.NumberValue(AssetThreadsBox, 1, 96, 24).ToString());
+        _settings.Config.Set("DOWNLOAD", "speed_limit_kbps", UiHelpers.NumberValue(SpeedLimitBox, 0, 1_048_576, 0).ToString());
+        _settings.Config.Set("DOWNLOAD", "cache_strategy", UiHelpers.ComboText(CacheStrategyBox, "reuse"));
         _settings.SaveConfig();
 
         var options = _settings.ReadDownloadOptions();
@@ -761,7 +761,7 @@ public sealed partial class DownloadPage : Page
     private List<string> SelectedInstallTypes()
     {
         var installTypes = new List<string>();
-        var installType = ComboTag(InstallTypeBox, "");
+        var installType = UiHelpers.ComboTag(InstallTypeBox, "");
         if (!string.IsNullOrWhiteSpace(installType))
         {
             installTypes.Add(installType);
@@ -777,7 +777,7 @@ public sealed partial class DownloadPage : Page
 
     private Dictionary<string, string> SelectedInstallVersions(IReadOnlyList<string> installTypes)
     {
-        var selected = ComboText(InstallVersionBox, "自动选择最新");
+        var selected = UiHelpers.ComboText(InstallVersionBox, "自动选择最新");
         if (selected == "自动选择最新" ||
             selected.StartsWith("点击", StringComparison.Ordinal) ||
             selected.StartsWith("正在", StringComparison.Ordinal) ||
@@ -797,7 +797,7 @@ public sealed partial class DownloadPage : Page
             return;
         }
 
-        var presetName = ComboText(DownloadPresetBox, "均衡");
+        var presetName = UiHelpers.ComboText(DownloadPresetBox, "均衡");
         if (!DownloadPresets.TryGetValue(presetName, out var preset))
         {
             return;
@@ -806,7 +806,7 @@ public sealed partial class DownloadPage : Page
         CoreThreadsBox.Value = preset.CoreThreads;
         AssetThreadsBox.Value = preset.AssetThreads;
         SpeedLimitBox.Value = preset.SpeedLimitKbps;
-        SetComboText(CacheStrategyBox, preset.CacheStrategy);
+        UiHelpers.SetComboText(CacheStrategyBox, preset.CacheStrategy);
         AppendDownload($"已应用下载预设：{presetName}。");
     }
 
@@ -818,7 +818,7 @@ public sealed partial class DownloadPage : Page
 
     private async void RefreshInstallVersions(object sender, RoutedEventArgs e)
     {
-        var installType = ComboTag(InstallTypeBox, "");
+        var installType = UiHelpers.ComboTag(InstallTypeBox, "");
         if (string.IsNullOrWhiteSpace(installType))
         {
             ResetInstallVersionChoices("不安装");
@@ -836,7 +836,7 @@ public sealed partial class DownloadPage : Page
         try
         {
             ResetInstallVersionChoices("正在刷新...");
-            var mirror = ComboText(MirrorBox, "official");
+            var mirror = UiHelpers.ComboText(MirrorBox, "official");
             var versions = await LoadInstallVersionsAsync(installType, versionId, mirror);
             InstallVersionBox.ItemsSource = new[] { "自动选择最新" }.Concat(versions).ToList();
             InstallVersionBox.SelectedIndex = 0;
@@ -920,7 +920,7 @@ public sealed partial class DownloadPage : Page
 
     private async void RefreshAddonInstallVersions(object sender, RoutedEventArgs e)
     {
-        var installType = ComboText(AddonInstallTypeBox, "fabric");
+        var installType = UiHelpers.ComboText(AddonInstallTypeBox, "fabric");
         var targetVersion = InstallTargetVersionBox.SelectedItem?.ToString() ?? "";
         var gameDir = GameDirectoryBox.Text.Trim();
         var minecraftVersion = NormalizeInstallTargetVersion(gameDir, installType, targetVersion);
@@ -942,7 +942,7 @@ public sealed partial class DownloadPage : Page
         {
             ResetAddonInstallVersionChoices("正在刷新...");
             UpdateInstallStatus($"正在刷新 {InstallTypeLabel(installType)} 安装器版本", $"目标 Minecraft：{minecraftVersion}");
-            var mirror = ComboText(MirrorBox, "official");
+            var mirror = UiHelpers.ComboText(MirrorBox, "official");
             var versions = await LoadInstallVersionsAsync(installType, minecraftVersion, mirror);
             AddonInstallVersionBox.ItemsSource = new[] { "自动选择最新" }.Concat(versions).ToList();
             AddonInstallVersionBox.SelectedIndex = 0;
@@ -963,7 +963,7 @@ public sealed partial class DownloadPage : Page
 
     private async void InstallAddonToLocalVersion(object sender, RoutedEventArgs e)
     {
-        var installType = ComboText(AddonInstallTypeBox, "fabric");
+        var installType = UiHelpers.ComboText(AddonInstallTypeBox, "fabric");
         var targetVersion = InstallTargetVersionBox.SelectedItem?.ToString() ?? "";
         var gameDir = GameDirectoryBox.Text.Trim();
         var javaPath = PickInstallerJava(JavaPathBox.Text.Trim());
@@ -984,11 +984,11 @@ public sealed partial class DownloadPage : Page
 
         _settings.Config.Set("GAME", "directory", gameDir);
         _settings.Config.Set("JAVA", "path", javaPath);
-        _settings.Config.Set("DOWNLOAD", "mirror_source", ComboText(MirrorBox, "official"));
+        _settings.Config.Set("DOWNLOAD", "mirror_source", UiHelpers.ComboText(MirrorBox, "official"));
         _settings.SaveConfig();
 
         var requestedVersion = SelectedAddonInstallVersion();
-        var mirror = ComboText(MirrorBox, "official");
+        var mirror = UiHelpers.ComboText(MirrorBox, "official");
         var title = $"安装 {InstallTypeLabel(installType)} 到 {minecraftVersion}";
         if (!string.Equals(targetVersion, minecraftVersion, StringComparison.OrdinalIgnoreCase))
         {
@@ -1076,7 +1076,7 @@ public sealed partial class DownloadPage : Page
 
     private void UpdateInstallAddonControls()
     {
-        var installType = ComboTag(InstallTypeBox, "");
+        var installType = UiHelpers.ComboTag(InstallTypeBox, "");
         var isFabric = installType == "fabric";
         var hasInstaller = installType.Length > 0;
         InstallVersionPanel.Visibility = hasInstaller ? Visibility.Visible : Visibility.Collapsed;
@@ -1100,7 +1100,7 @@ public sealed partial class DownloadPage : Page
         }
 
         var versionId = RemoteVersionsBox?.SelectedItem?.ToString() ?? "";
-        var installType = ComboTag(InstallTypeBox, "");
+        var installType = UiHelpers.ComboTag(InstallTypeBox, "");
         var loader = installType.Length == 0 ? "" : " + " + InstallTypeLabel(installType);
         if (string.IsNullOrWhiteSpace(versionId))
         {
@@ -1110,7 +1110,7 @@ public sealed partial class DownloadPage : Page
         }
 
         DownloadButtonText.Text = $"下载 {versionId}{loader}";
-        DownloadButtonSubText.Text = $"{ComboText(MirrorBox, "official")} · {GameDirectoryBox?.Text.Trim()}".Trim();
+        DownloadButtonSubText.Text = $"{UiHelpers.ComboText(MirrorBox, "official")} · {GameDirectoryBox?.Text.Trim()}".Trim();
     }
 
 
@@ -1129,7 +1129,7 @@ public sealed partial class DownloadPage : Page
 
     private string SelectedAddonInstallVersion()
     {
-        var selected = ComboText(AddonInstallVersionBox, "自动选择最新");
+        var selected = UiHelpers.ComboText(AddonInstallVersionBox, "自动选择最新");
         return selected == "自动选择最新" ||
                selected.StartsWith("点击", StringComparison.Ordinal) ||
                selected.StartsWith("正在", StringComparison.Ordinal)
@@ -1153,7 +1153,7 @@ public sealed partial class DownloadPage : Page
     {
         if (AddonButtonText is not null)
         {
-            AddonButtonText.Text = $"安装 {InstallTypeLabel(ComboText(AddonInstallTypeBox, "fabric"))}";
+            AddonButtonText.Text = $"安装 {InstallTypeLabel(UiHelpers.ComboText(AddonInstallTypeBox, "fabric"))}";
         }
     }
 
@@ -1165,8 +1165,8 @@ public sealed partial class DownloadPage : Page
             return;
         }
 
-        var mirror = ComboText(MirrorBox, "official") == "bmclapi" ? "BMCLAPI" : "官方源";
-        var preset = ComboText(DownloadPresetBox, "均衡");
+        var mirror = UiHelpers.ComboText(MirrorBox, "official") == "bmclapi" ? "BMCLAPI" : "官方源";
+        var preset = UiHelpers.ComboText(DownloadPresetBox, "均衡");
         var dir = GameDirectoryBox?.Text.Trim() ?? "";
         DownloadSettingsSummary.Text = $"{mirror} · {preset} · {dir}";
     }
@@ -1363,85 +1363,12 @@ public sealed partial class DownloadPage : Page
         }
     }
 
-    private static string ComboText(ComboBox combo, string fallback)
-    {
-        if (combo.SelectedItem is ComboBoxItem item)
-        {
-            return item.Content?.ToString() ?? fallback;
-        }
-
-        return combo.SelectedItem?.ToString() ?? fallback;
-    }
-
-    private static string ComboTag(ComboBox combo, string fallback)
-    {
-        if (combo.SelectedItem is ComboBoxItem item)
-        {
-            if (item.Tag is not null)
-            {
-                return item.Tag.ToString() ?? fallback;
-            }
-
-            var content = item.Content?.ToString() ?? "";
-            if (string.Equals(content, "不安装", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(content, "只装原版", StringComparison.OrdinalIgnoreCase))
-            {
-                return fallback;
-            }
-
-            return content;
-        }
-
-        return combo.SelectedItem?.ToString() ?? fallback;
-    }
-
-    private static void SetComboText(ComboBox combo, string value)
-    {
-        foreach (var item in combo.Items.OfType<ComboBoxItem>())
-        {
-            if (string.Equals(item.Content?.ToString(), value, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(item.Tag?.ToString(), value, StringComparison.OrdinalIgnoreCase))
-            {
-                combo.SelectedItem = item;
-                return;
-            }
-        }
-
-        combo.SelectedIndex = 0;
-    }
-
-    /// <summary>选中“只装原版”（即不装加载器）。</summary>
+                /// <summary>选中“只装原版”（即不装加载器）。</summary>
     private static void SelectNoLoader(ComboBox combo) => combo.SelectedIndex = 0;
 
-    private static void SetComboTag(ComboBox combo, string value)
-    {
-        foreach (var item in combo.Items.OfType<ComboBoxItem>())
-        {
-            if (string.Equals(item.Tag?.ToString() ?? "", value, StringComparison.OrdinalIgnoreCase))
-            {
-                combo.SelectedItem = item;
-                return;
-            }
-        }
+        /// <summary>选中“只装原版”（即不装加载器）。</summary>
 
-        combo.SelectedIndex = 0;
-    }
-
-    /// <summary>选中“只装原版”（即不装加载器）。</summary>
-
-    private static int NumberValue(NumberBox box, int min, int max, int fallback)
-    {
-        if (double.IsNaN(box.Value))
-        {
-            return fallback;
-        }
-
-        return Math.Clamp((int)Math.Round(box.Value), min, max);
-    }
-
-    private static double ClampDouble(int value, int min, int max) => Math.Clamp(value, min, max);
-
-    private static string OptifineVersionKey(JsonObject item)
+            private static string OptifineVersionKey(JsonObject item)
     {
         var filename = item["filename"]?.GetValue<string>()?.Trim() ?? "";
         if (filename.Length > 0)

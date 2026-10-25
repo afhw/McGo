@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Nodes;
 using McGo.Core.App;
 using McGo.Core.Configuration;
@@ -115,9 +115,9 @@ public sealed partial class SettingsPage : Page
         {
             _loadingJavaCandidates = false;
         }
-        CoreThreadsBox.Value = ClampDouble(_settings.Config.GetInt("DOWNLOAD", "max_core_threads", 12), 1, 64);
-        AssetThreadsBox.Value = ClampDouble(_settings.Config.GetInt("DOWNLOAD", "max_asset_threads", 24), 1, 96);
-        SpeedLimitBox.Value = ClampDouble(_settings.Config.GetInt("DOWNLOAD", "speed_limit_kbps", 0), 0, 1_048_576);
+        CoreThreadsBox.Value = UiHelpers.ClampDouble(_settings.Config.GetInt("DOWNLOAD", "max_core_threads", 12), 1, 64);
+        AssetThreadsBox.Value = UiHelpers.ClampDouble(_settings.Config.GetInt("DOWNLOAD", "max_asset_threads", 24), 1, 96);
+        SpeedLimitBox.Value = UiHelpers.ClampDouble(_settings.Config.GetInt("DOWNLOAD", "speed_limit_kbps", 0), 0, 1_048_576);
         ModrinthApiBaseBox.Text = _settings.Config.Get("DOWNLOAD", "modrinth_api_base", "");
         ModrinthCdnBaseBox.Text = _settings.Config.Get("DOWNLOAD", "modrinth_cdn_base", "");
         ThemeImageBox.Text = _settings.Config.Get("UI", "theme_image", "");
@@ -128,7 +128,7 @@ public sealed partial class SettingsPage : Page
         ShowDownloadCheckBox.IsChecked = _settings.Config.GetBool("FEATURES", "show_download", true);
         MusicPathBox.Text = _settings.Config.Get("MUSIC", "path", "");
         MusicEnabledBox.IsChecked = _settings.Config.GetBool("MUSIC", "enabled", false);
-        MusicVolumeBox.Value = ClampDouble(_settings.Config.GetInt("MUSIC", "volume", 35), 0, 100);
+        MusicVolumeBox.Value = UiHelpers.ClampDouble(_settings.Config.GetInt("MUSIC", "volume", 35), 0, 100);
         MusicPauseOnLaunchBox.IsChecked = _settings.Config.GetBool("MUSIC", "pause_on_launch", true);
         UpdateManifestBox.Text = _settings.Config.Get("UPDATE", "manifest_url", AppConstants.DefaultUpdateManifestUrl);
         UpdateAutoCheckBox.IsChecked = _settings.Config.GetBool("UPDATE", "auto_check", true);
@@ -182,9 +182,9 @@ public sealed partial class SettingsPage : Page
         var modrinthCdnBase = NormalizeOptionalHttpBase(ModrinthCdnBaseBox.Text, "Modrinth CDN");
         _settings.Config.Set("GAME", "directory", GameDirectoryBox.Text.Trim());
         _settings.Config.Set("JAVA", "path", JavaPathBox.Text.Trim());
-        _settings.Config.Set("DOWNLOAD", "max_core_threads", NumberValue(CoreThreadsBox, 1, 64, 12).ToString());
-        _settings.Config.Set("DOWNLOAD", "max_asset_threads", NumberValue(AssetThreadsBox, 1, 96, 24).ToString());
-        _settings.Config.Set("DOWNLOAD", "speed_limit_kbps", NumberValue(SpeedLimitBox, 0, 1_048_576, 0).ToString());
+        _settings.Config.Set("DOWNLOAD", "max_core_threads", UiHelpers.NumberValue(CoreThreadsBox, 1, 64, 12).ToString());
+        _settings.Config.Set("DOWNLOAD", "max_asset_threads", UiHelpers.NumberValue(AssetThreadsBox, 1, 96, 24).ToString());
+        _settings.Config.Set("DOWNLOAD", "speed_limit_kbps", UiHelpers.NumberValue(SpeedLimitBox, 0, 1_048_576, 0).ToString());
         _settings.Config.Set("DOWNLOAD", "cache_strategy", ComboValue(CacheStrategyBox, "reuse"));
         _settings.Config.Set("DOWNLOAD", "mirror_source", ComboValue(MirrorBox, "official"));
         _settings.Config.Set("DOWNLOAD", "modrinth_api_base", modrinthApiBase);
@@ -201,9 +201,9 @@ public sealed partial class SettingsPage : Page
         _settings.Config.Set("UPDATE", "auto_check", (UpdateAutoCheckBox.IsChecked == true).ToString());
         _settings.SaveConfig();
 
-        CoreThreadsBox.Value = ClampDouble(_settings.Config.GetInt("DOWNLOAD", "max_core_threads", 12), 1, 64);
-        AssetThreadsBox.Value = ClampDouble(_settings.Config.GetInt("DOWNLOAD", "max_asset_threads", 24), 1, 96);
-        SpeedLimitBox.Value = ClampDouble(_settings.Config.GetInt("DOWNLOAD", "speed_limit_kbps", 0), 0, 1_048_576);
+        CoreThreadsBox.Value = UiHelpers.ClampDouble(_settings.Config.GetInt("DOWNLOAD", "max_core_threads", 12), 1, 64);
+        AssetThreadsBox.Value = UiHelpers.ClampDouble(_settings.Config.GetInt("DOWNLOAD", "max_asset_threads", 24), 1, 96);
+        SpeedLimitBox.Value = UiHelpers.ClampDouble(_settings.Config.GetInt("DOWNLOAD", "speed_limit_kbps", 0), 0, 1_048_576);
         ModrinthApiBaseBox.Text = modrinthApiBase;
         ModrinthCdnBaseBox.Text = modrinthCdnBase;
     }
@@ -257,7 +257,7 @@ public sealed partial class SettingsPage : Page
         IReadOnlyList<string> candidates;
         try
         {
-            candidates = await Task.Run(() => FindJavaCandidates(gameDirectory, selectedPath));
+            candidates = await Task.Run(() => JavaDiscovery.FindCandidates(gameDirectory, selectedPath));
         }
         catch (Exception exc)
         {
@@ -368,7 +368,7 @@ public sealed partial class SettingsPage : Page
             var played = MusicPlaybackService.Apply(
                 MusicPathBox.Text.Trim(),
                 MusicEnabledBox.IsChecked == true,
-                NumberValue(MusicVolumeBox, 0, 100, 35));
+                UiHelpers.NumberValue(MusicVolumeBox, 0, 100, 35));
             if (played)
             {
                 if (showFeedback)
@@ -406,7 +406,7 @@ public sealed partial class SettingsPage : Page
     {
         _settings.Config.Set("MUSIC", "path", MusicPathBox.Text.Trim());
         _settings.Config.Set("MUSIC", "enabled", (MusicEnabledBox.IsChecked == true).ToString());
-        _settings.Config.Set("MUSIC", "volume", NumberValue(MusicVolumeBox, 0, 100, 35).ToString());
+        _settings.Config.Set("MUSIC", "volume", UiHelpers.NumberValue(MusicVolumeBox, 0, 100, 35).ToString());
         _settings.Config.Set("MUSIC", "pause_on_launch", (MusicPauseOnLaunchBox.IsChecked == true).ToString());
     }
 
@@ -646,19 +646,7 @@ public sealed partial class SettingsPage : Page
         combo.SelectedIndex = 0;
     }
 
-    private static int NumberValue(NumberBox box, int min, int max, int fallback)
-    {
-        if (double.IsNaN(box.Value))
-        {
-            return fallback;
-        }
-
-        return Math.Clamp((int)Math.Round(box.Value), min, max);
-    }
-
-    private static double ClampDouble(int value, int min, int max) => Math.Clamp(value, min, max);
-
-    private void SetUpdateStatus(string message)
+            private void SetUpdateStatus(string message)
     {
         if (UpdateStatusText is not null)
         {
@@ -666,59 +654,7 @@ public sealed partial class SettingsPage : Page
         }
     }
 
-    private static IReadOnlyList<string> FindJavaCandidates(string gameDirectory, string configuredPath)
-    {
-        var candidates = new List<string>();
-        AddJavaCandidate(candidates, configuredPath);
-        AddJavaCandidate(candidates, "java");
-        AddJavaCandidate(candidates, JavaRuntimeService.FindJavaInDirectory(Path.Combine(gameDirectory, "java_runtimes")));
-        // 官方启动器自带的 JRE 在 .minecraft\runtime 下，不在 PATH 里，需单独枚举。
-        foreach (var bundled in JavaRuntimeService.FindBundledRuntimeCandidates())
-        {
-            AddJavaCandidate(candidates, bundled);
-        }
-
-        foreach (var pathDir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            AddJavaCandidate(candidates, Path.Combine(pathDir, OperatingSystem.IsWindows() ? "java.exe" : "java"));
-        }
-
-        if (OperatingSystem.IsWindows())
-        {
-            foreach (var root in new[]
-                     {
-                         Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-                         Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
-                     }.Where(path => !string.IsNullOrWhiteSpace(path)))
-            {
-                AddJavaCandidate(candidates, JavaRuntimeService.FindJavaInDirectory(Path.Combine(root, "Java")));
-                AddJavaCandidate(candidates, JavaRuntimeService.FindJavaInDirectory(Path.Combine(root, "Eclipse Adoptium")));
-                AddJavaCandidate(candidates, JavaRuntimeService.FindJavaInDirectory(Path.Combine(root, "Microsoft")));
-            }
-        }
-
-        return candidates
-            .Where(value => value.Length > 0)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(40)
-            .ToList();
-    }
-
-    private static void AddJavaCandidate(List<string> candidates, string? path)
-    {
-        var value = (path ?? "").Trim();
-        if (value.Length == 0)
-        {
-            return;
-        }
-
-        if (string.Equals(value, "java", StringComparison.OrdinalIgnoreCase) || File.Exists(value))
-        {
-            candidates.Add(value);
-        }
-    }
-
-    private static bool SamePathOrText(string left, string right)
+            private static bool SamePathOrText(string left, string right)
     {
         if (string.Equals(left, right, StringComparison.OrdinalIgnoreCase))
         {

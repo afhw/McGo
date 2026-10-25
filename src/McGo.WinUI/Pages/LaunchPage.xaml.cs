@@ -134,7 +134,7 @@ public sealed partial class LaunchPage : Page
         _resourceMarket.ModrinthCdnBase = _settings.Config.Get("DOWNLOAD", "modrinth_cdn_base", "");
         GameDirectoryBox.Text = _settings.Config.Get("GAME", "directory", AppConstants.DefaultGameDirectory);
         JavaPathBox.Text = _settings.Config.Get("JAVA", "path", "java");
-        MemorySlider.Value = ClampDouble(AppSettings.RecommendedMemoryMb(), 1024, 65536);
+        MemorySlider.Value = UiHelpers.ClampDouble(AppSettings.RecommendedMemoryMb(), 1024, 65536);
         UpdateMemoryControls();
         JavaVersionText.Text = "正在检测 Java...";
         SetJavaDownloadStatus("可自动下载当前版本推荐的 Java 运行时", 0);
@@ -173,7 +173,7 @@ public sealed partial class LaunchPage : Page
 
         var selected = SelectedVersionId;
         var gameDir = GameDirectoryBox.Text.Trim();
-        var category = ComboText(VersionCategoryBox, "全部版本");
+        var category = UiHelpers.ComboText(VersionCategoryBox, "全部版本");
         var request = ++_versionRefreshRequest;
         IReadOnlyList<LocalVersionCandidate> candidates;
         try
@@ -278,14 +278,14 @@ public sealed partial class LaunchPage : Page
         PreLaunchCommandBox.Text = entry["pre_launch_command"]?.GetValue<string>() ?? "";
         var maxMemory = PositiveInt(entry["max_memory_mb"], 0);
         ManualMemoryCheckBox.IsChecked = entry["manual_memory"]?.GetValue<bool>() == true || maxMemory > 0;
-        MemorySlider.Value = ClampDouble(maxMemory > 0 ? maxMemory : AppSettings.RecommendedMemoryMb(), 1024, 65536);
-        MinMemoryBox.Value = ClampDouble(PositiveInt(entry["min_memory_mb"], 0), 0, 65536);
-        WindowWidthBox.Value = ClampDouble(PositiveInt(entry["window_width"], 0), 0, 16384);
-        WindowHeightBox.Value = ClampDouble(PositiveInt(entry["window_height"], 0), 0, 16384);
+        MemorySlider.Value = UiHelpers.ClampDouble(maxMemory > 0 ? maxMemory : AppSettings.RecommendedMemoryMb(), 1024, 65536);
+        MinMemoryBox.Value = UiHelpers.ClampDouble(PositiveInt(entry["min_memory_mb"], 0), 0, 65536);
+        WindowWidthBox.Value = UiHelpers.ClampDouble(PositiveInt(entry["window_width"], 0), 0, 16384);
+        WindowHeightBox.Value = UiHelpers.ClampDouble(PositiveInt(entry["window_height"], 0), 0, 16384);
         RuntimeDirectoryBox.Text = entry["runtime_directory"]?.GetValue<string>() ?? "";
         CustomModsDirectoryBox.Text = entry["mods_directory"]?.GetValue<string>() ?? "";
-        SetComboText(GcStrategyBox, entry["gc_strategy"]?.GetValue<string>() ?? "G1GC");
-        SetComboText(VersionIconBox, entry["icon"]?.GetValue<string>() ?? "自动");
+        UiHelpers.SetComboText(GcStrategyBox, entry["gc_strategy"]?.GetValue<string>() ?? "G1GC");
+        UiHelpers.SetComboText(VersionIconBox, entry["icon"]?.GetValue<string>() ?? "自动");
         UseIsolationCheckBox.IsChecked = entry["use_isolated_directory"]?.GetValue<bool>() ?? false;
         VersionFavoriteCheckBox.IsChecked = entry["favorite"]?.GetValue<bool>() ?? false;
         VersionHiddenCheckBox.IsChecked = entry["hidden"]?.GetValue<bool>() ?? false;
@@ -343,7 +343,7 @@ public sealed partial class LaunchPage : Page
             UpdateLaunchStatus("正在扫描 Java 运行时...", 0, "当前步骤：检测 Java");
         }
 
-        var candidatesTask = Task.Run(() => FindJavaCandidates(gameDirectory, javaPath));
+        var candidatesTask = Task.Run(() => JavaDiscovery.FindCandidates(gameDirectory, javaPath));
         var majorTask = Task.Run(() => JavaRuntimeService.GetJavaMajorVersion(javaPath));
         try
         {
@@ -468,12 +468,12 @@ public sealed partial class LaunchPage : Page
         entry["favorite"] = VersionFavoriteCheckBox.IsChecked == true;
         entry["hidden"] = VersionHiddenCheckBox.IsChecked == true;
         entry["manual_memory"] = ManualMemoryCheckBox.IsChecked == true;
-        entry["max_memory_mb"] = ManualMemoryCheckBox.IsChecked == true ? NumberValue(MemorySlider, 1024, 65536, AppSettings.RecommendedMemoryMb()) : 0;
-        entry["min_memory_mb"] = NumberValue(MinMemoryBox, 0, 65536, 0);
-        entry["window_width"] = NumberValue(WindowWidthBox, 0, 16384, 0);
-        entry["window_height"] = NumberValue(WindowHeightBox, 0, 16384, 0);
-        entry["gc_strategy"] = ComboText(GcStrategyBox, "G1GC");
-        entry["icon"] = ComboText(VersionIconBox, "自动");
+        entry["max_memory_mb"] = ManualMemoryCheckBox.IsChecked == true ? UiHelpers.NumberValue(MemorySlider, 1024, 65536, AppSettings.RecommendedMemoryMb()) : 0;
+        entry["min_memory_mb"] = UiHelpers.NumberValue(MinMemoryBox, 0, 65536, 0);
+        entry["window_width"] = UiHelpers.NumberValue(WindowWidthBox, 0, 16384, 0);
+        entry["window_height"] = UiHelpers.NumberValue(WindowHeightBox, 0, 16384, 0);
+        entry["gc_strategy"] = UiHelpers.ComboText(GcStrategyBox, "G1GC");
+        entry["icon"] = UiHelpers.ComboText(VersionIconBox, "自动");
         entry["runtime_directory"] = RuntimeDirectoryBox.Text.Trim();
         entry["mods_directory"] = CustomModsDirectoryBox.Text.Trim();
         _versionSettingsService.SaveVersionSettings(_versionSettings);
@@ -1303,7 +1303,7 @@ public sealed partial class LaunchPage : Page
         selectedAccount ??= SelectedAccount();
         var options = VersionSettingsService.LaunchOptionsForVersion(GameDirectoryBox.Text.Trim(), _versionSettings, versionId, _settings.Config.GetBool("GAME", "enable_resource_isolation", true));
         var maxMemory = ManualMemoryCheckBox.IsChecked == true
-            ? NumberValue(MemorySlider, 1024, 65536, AppSettings.RecommendedMemoryMb())
+            ? UiHelpers.NumberValue(MemorySlider, 1024, 65536, AppSettings.RecommendedMemoryMb())
             : options.MaxMemoryMb;
         var extraJvmArgs = new List<string>();
         if (selectedAccount is not null)
@@ -1326,7 +1326,7 @@ public sealed partial class LaunchPage : Page
             MaxMemoryMb: maxMemory,
             WindowWidth: options.WindowWidth,
             WindowHeight: options.WindowHeight,
-            GcStrategy: ComboText(GcStrategyBox, options.GcStrategy)));
+            GcStrategy: UiHelpers.ComboText(GcStrategyBox, options.GcStrategy)));
     }
 
     private void RefreshQuickPlayWorlds(object sender, RoutedEventArgs e)
@@ -1389,7 +1389,7 @@ public sealed partial class LaunchPage : Page
         UpdateMemoryControls();
         if (!_loadingVersion && ManualMemoryCheckBox.IsChecked == true && MemorySlider.Value < 1024)
         {
-            MemorySlider.Value = ClampDouble(AppSettings.RecommendedMemoryMb(), 1024, 65536);
+            MemorySlider.Value = UiHelpers.ClampDouble(AppSettings.RecommendedMemoryMb(), 1024, 65536);
         }
     }
 
@@ -1408,7 +1408,7 @@ public sealed partial class LaunchPage : Page
         var manual = ManualMemoryCheckBox.IsChecked == true;
         MemorySlider.IsEnabled = manual;
         MemoryLabel.Text = manual
-            ? $"最大内存：{NumberValue(MemorySlider, 1024, 65536, AppSettings.RecommendedMemoryMb())} MB"
+            ? $"最大内存：{UiHelpers.NumberValue(MemorySlider, 1024, 65536, AppSettings.RecommendedMemoryMb())} MB"
             : "最大内存：自动";
     }
 
@@ -1645,83 +1645,7 @@ public sealed partial class LaunchPage : Page
         return $"{name} ({type})";
     }
 
-    private static string ComboText(ComboBox combo, string fallback)
-    {
-        if (combo.SelectedItem is ComboBoxItem item)
-        {
-            return item.Content?.ToString() ?? fallback;
-        }
-
-        return combo.SelectedItem?.ToString() ?? fallback;
-    }
-
-    private static void SetComboText(ComboBox combo, string value)
-    {
-        foreach (var item in combo.Items.OfType<ComboBoxItem>())
-        {
-            if (string.Equals(item.Content?.ToString(), value, StringComparison.OrdinalIgnoreCase))
-            {
-                combo.SelectedItem = item;
-                return;
-            }
-        }
-
-        combo.SelectedIndex = 0;
-    }
-
-    private static IReadOnlyList<string> FindJavaCandidates(string gameDirectory, string configuredPath)
-    {
-        var candidates = new List<string>();
-        AddJavaCandidate(candidates, configuredPath);
-        AddJavaCandidate(candidates, "java");
-        AddJavaCandidate(candidates, JavaRuntimeService.FindJavaInDirectory(Path.Combine(gameDirectory, "java_runtimes")));
-        // 官方启动器自带的运行时（.minecraft\runtime\...），用户装了正版一般都有
-        foreach (var bundled in JavaRuntimeService.FindBundledRuntimeCandidates())
-        {
-            AddJavaCandidate(candidates, bundled);
-        }
-
-        foreach (var pathDir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            AddJavaCandidate(candidates, Path.Combine(pathDir, OperatingSystem.IsWindows() ? "java.exe" : "java"));
-        }
-
-        if (OperatingSystem.IsWindows())
-        {
-            foreach (var root in new[]
-                     {
-                         Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-                         Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
-                     }.Where(path => !string.IsNullOrWhiteSpace(path)))
-            {
-                AddJavaCandidate(candidates, JavaRuntimeService.FindJavaInDirectory(Path.Combine(root, "Java")));
-                AddJavaCandidate(candidates, JavaRuntimeService.FindJavaInDirectory(Path.Combine(root, "Eclipse Adoptium")));
-                AddJavaCandidate(candidates, JavaRuntimeService.FindJavaInDirectory(Path.Combine(root, "Microsoft")));
-            }
-        }
-
-        return candidates
-            .Where(value => value.Length > 0)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(40)
-            .ToList();
-    }
-
-    private static void AddJavaCandidate(List<string> candidates, string? path)
-    {
-        var value = (path ?? "").Trim();
-        if (value.Length == 0)
-        {
-            return;
-        }
-
-        if (string.Equals(value, "java", StringComparison.OrdinalIgnoreCase) || File.Exists(value))
-        {
-            candidates.Add(value);
-        }
-    }
-
-    private static bool SamePathOrText(string left, string right)
+                    private static bool SamePathOrText(string left, string right)
     {
         if (string.Equals(left, right, StringComparison.OrdinalIgnoreCase))
         {
@@ -1741,29 +1665,7 @@ public sealed partial class LaunchPage : Page
     private static int PositiveInt(JsonNode? value, int fallback)
         => int.TryParse(value?.ToString(), out var parsed) && parsed >= 0 ? parsed : fallback;
 
-    private static int NumberValue(NumberBox box, int min, int max, int fallback)
-    {
-        if (double.IsNaN(box.Value))
-        {
-            return fallback;
-        }
-
-        return Math.Clamp((int)Math.Round(box.Value), min, max);
-    }
-
-    private static int NumberValue(Slider slider, int min, int max, int fallback)
-    {
-        if (double.IsNaN(slider.Value))
-        {
-            return fallback;
-        }
-
-        return Math.Clamp((int)Math.Round(slider.Value / 256) * 256, min, max);
-    }
-
-    private static double ClampDouble(int value, int min, int max) => Math.Clamp(value, min, max);
-
-    private sealed record LocalVersionCandidate(string VersionId, string DetectedType);
+                private sealed record LocalVersionCandidate(string VersionId, string DetectedType);
 
     // 断点必须按页面实际宽度计算：StackPanel 会按内容收缩，
     // 用它自己的 ActualWidth 会在宽屏上误判成窄屏。

@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.Json.Nodes;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -155,8 +155,8 @@ public sealed partial class ResourcesPage : Page
         SetResourceBusy(true, "正在搜索资源...");
         try
         {
-            var source = ComboText(ResourceSourceBox, "modrinth");
-            if (ComboText(ResourceTypeBox, "mod") == "mod" && !VersionSupportsModManagement(CurrentResourceVersion()))
+            var source = UiHelpers.ComboText(ResourceSourceBox, "modrinth");
+            if (UiHelpers.ComboText(ResourceTypeBox, "mod") == "mod" && !VersionSupportsModManagement(CurrentResourceVersion()))
             {
                 ShowResourceMessage("Mod 安装目标需要选择 Fabric、Forge、NeoForge 或 OptiFine 版本。");
                 ResourceStatusText.Text = "当前目标版本不支持 Mod。";
@@ -171,7 +171,7 @@ public sealed partial class ResourcesPage : Page
 
             if (source == "local")
             {
-                var localHits = ResourceMarketService.ListLocalResources(ResourceQueryBox.Text.Trim(), ComboText(ResourceTypeBox, "mod"), CurrentResourceTargetDir())
+                var localHits = ResourceMarketService.ListLocalResources(ResourceQueryBox.Text.Trim(), UiHelpers.ComboText(ResourceTypeBox, "mod"), CurrentResourceTargetDir())
                     .Select(LocalResourceToHit)
                     .ToList();
                 SetResourceResults(localHits);
@@ -190,10 +190,10 @@ public sealed partial class ResourcesPage : Page
 
             var hits = await _resourceMarket.SearchModrinthResourcesAsync(
                 ResourceQueryBox.Text.Trim(),
-                ComboText(ResourceTypeBox, "mod"),
+                UiHelpers.ComboText(ResourceTypeBox, "mod"),
                 ResourceGameVersionBox.Text.Trim(),
                 ResourceLoaderBox.Text.Trim(),
-                index: ComboText(ResourceSortBox, "relevance"));
+                index: UiHelpers.ComboText(ResourceSortBox, "relevance"));
             var hitObjects = hits.OfType<JsonObject>().ToList();
             SetResourceResults(hitObjects);
             var relaxed = hitObjects.Any(hit => hit["relaxed_search"]?.GetValue<bool>() == true);
@@ -202,7 +202,7 @@ public sealed partial class ResourcesPage : Page
             if (hitObjects.Count > 0)
             {
                 var generation = _resourceSearchGeneration;
-                _ = VerifyResourceCompatibilityAsync(generation, ComboText(ResourceTypeBox, "mod"), ResourceGameVersionBox.Text.Trim(), ResourceLoaderBox.Text.Trim());
+                _ = VerifyResourceCompatibilityAsync(generation, UiHelpers.ComboText(ResourceTypeBox, "mod"), ResourceGameVersionBox.Text.Trim(), ResourceLoaderBox.Text.Trim());
             }
         }
         catch (Exception exc)
@@ -224,7 +224,7 @@ public sealed partial class ResourcesPage : Page
             return;
         }
 
-        var resourceType = ComboText(ResourceTypeBox, "mod");
+        var resourceType = UiHelpers.ComboText(ResourceTypeBox, "mod");
         if (resourceType == "mod" && !VersionSupportsModManagement(CurrentResourceVersion()))
         {
             ShowResourceMessage("当前目标版本不支持 Mod 管理，请切换到 Fabric、Forge、NeoForge 或 OptiFine 版本。");
@@ -400,7 +400,7 @@ public sealed partial class ResourcesPage : Page
         {
             var targetDir = CurrentResourceTargetDir();
             TargetDirBox.Text = targetDir;
-            var items = ResourceMarketService.ListLocalResources(ResourceQueryBox.Text.Trim(), ComboText(ResourceTypeBox, "mod"), targetDir);
+            var items = ResourceMarketService.ListLocalResources(ResourceQueryBox.Text.Trim(), UiHelpers.ComboText(ResourceTypeBox, "mod"), targetDir);
             _localResourcesByLabel.Clear();
             var labels = new List<string>();
             foreach (var item in items)
@@ -504,7 +504,7 @@ public sealed partial class ResourcesPage : Page
                     var projectId = hit["project_id"]?.GetValue<string>() ?? hit["slug"]?.GetValue<string>() ?? "";
                     var detailPayload = await _resourceMarket.GetModrinthResourceDetailAsync(
                         projectId,
-                        ComboText(ResourceTypeBox, "mod"),
+                        UiHelpers.ComboText(ResourceTypeBox, "mod"),
                         ResourceGameVersionBox.Text.Trim(),
                         ResourceLoaderBox.Text.Trim());
                     if (key == ResourceDetailKey(SelectedResourceHit()))
@@ -767,7 +767,7 @@ public sealed partial class ResourcesPage : Page
 
         var gameDir = _settings.Config.Get("GAME", "directory", AppConstants.DefaultGameDirectory);
         var versionId = _launcher.GetLocalVersions(gameDir).FirstOrDefault() ?? "";
-        return ResourceMarketService.ResourceDirectoryForType(gameDir, _versionSettings, versionId, ComboText(ResourceTypeBox, "mod"), _settings.Config.GetBool("GAME", "enable_resource_isolation", true));
+        return ResourceMarketService.ResourceDirectoryForType(gameDir, _versionSettings, versionId, UiHelpers.ComboText(ResourceTypeBox, "mod"), _settings.Config.GetBool("GAME", "enable_resource_isolation", true));
     }
 
     private void ResourceSourceChanged(object sender, SelectionChangedEventArgs e)
@@ -777,7 +777,7 @@ public sealed partial class ResourcesPage : Page
             return;
         }
 
-        var source = ComboText(ResourceSourceBox, "modrinth");
+        var source = UiHelpers.ComboText(ResourceSourceBox, "modrinth");
         var isModrinth = source == "modrinth";
         ResourceSortBox.IsEnabled = isModrinth;
         InstallResourceDependenciesCheckBox.IsEnabled = isModrinth;
@@ -792,7 +792,7 @@ public sealed partial class ResourcesPage : Page
         ResourceDetailButton.IsEnabled = !busy;
         ResolveDependenciesButton.IsEnabled = !busy;
         InstallMissingDependenciesButton.IsEnabled = !busy;
-        InstallResourceButton.IsEnabled = !busy && ComboText(ResourceSourceBox, "modrinth") == "modrinth";
+        InstallResourceButton.IsEnabled = !busy && UiHelpers.ComboText(ResourceSourceBox, "modrinth") == "modrinth";
         ResourceProgressBar.IsIndeterminate = busy && indeterminate;
         if (!busy)
         {
@@ -834,7 +834,7 @@ public sealed partial class ResourcesPage : Page
         }
 
         var selected = CurrentResourceVersion();
-        var resourceType = ComboText(ResourceTypeBox, "mod");
+        var resourceType = UiHelpers.ComboText(ResourceTypeBox, "mod");
         var versions = resourceType == "mod"
             ? _allLocalVersions.Where(VersionSupportsModManagement).ToList()
             : _allLocalVersions.ToList();
@@ -872,7 +872,7 @@ public sealed partial class ResourcesPage : Page
         }
 
         var versionId = CurrentResourceVersion();
-        var resourceType = ComboText(ResourceTypeBox, "mod");
+        var resourceType = UiHelpers.ComboText(ResourceTypeBox, "mod");
         ResourceTargetVersionText.Text = versionId.Length == 0
             ? $"未选择版本 · {resourceType}"
             : $"{versionId} · {resourceType}";
@@ -907,8 +907,8 @@ public sealed partial class ResourcesPage : Page
     {
         var gameDir = _settings.Config.Get("GAME", "directory", AppConstants.DefaultGameDirectory);
         return versionId.Length == 0
-            ? ResourceMarketService.ResourceDirectoryForType(gameDir, _versionSettings, "", ComboText(ResourceTypeBox, "mod"), _settings.Config.GetBool("GAME", "enable_resource_isolation", true))
-            : ResourceMarketService.ResourceDirectoryForType(gameDir, _versionSettings, versionId, ComboText(ResourceTypeBox, "mod"), _settings.Config.GetBool("GAME", "enable_resource_isolation", true));
+            ? ResourceMarketService.ResourceDirectoryForType(gameDir, _versionSettings, "", UiHelpers.ComboText(ResourceTypeBox, "mod"), _settings.Config.GetBool("GAME", "enable_resource_isolation", true))
+            : ResourceMarketService.ResourceDirectoryForType(gameDir, _versionSettings, versionId, UiHelpers.ComboText(ResourceTypeBox, "mod"), _settings.Config.GetBool("GAME", "enable_resource_isolation", true));
     }
 
     private string ModrinthLoaderForVersion(string gameDir, string versionId)
@@ -933,17 +933,7 @@ public sealed partial class ResourcesPage : Page
             _ => node.ToJsonString(),
         };
 
-    private static string ComboText(ComboBox combo, string fallback)
-    {
-        if (combo.SelectedItem is ComboBoxItem item)
-        {
-            return item.Content?.ToString() ?? fallback;
-        }
-
-        return combo.SelectedItem?.ToString() ?? fallback;
-    }
-
-    internal void RunSmokeChecks()
+        internal void RunSmokeChecks()
     {
         if (ResourceSectionBar.Items.Count != 2)
         {

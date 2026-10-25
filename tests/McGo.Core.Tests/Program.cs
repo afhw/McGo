@@ -467,6 +467,21 @@ runner.Add("Launcher infers Java baseline by Minecraft generation", () =>
 
 });
 
+runner.Add("Java discovery unifies candidates and picks exact major", () =>
+{
+    // 重构点：启动页和设置页原本各有一份候选枚举，这里验证统一后的行为。
+    var candidates = JavaDiscovery.FindCandidates("nonexistent-game-dir", "java");
+    Assert.True(candidates.Count > 0);
+    Assert.Equal(candidates.Count, candidates.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+
+    // 精确匹配：找不到对应大版本时返回 null，绝不放行"高版本也能跑"
+    Assert.Equal(null, JavaDiscovery.PickMatchingMajor(["java"], 99));
+    Assert.Equal(null, JavaDiscovery.PickMatchingMajor([], 17));
+
+    // 描述串在没有可用 Java 时也要给出明确文字，不能是空串
+    Assert.Equal("未检测到可用 Java", JavaDiscovery.DescribeDetectedMajors([]));
+});
+
 runner.Add("Base Minecraft version ignores assetIndex ids", () =>
 {
     // 真实事故：1.8.9 的 assetIndex.id 就是 "1.8"，1.16.5 的甚至是纯数字 "5"。

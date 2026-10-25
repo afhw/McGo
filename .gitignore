@@ -1,4 +1,4 @@
-/qodana.yaml
+﻿/qodana.yaml
 /launcher_config.ini
 /venv/
 /logs/
@@ -1607,3 +1607,6 @@ cython_debug/
 /webside/.idea/vcs.xml
 /webside/.idea/webside.iml
 /屏幕截图 2026-05-30 185207.png
+
+# 本地配置备份（含绝对路径，不入库）
+launcher_config.ini.bak

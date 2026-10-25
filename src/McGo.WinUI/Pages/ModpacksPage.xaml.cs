@@ -1,4 +1,4 @@
-using System.Text.Json.Nodes;
+﻿using System.Text.Json.Nodes;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using McGo.Core.App;
@@ -84,7 +84,7 @@ public sealed partial class ModpacksPage : Page
                 PackTargetBox.Text = target;
             }
 
-            var added = _modpacks.ExportModpack(GameDir(), _versionSettings, versionId, target, ComboText(PackFormatBox, "modrinth"), _settings.Config.GetBool("GAME", "enable_resource_isolation", true));
+            var added = _modpacks.ExportModpack(GameDir(), _versionSettings, versionId, target, UiHelpers.ComboText(PackFormatBox, "modrinth"), _settings.Config.GetBool("GAME", "enable_resource_isolation", true));
             ShowPackOutput($"已导出 {added} 个文件：{target}");
         }
         catch (Exception exc)
@@ -453,7 +453,7 @@ public sealed partial class ModpacksPage : Page
 
     private async void ChoosePackTarget(object sender, RoutedEventArgs e)
     {
-        var extension = ComboText(PackFormatBox, "modrinth") switch
+        var extension = UiHelpers.ComboText(PackFormatBox, "modrinth") switch
         {
             "curseforge" => ".zip",
             "zip" => ".zip",
@@ -679,17 +679,7 @@ public sealed partial class ModpacksPage : Page
     private string GameDir()
         => _settings.Config.Get("GAME", "directory", AppConstants.DefaultGameDirectory);
 
-    private static string ComboText(ComboBox combo, string fallback)
-    {
-        if (combo.SelectedItem is ComboBoxItem item)
-        {
-            return item.Content?.ToString() ?? fallback;
-        }
-
-        return combo.SelectedItem?.ToString() ?? fallback;
-    }
-
-    private static int NumberPort(NumberBox box, int fallback)
+        private static int NumberPort(NumberBox box, int fallback)
     {
         if (double.IsNaN(box.Value))
         {

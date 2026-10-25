@@ -10,7 +10,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationIcon>..\McGo.WinUI\Assets\AppIcon.ico</ApplicationIcon>
     <AssemblyName>McGo.SetupBootstrap</AssemblyName>
-    <Version>1.1.0</Version>
+    <Version>1.1.1</Version>
     <AssemblyTitle>McGo 安装程序</AssemblyTitle>
     <Product>McGo</Product>
     <Description>McGo C# / WinUI 3 安装程序</Description>

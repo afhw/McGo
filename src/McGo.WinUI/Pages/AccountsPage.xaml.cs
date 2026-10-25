@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text.Json.Nodes;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -658,17 +658,7 @@ public sealed partial class AccountsPage : Page
         return $"{name} ({type})";
     }
 
-    private static string ComboText(ComboBox combo, string fallback)
-    {
-        if (combo.SelectedItem is ComboBoxItem item)
-        {
-            return item.Content?.ToString() ?? fallback;
-        }
-
-        return combo.SelectedItem?.ToString() ?? fallback;
-    }
-
-    private string SelectedLoginMode()
+        private string SelectedLoginMode()
         => LoginModeBox.SelectedItem?.Tag?.ToString() ?? "overview";
 
     internal void RunSmokeChecks()
