@@ -8,80 +8,35 @@
 
 
     <ResourceDictionary.ThemeDictionaries>
-        <!-- ============================ 深色 ============================ -->
-        <ResourceDictionary x:Key="Default">
-            <Color x:Key="SystemAccentColor">#FF1370F3</Color>
-            <Color x:Key="SystemAccentColorLight1">#FF2E82F6</Color>
-            <Color x:Key="SystemAccentColorLight2">#FF4C93F8</Color>
-            <Color x:Key="SystemAccentColorLight3">#FF6AA4FA</Color>
-            <Color x:Key="SystemAccentColorDark1">#FF0F5FD4</Color>
-            <Color x:Key="SystemAccentColorDark2">#FF0C4EB0</Color>
-            <Color x:Key="SystemAccentColorDark3">#FF093D8C</Color>
-
-            <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="#FF1370F3" />
-            <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="#F01370F3" />
-            <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#D91370F3" />
-            <SolidColorBrush x:Key="AccentFillColorDisabledBrush" Color="#4D1370F3" />
-            <SolidColorBrush x:Key="TextOnAccentFillColorPrimaryBrush" Color="#FFFFFFFF" />
-            <SolidColorBrush x:Key="TextOnAccentFillColorSecondaryBrush" Color="#EBFFFFFF" />
-            <SolidColorBrush x:Key="TextOnAccentFillColorDisabledBrush" Color="#80FFFFFF" />
-            <SolidColorBrush x:Key="TextOnAccentFillColorSelectedTextBrush" Color="#FFFFFFFF" />
-            <SolidColorBrush x:Key="AccentTextFillColorPrimaryBrush" Color="#FF5C9BF8" />
-            <SolidColorBrush x:Key="AccentTextFillColorSecondaryBrush" Color="#FF7DB1FA" />
-            <SolidColorBrush x:Key="AccentTextFillColorTertiaryBrush" Color="#FF9CC5FB" />
-            <SolidColorBrush x:Key="AccentTextFillColorDisabledBrush" Color="#5CFFFFFF" />
-            <SolidColorBrush x:Key="FocusStrokeColorOuterBrush" Color="#FFFFFFFF" />
-            <SolidColorBrush x:Key="FocusStrokeColorInnerBrush" Color="#FF000000" />
-            <SolidColorBrush x:Key="NavigationViewSelectionIndicatorForeground" Color="#FF1370F3" />
-
-            <SolidColorBrush x:Key="McgoAccentSoftBrush" Color="#261370F3" />
-            <SolidColorBrush x:Key="McgoAccentSoftBorderBrush" Color="#4D1370F3" />
-            <SolidColorBrush x:Key="McgoDividerBrush" Color="#14FFFFFF" />
-            <SolidColorBrush x:Key="McgoIconForegroundBrush" Color="#FF6FA8F9" />
-            <SolidColorBrush x:Key="McgoHeroBorderBrush" Color="#3D1370F3" />
-            <LinearGradientBrush x:Key="McgoHeroBrush" StartPoint="0,0" EndPoint="1,1">
-                <GradientStop Color="#3D1370F3" Offset="0" />
-                <GradientStop Color="#171370F3" Offset="0.55" />
-                <GradientStop Color="#00000000" Offset="1" />
-            </LinearGradientBrush>
+        <ResourceDictionary x:Key="Dark">
+            <StaticResource x:Key="McgoAccentSoftBrush" ResourceKey="SubtleFillColorSecondaryBrush" />
+            <StaticResource x:Key="McgoAccentSoftBorderBrush" ResourceKey="CardStrokeColorDefaultBrush" />
+            <StaticResource x:Key="McgoDividerBrush" ResourceKey="DividerStrokeColorDefaultBrush" />
+            <StaticResource x:Key="McgoIconForegroundBrush" ResourceKey="AccentTextFillColorPrimaryBrush" />
+            <StaticResource x:Key="McgoHeroBorderBrush" ResourceKey="CardStrokeColorDefaultBrush" />
+            <StaticResource x:Key="McgoHeroBrush" ResourceKey="CardBackgroundFillColorDefaultBrush" />
+            <StaticResource x:Key="McgoWindowBrush" ResourceKey="LayerFillColorDefaultBrush" />
+            <StaticResource x:Key="McgoSidebarBrush" ResourceKey="SolidBackgroundFillColorBaseBrush" />
         </ResourceDictionary>
-
-        <!-- ============================ 浅色 ============================ -->
         <ResourceDictionary x:Key="Light">
-            <Color x:Key="SystemAccentColor">#FF1370F3</Color>
-            <Color x:Key="SystemAccentColorLight1">#FF2E82F6</Color>
-            <Color x:Key="SystemAccentColorLight2">#FF4C93F8</Color>
-            <Color x:Key="SystemAccentColorLight3">#FF6AA4FA</Color>
-            <Color x:Key="SystemAccentColorDark1">#FF0F5FD4</Color>
-            <Color x:Key="SystemAccentColorDark2">#FF0C4EB0</Color>
-            <Color x:Key="SystemAccentColorDark3">#FF093D8C</Color>
-
-            <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="#FF1370F3" />
-            <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="#F01370F3" />
-            <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#D91370F3" />
-            <SolidColorBrush x:Key="AccentFillColorDisabledBrush" Color="#4D1370F3" />
-            <SolidColorBrush x:Key="TextOnAccentFillColorPrimaryBrush" Color="#FFFFFFFF" />
-            <SolidColorBrush x:Key="TextOnAccentFillColorSecondaryBrush" Color="#EBFFFFFF" />
-            <SolidColorBrush x:Key="TextOnAccentFillColorDisabledBrush" Color="#80FFFFFF" />
-            <SolidColorBrush x:Key="TextOnAccentFillColorSelectedTextBrush" Color="#FFFFFFFF" />
-            <SolidColorBrush x:Key="AccentTextFillColorPrimaryBrush" Color="#FF0F5FD4" />
-            <SolidColorBrush x:Key="AccentTextFillColorSecondaryBrush" Color="#FF0C4EB0" />
-            <SolidColorBrush x:Key="AccentTextFillColorTertiaryBrush" Color="#FF093D8C" />
-            <SolidColorBrush x:Key="AccentTextFillColorDisabledBrush" Color="#5C000000" />
-            <SolidColorBrush x:Key="FocusStrokeColorOuterBrush" Color="#FF000000" />
-            <SolidColorBrush x:Key="FocusStrokeColorInnerBrush" Color="#FFFFFFFF" />
-            <SolidColorBrush x:Key="NavigationViewSelectionIndicatorForeground" Color="#FF1370F3" />
-
-            <SolidColorBrush x:Key="McgoAccentSoftBrush" Color="#141370F3" />
-            <SolidColorBrush x:Key="McgoAccentSoftBorderBrush" Color="#331370F3" />
-            <SolidColorBrush x:Key="McgoDividerBrush" Color="#14000000" />
-            <SolidColorBrush x:Key="McgoIconForegroundBrush" Color="#FF0F5FD4" />
-            <SolidColorBrush x:Key="McgoHeroBorderBrush" Color="#291370F3" />
-            <LinearGradientBrush x:Key="McgoHeroBrush" StartPoint="0,0" EndPoint="1,1">
-                <GradientStop Color="#291370F3" Offset="0" />
-                <GradientStop Color="#0F1370F3" Offset="0.55" />
-                <GradientStop Color="#001370F3" Offset="1" />
-            </LinearGradientBrush>
+            <StaticResource x:Key="McgoAccentSoftBrush" ResourceKey="SubtleFillColorSecondaryBrush" />
+            <StaticResource x:Key="McgoAccentSoftBorderBrush" ResourceKey="CardStrokeColorDefaultBrush" />
+            <StaticResource x:Key="McgoDividerBrush" ResourceKey="DividerStrokeColorDefaultBrush" />
+            <StaticResource x:Key="McgoIconForegroundBrush" ResourceKey="AccentTextFillColorPrimaryBrush" />
+            <StaticResource x:Key="McgoHeroBorderBrush" ResourceKey="CardStrokeColorDefaultBrush" />
+            <StaticResource x:Key="McgoHeroBrush" ResourceKey="CardBackgroundFillColorDefaultBrush" />
+            <StaticResource x:Key="McgoWindowBrush" ResourceKey="LayerFillColorDefaultBrush" />
+            <StaticResource x:Key="McgoSidebarBrush" ResourceKey="SolidBackgroundFillColorBaseBrush" />
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="HighContrast">
+            <StaticResource x:Key="McgoAccentSoftBrush" ResourceKey="SubtleFillColorSecondaryBrush" />
+            <StaticResource x:Key="McgoAccentSoftBorderBrush" ResourceKey="CardStrokeColorDefaultBrush" />
+            <StaticResource x:Key="McgoDividerBrush" ResourceKey="DividerStrokeColorDefaultBrush" />
+            <StaticResource x:Key="McgoIconForegroundBrush" ResourceKey="AccentTextFillColorPrimaryBrush" />
+            <StaticResource x:Key="McgoHeroBorderBrush" ResourceKey="CardStrokeColorDefaultBrush" />
+            <StaticResource x:Key="McgoHeroBrush" ResourceKey="CardBackgroundFillColorDefaultBrush" />
+            <StaticResource x:Key="McgoWindowBrush" ResourceKey="LayerFillColorDefaultBrush" />
+            <StaticResource x:Key="McgoSidebarBrush" ResourceKey="SolidBackgroundFillColorBaseBrush" />
         </ResourceDictionary>
     </ResourceDictionary.ThemeDictionaries>
 
@@ -114,7 +69,7 @@
         <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
         <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
         <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="CornerRadius" Value="8" />
         <Setter Property="Padding" Value="18" />
     </Style>
 
@@ -125,13 +80,11 @@
         <Setter Property="Padding" Value="20" />
     </Style>
 
-    <!-- 次级卡片：嵌在卡片里的分区 -->
+    <!-- 内部分区用分隔线组织，避免重复的卡片边框。 -->
     <Style x:Key="McgoInsetCardStyle" TargetType="Border">
-        <Setter Property="Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}" />
-        <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
-        <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="CornerRadius" Value="8" />
-        <Setter Property="Padding" Value="14" />
+        <Setter Property="BorderBrush" Value="{ThemeResource McgoDividerBrush}" />
+        <Setter Property="BorderThickness" Value="0,1,0,0" />
+        <Setter Property="Padding" Value="0,16,0,0" />
     </Style>
 
     <!-- 卡片标题 -->
@@ -150,7 +103,7 @@
 
     <!-- 表单标签 -->
     <Style x:Key="McgoFieldLabelStyle" TargetType="TextBlock">
-        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="FontSize" Value="14" />
         <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
         <Setter Property="TextWrapping" Value="Wrap" />
     </Style>

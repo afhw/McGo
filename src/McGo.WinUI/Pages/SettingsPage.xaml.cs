@@ -135,7 +135,7 @@ public sealed partial class SettingsPage : Page
         SetUpdateStatus($"当前 McGo 版本：{AppConstants.AppVersion}");
         SetComboValue(MirrorBox, _settings.Config.Get("DOWNLOAD", "mirror_source", "official"));
         SetComboValue(CacheStrategyBox, _settings.Config.Get("DOWNLOAD", "cache_strategy", "reuse"));
-        SetComboValue(ThemeBox, _settings.Config.Get("UI", "theme", "dark"));
+        SetComboValue(ThemeBox, _settings.Config.Get("UI", "theme", "auto"));
     }
 
     private void AdvancedModeChanged(object sender, RoutedEventArgs e)
@@ -189,7 +189,7 @@ public sealed partial class SettingsPage : Page
         _settings.Config.Set("DOWNLOAD", "mirror_source", ComboValue(MirrorBox, "official"));
         _settings.Config.Set("DOWNLOAD", "modrinth_api_base", modrinthApiBase);
         _settings.Config.Set("DOWNLOAD", "modrinth_cdn_base", modrinthCdnBase);
-        _settings.Config.Set("UI", "theme", ComboValue(ThemeBox, "dark"));
+        _settings.Config.Set("UI", "theme", ComboValue(ThemeBox, "auto"));
         _settings.Config.Set("UI", "theme_image", ThemeImageBox.Text.Trim());
         _settings.Config.Set("UI", "advanced_mode", (AdvancedModeCheckBox.IsChecked == true).ToString());
         _settings.Config.Set("GAME", "enable_resource_isolation", (ResourceIsolationCheckBox.IsChecked == true).ToString());

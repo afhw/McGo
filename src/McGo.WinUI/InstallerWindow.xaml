@@ -8,14 +8,7 @@
         <MicaBackdrop />
     </Window.SystemBackdrop>
 
-    <Grid x:Name="RootGrid" Background="#FF202225" RequestedTheme="Dark">
-        <Grid.Resources>
-            <SolidColorBrush x:Key="TextControlBackground" Color="#FF2A2D31" />
-            <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="#FF303338" />
-            <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="#FF2A2D31" />
-            <SolidColorBrush x:Key="TextControlBorderBrush" Color="#FF50545A" />
-            <SolidColorBrush x:Key="TextControlBorderBrushFocused" Color="#FF4CC2FF" />
-        </Grid.Resources>
+    <Grid x:Name="RootGrid" Background="{ThemeResource LayerFillColorDefaultBrush}" RequestedTheme="Default">
         <Grid.RowDefinitions>
             <RowDefinition Height="48" />
             <RowDefinition Height="*" />
@@ -36,7 +29,7 @@
             <Border
                 Grid.Column="0"
                 Padding="28,30"
-                Background="#FF181A1D">
+                Background="{ThemeResource SolidBackgroundFillColorBaseBrush}">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -197,7 +190,7 @@
                         TextTrimming="CharacterEllipsis" />
                     <StackPanel Grid.Column="1" HorizontalAlignment="Right" Orientation="Horizontal" Spacing="10">
                         <Button x:Name="CancelButton" MinWidth="92" Click="CancelInstaller" Content="取消" />
-                        <Button x:Name="PrimaryButton" MinWidth="112" Click="PrimaryAction" Content="安装" Style="{StaticResource AccentButtonStyle}" />
+                        <Button x:Name="PrimaryButton" MinWidth="112" Click="PrimaryAction" Content="安装" Style="{StaticResource McgoPrimaryButtonStyle}" />
                     </StackPanel>
                 </Grid>
             </Grid>

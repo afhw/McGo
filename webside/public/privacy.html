@@ -6,34 +6,68 @@
     <meta name="description" content="McGo 隐私政策" />
     <title>隐私政策 | McGo</title>
     <style>
-      :root { color-scheme: dark; font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif; background: #101513; color: #f3f7f4; }
+      :root {
+        color-scheme: light dark;
+        font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
+        --background: #F3F3F3;
+        --surface: #FFFFFF;
+        --text: #1A1A1A;
+        --muted: #5C5C5C;
+        --accent: #005A9E;
+        --brand: #0067C0;
+        --on-brand: #FFFFFF;
+        --line: rgba(0, 0, 0, .16);
+        background: var(--background);
+        color: var(--text);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --background: #202020;
+          --surface: #2D2D2D;
+          --text: #FFFFFF;
+          --muted: #D0D0D0;
+          --accent: #4CC2FF;
+          --brand: #4CC2FF;
+          --on-brand: #002B40;
+          --line: rgba(255, 255, 255, .16);
+        }
+      }
+      @supports (color: AccentColor) and (color: AccentColorText) {
+        :root { --brand: AccentColor; --on-brand: AccentColorText; }
+      }
+      ::selection { color: var(--on-brand); background: var(--brand); }
       * { box-sizing: border-box; }
-      body { margin: 0; background: #101513; }
-      header { border-bottom: 1px solid #2b3430; }
+      body { margin: 0; background: var(--background); overflow-wrap: anywhere; }
+      header { border-bottom: 1px solid var(--line); background: var(--surface); }
       nav, main, footer { width: min(100% - 32px, 880px); margin: 0 auto; }
-      nav { display: flex; min-height: 68px; align-items: center; justify-content: space-between; }
-      a { color: #6ee7ad; text-underline-offset: 3px; }
-      .brand { color: #fff; font-size: 20px; font-weight: 800; text-decoration: none; }
+      nav { display: flex; flex-wrap: wrap; gap: 16px; min-height: 68px; align-items: center; justify-content: space-between; }
+      a { color: var(--accent); text-underline-offset: 3px; }
+      a:hover, a:active { color: var(--text); }
+      a:focus-visible { outline: 2px solid var(--text); outline-offset: 4px; }
+      .brand { color: var(--text); font-size: 20px; font-weight: 800; text-decoration: none; }
       main { padding: 64px 0 72px; }
       h1 { margin: 0; font-size: 44px; letter-spacing: 0; }
-      .updated { margin: 12px 0 48px; color: #9da9a3; }
-      section { padding: 28px 0; border-top: 1px solid #2b3430; }
+      .updated { margin: 12px 0 48px; color: var(--muted); }
+      section { padding: 28px 0; border-top: 1px solid var(--line); }
       h2 { margin: 0 0 14px; font-size: 22px; letter-spacing: 0; }
-      p, li { color: #cbd4cf; line-height: 1.75; }
+      p, li { color: var(--muted); line-height: 1.75; }
       ul { margin: 12px 0 0; padding-left: 21px; }
-      footer { padding: 28px 0 44px; border-top: 1px solid #2b3430; color: #9da9a3; font-size: 13px; }
+      footer { padding: 28px 0 44px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
       @media (max-width: 600px) { main { padding-top: 42px; } h1 { font-size: 36px; } }
+      @media (forced-colors: active) {
+        :root { --background: Canvas; --surface: Canvas; --text: CanvasText; --muted: CanvasText; --accent: LinkText; --brand: Highlight; --on-brand: HighlightText; --line: CanvasText; }
+      }
     </style>
   </head>
   <body>
     <header><nav><a class="brand" href="/">McGo</a><a href="/#download">返回下载页</a></nav></header>
     <main>
       <h1>隐私政策</h1>
-      <p class="updated">最后更新：2026 年 7 月 18 日</p>
+      <p class="updated">最后更新：2026 年 11 月 7 日</p>
 
       <section>
         <h2>适用范围</h2>
-        <p>本政策说明 McGo 启动器及官方网站如何处理与用户有关的信息。McGo 是开源软件，不出售用户数据，也不包含自有的广告或行为分析系统。</p>
+        <p>本政策说明 McGo 启动器及官方网站如何处理与用户有关的信息。McGo 是开源软件，不出售用户数据，不使用访问日志建立广告画像；官方网站会从服务器日志生成公开的汇总统计。</p>
       </section>
 
       <section>
@@ -60,7 +94,10 @@
 
       <section>
         <h2>网站日志</h2>
-        <p>官方网站服务器可能为安全、故障排查和容量统计保留常规访问日志，包括访问时间、请求路径、网络地址和浏览器标识。日志不会用于广告画像，并会按照服务器运维需要定期清理。网站可能公开页面访问、独立来源和下载请求的汇总数字，但不会公开网络地址或单个访问者记录。</p>
+        <p>官方网站服务器可能为安全、故障排查和容量统计保留常规访问日志，包括访问时间、请求路径、网络地址和浏览器标识。网站公开页面访问、独立来源和下载请求的汇总数字，不公开网络地址或单个访问者记录；原始访问日志不等同于匿名数据。</p>
+        <p>独立来源是按网络来源去重的统计，不等于实际用户人数。下载请求不代表下载已完成、安装成功或实际使用，重复请求也可能被计入。统计仅覆盖服务器成功读取的日志范围；已统计的累计量会保留，尚未读取便被清理的日志无法恢复。历史访客集合不完整时，会将独立来源明确标为保守下界。</p>
+        <p>为避免重复累计，服务器在非公开数据库中持久保存加密密钥生成的事件指纹、网络地址指纹和计数，不保存原始日志行或明文网络地址。指纹用于统计去重，不能视为原始日志已经匿名化；数据库与密钥仅供网站维护使用，公开统计文件只包含汇总值。</p>
+        <p>下载页显示统计起始时间和数据更新时间，并每 5 分钟尝试获取最新汇总。刷新失败时保留上次可用数据；数据超过 15 分钟未更新或刷新失败时显示陈旧提示。首次获取失败时显示占位符，不使用推测数字。</p>
       </section>
 
       <section>

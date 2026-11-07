@@ -13,19 +13,18 @@
         </Grid.RowDefinitions>
         <ScrollViewer
             x:Name="SettingsLayoutRoot"
+            MaxWidth="960"
             HorizontalContentAlignment="Stretch"
             HorizontalScrollBarVisibility="Disabled"
             HorizontalScrollMode="Disabled"
             VerticalContentAlignment="Top">
             <StackPanel
-                HorizontalAlignment="Left"
-                Padding="24,20,24,20"
-                Spacing="16"
-                MaxWidth="960">
+                HorizontalAlignment="Stretch"
+                Padding="24,16,24,28"
+                Spacing="16">
 
             <StackPanel Spacing="3">
                 <TextBlock Style="{StaticResource McgoPageTitleStyle}" Text="设置" />
-                <TextBlock Style="{StaticResource McgoPageSubtitleStyle}" Text="日常只需要“环境”和“外观与功能”；改完点右下角保存。" />
             </StackPanel>
 
             <SelectorBar
@@ -236,16 +235,16 @@
         <!--  保存条常驻底部，随时可点  -->
         <Border
             Grid.Row="1"
-            Padding="20,10"
+            Padding="0,10"
             Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
             BorderThickness="0,1,0,0">
-            <Grid ColumnSpacing="12">
+            <Grid ColumnSpacing="12" MaxWidth="960" Padding="24,0" HorizontalAlignment="Stretch">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <Button Click="SaveSettings" Style="{StaticResource McgoPrimaryButtonStyle}">
+                <Button Grid.Column="1" Click="SaveSettings" Style="{StaticResource McgoPrimaryButtonStyle}">
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <SymbolIcon Symbol="Save" />
                         <TextBlock FontWeight="SemiBold" Text="保存全部设置" />
@@ -253,7 +252,6 @@
                 </Button>
                 <TextBlock
                     x:Name="StatusText"
-                    Grid.Column="1"
                     VerticalAlignment="Center"
                     Style="{StaticResource McgoCardSubtitleStyle}"
                     TextWrapping="Wrap" />

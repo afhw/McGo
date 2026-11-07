@@ -9,6 +9,8 @@
     mc:Ignorable="d">
     <Grid>
         <ScrollViewer
+            x:Name="OnlineScrollViewer"
+            MaxWidth="1040"
             HorizontalScrollBarVisibility="Disabled"
             HorizontalContentAlignment="Stretch"
             HorizontalScrollMode="Disabled"
@@ -23,12 +25,11 @@
 
             <StackPanel Spacing="3">
                 <TextBlock Style="{StaticResource McgoPageTitleStyle}" Text="联机" />
-                <TextBlock Style="{StaticResource McgoPageSubtitleStyle}" Text="和好友用同一个房间号对上，房主在游戏里开个局域网就能一起玩。" />
             </StackPanel>
 
             <SelectorBar x:Name="OnlineSectionBar" SelectionChanged="OnlineSectionChanged">
-                <SelectorBarItem Text="P2P 隧道" Tag="p2p" />
-                <SelectorBarItem Text="NAT 检测" Tag="nat" />
+                <SelectorBarItem Text="好友联机" Tag="p2p" />
+                <SelectorBarItem Text="连接诊断" Tag="nat" />
                 <SelectorBarItem Text="常用服务器" Tag="servers" />
                 <SelectorBarItem Text="开黑胶囊" Tag="capsule" />
             </SelectorBar>
@@ -39,8 +40,8 @@
 
                     <!--  先选身份，紧接着就是房间号和唯一的主按钮  -->
                     <SelectorBar x:Name="P2PRoleBar" SelectionChanged="P2PRoleChanged">
-                        <SelectorBarItem Text="我是房主" Tag="host" />
-                        <SelectorBarItem Text="我要加入" Tag="guest" />
+                        <SelectorBarItem Text="创建房间" Tag="host" />
+                        <SelectorBarItem Text="加入房间" Tag="guest" />
                     </SelectorBar>
 
                     <Grid x:Name="P2PPrimarySettingsGrid" ColumnSpacing="10" RowSpacing="8">
@@ -88,28 +89,36 @@
                         </StackPanel>
                     </Grid>
 
+                    <StackPanel x:Name="HostPortPanel" Spacing="5">
+                        <NumberBox
+                            x:Name="HostPortBox"
+                            Header="游戏局域网端口"
+                            LargeChange="100"
+                            Maximum="65535"
+                            Minimum="1"
+                            SmallChange="1"
+                            SpinButtonPlacementMode="Compact"
+                            ValueChanged="P2PPortChanged" />
+                    </StackPanel>
+
                     <!--  唯一的主操作：按钮文字由代码按房主/加入者切换  -->
-                    <Grid ColumnSpacing="10">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="1.7*" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
+                    <Grid>
                         <Button
                             x:Name="StartP2PButton"
-                            MinHeight="52"
+                            MinHeight="44"
                             HorizontalAlignment="Stretch"
                             HorizontalContentAlignment="Center"
                             Click="StartSelectedP2P"
                             Content="创建房间"
-                            FontSize="16"
+                            FontSize="14"
                             Style="{StaticResource McgoPrimaryButtonStyle}" />
                         <Button
                             x:Name="StopP2PButton"
-                            Grid.Column="1"
-                            MinHeight="52"
+                            MinHeight="44"
                             HorizontalAlignment="Stretch"
                             Click="StopP2P"
                             Content="停止连接"
+                            Visibility="Collapsed"
                             IsEnabled="False"
                             Style="{StaticResource McgoSecondaryButtonStyle}" />
                     </Grid>
@@ -196,18 +205,7 @@
 
                             <Border Style="{StaticResource McgoDividerStyle}" />
 
-                            <!--  端口随角色切换：房主是局域网端口，加入者是本地监听端口  -->
-                            <StackPanel x:Name="HostPortPanel" Spacing="5">
-                                <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="Minecraft LAN 端口" />
-                                <NumberBox
-                                    x:Name="HostPortBox"
-                                    LargeChange="100"
-                                    Maximum="65535"
-                                    Minimum="1"
-                                    SmallChange="1"
-                                    SpinButtonPlacementMode="Compact"
-                                    ValueChanged="P2PPortChanged" />
-                            </StackPanel>
+                            <!-- 加入者的本地监听端口通常无需修改。 -->
                             <Grid x:Name="JoinPortPanel" ColumnSpacing="8" Visibility="Collapsed">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />

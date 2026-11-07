@@ -137,6 +137,19 @@ public sealed partial class OnlinePage : Page
 
         P2PRoleBar.SelectedItem = P2PRoleBar.Items[0];
 
+        SetP2PRunning(true);
+        if (StartP2PButton.Visibility != Visibility.Collapsed || StopP2PButton.Visibility != Visibility.Visible
+            || P2PRoleBar.IsEnabled || HostPortBox.IsEnabled)
+        {
+            throw new InvalidOperationException("P2P 运行中的操作状态不正确。");
+        }
+        SetP2PRunning(false);
+        if (StartP2PButton.Visibility != Visibility.Visible || StopP2PButton.Visibility != Visibility.Collapsed
+            || !P2PRoleBar.IsEnabled || !HostPortBox.IsEnabled)
+        {
+            throw new InvalidOperationException("P2P 停止后的操作状态不正确。");
+        }
+
         UpdateCapsuleRuntimeDirectory();
     }
 
@@ -144,7 +157,7 @@ public sealed partial class OnlinePage : Page
     {
         OnlineSectionBar.SelectedItem = OnlineSectionBar.Items.OfType<SelectorBarItem>()
             .First(item => string.Equals(item.Tag?.ToString(), section, StringComparison.Ordinal));
-        ResponsiveLayoutRoot.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false });
+        OnlineScrollViewer.ChangeView(0, 0, null, disableAnimation: true);
     }
 
     private void GenerateRoom(object sender, RoutedEventArgs e)
@@ -504,7 +517,9 @@ public sealed partial class OnlinePage : Page
         void Apply()
         {
             StartP2PButton.IsEnabled = !running;
+            StartP2PButton.Visibility = running ? Visibility.Collapsed : Visibility.Visible;
             StopP2PButton.IsEnabled = running;
+            StopP2PButton.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
             P2PRoleBar.IsEnabled = !running;
             RelayHostBox.IsEnabled = !running;
             RelayPortBox.IsEnabled = !running;
@@ -517,9 +532,13 @@ public sealed partial class OnlinePage : Page
             UdpEnabledBox.IsEnabled = !running;
         }
 
-        if (!_dispatcherQueue.TryEnqueue(Apply))
+        if (_dispatcherQueue.HasThreadAccess)
         {
             Apply();
+        }
+        else
+        {
+            _dispatcherQueue.TryEnqueue(Apply);
         }
     }
 

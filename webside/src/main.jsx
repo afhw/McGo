@@ -28,6 +28,8 @@ import {
   Workflow,
 } from 'lucide-react';
 import './styles.css';
+import { usePublicStats } from './usePublicStats.js';
+import { formatStatValue } from './publicStats.js';
 
 const previewDownload = {
   href: '/download/McGo-CSharp-Preview-x64-Setup.exe',
@@ -108,10 +110,22 @@ function useScreenshotRotation() {
   const [active, setActive] = useState(0);
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      setActive((value) => (value + 1) % screenshots.length);
-    }, 5000);
-    return () => window.clearInterval(timer);
+    const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    let timer;
+    const update = () => {
+      window.clearInterval(timer);
+      if (!motion.matches) {
+        timer = window.setInterval(() => {
+          setActive((value) => (value + 1) % screenshots.length);
+        }, 5000);
+      }
+    };
+    update();
+    motion.addEventListener('change', update);
+    return () => {
+      window.clearInterval(timer);
+      motion.removeEventListener('change', update);
+    };
   }, []);
 
   return [active, setActive];
@@ -119,47 +133,26 @@ function useScreenshotRotation() {
 
 function DownloadButton({ download, children, className = '' }) {
   return (
-    <a className={`download-button ${className}`.trim()} href={download.href} download>
+    <a className={`download-button ${className}`.trim()} href={download.href} aria-label={children} download>
       <ArrowDownToLine size={20} />
       <span>{children}</span>
     </a>
   );
 }
 
-function usePublicStats() {
-  const [stats, setStats] = useState(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const response = await fetch(`/stats.json?ts=${Date.now()}`, { cache: 'no-store' });
-        if (!response.ok) throw new Error(`Stats request failed: ${response.status}`);
-        const data = await response.json();
-        if (!cancelled) setStats(data);
-      } catch {
-        if (!cancelled) setStats(null);
-      }
-    };
-
-    load();
-    const timer = window.setInterval(load, 5 * 60 * 1000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, []);
-
-  return stats;
+function StatValue({ value, lowerBound }) {
+  return formatStatValue(value, lowerBound);
 }
 
-function StatValue({ value }) {
-  return Number.isFinite(value) ? new Intl.NumberFormat('zh-CN').format(value) : '--';
+function StatsDate({ value, empty }) {
+  return value
+    ? <time dateTime={value}>{new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Shanghai' }).format(new Date(value))}</time>
+    : empty;
 }
 
 function App() {
   const [active, setActive] = useScreenshotRotation();
-  const stats = usePublicStats();
+  const { stats, status, failed } = usePublicStats();
   const current = screenshots[active];
 
   return (
@@ -262,13 +255,27 @@ function App() {
           <p>C# 版本通过 WinUI 3 安装器部署；需要免安装体验时，继续使用稳定版。</p>
           <div className="public-stats" aria-label="公开使用统计">
             <div><Eye size={18} /><strong><StatValue value={stats?.page_views} /></strong><span>页面访问</span></div>
-            <div><Users size={18} /><strong><StatValue value={stats?.unique_visitors} /></strong><span>独立来源</span></div>
+            <div><Users size={18} /><strong><StatValue value={stats?.unique_visitors} lowerBound={stats?.history?.unique_visitors_is_lower_bound} /></strong><span>独立来源</span></div>
             <div><Download size={18} /><strong><StatValue value={stats?.downloads?.total} /></strong><span>下载请求</span></div>
           </div>
           <p className="stats-caption">
-            匿名日志汇总，每 5 分钟更新
+            服务器日志汇总，每 5 分钟尝试刷新
             {Number.isFinite(stats?.downloads?.preview) && ` · C# 安装器 ${new Intl.NumberFormat('zh-CN').format(stats.downloads.preview)} 次`}
           </p>
+          {stats?.history?.unique_visitors_is_lower_bound && (
+            <p className="stats-caption">历史访客集合不完整，独立来源仅为保守下界。</p>
+          )}
+          <div className="stats-dates">
+            <span>统计起始：<StatsDate value={stats?.since} empty={stats ? '暂无起始记录' : '--'} /></span>
+            <span>数据更新：<StatsDate value={stats?.generated_at} empty="--" />{stats && '（北京时间）'}</span>
+          </div>
+          <p className={`stats-status stats-status-${status}`} role="status">
+            {status === 'loading' && '正在加载统计…'}
+            {status === 'unavailable' && '统计暂不可用，将自动重试。'}
+            {status === 'stale' && (failed ? '刷新失败，保留上次可用数据；数据可能已陈旧。' : '数据已陈旧，等待服务器更新。')}
+            {status === 'current' && '统计数据已更新'}
+          </p>
+          <p className="stats-caption">独立来源不等于实际人数，下载请求不等于完成下载或安装。<a href="/privacy.html">统计与隐私说明</a></p>
         </div>
         <div className="release-grid">
           <article className="release-card preview-release">

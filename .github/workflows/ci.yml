@@ -14,6 +14,11 @@ jobs:
           dotnet-version: "8.0.x"
       - run: dotnet build McGo.slnx
       - run: dotnet run --project tests/McGo.Core.Tests/McGo.Core.Tests.csproj
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test website statistics backend
+        run: python -B -m unittest discover -s webside/scripts -p "test_*.py" -v
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -22,4 +27,7 @@ jobs:
       - run: npm ci
         working-directory: webside
       - run: npm run build
+        working-directory: webside
+      - name: Test website statistics frontend
+        run: node --test src/publicStats.test.js
         working-directory: webside

@@ -43,7 +43,7 @@ public sealed partial class MainWindow : Window
 
         PaneVersionText.Text = $"v{AppConstants.AppVersion}";
 
-        ApplyTitleBarButtonColors(ElementTheme.Dark);
+        RootGrid.ActualThemeChanged += (_, _) => ApplyTitleBarButtonColors();
         ApplySavedAppearance();
         ApplySavedFeatureVisibility();
         DownloadTaskManager.Current.StateChanged += DownloadTasksStateChanged;
@@ -130,7 +130,7 @@ public sealed partial class MainWindow : Window
         var settings = new AppSettings();
         settings.LoadConfig();
         ApplyAppearance(
-            settings.Config.Get("UI", "theme", "dark"),
+            settings.Config.Get("UI", "theme", "auto"),
             settings.Config.Get("UI", "theme_image", ""));
     }
 
@@ -160,11 +160,11 @@ public sealed partial class MainWindow : Window
         var requestedTheme = (theme ?? "").Trim().ToLowerInvariant() switch
         {
             "light" => ElementTheme.Light,
-            "auto" => ElementTheme.Default,
-            _ => ElementTheme.Dark,
+            "dark" => ElementTheme.Dark,
+            _ => ElementTheme.Default,
         };
         RootGrid.RequestedTheme = requestedTheme;
-        ApplyTitleBarButtonColors(requestedTheme);
+        ApplyTitleBarButtonColors();
 
         var path = Environment.ExpandEnvironmentVariables((imagePath ?? "").Trim());
         if (path.Length == 0 || !File.Exists(path))
@@ -178,10 +178,10 @@ public sealed partial class MainWindow : Window
         ThemeBackgroundImage.Visibility = Visibility.Visible;
     }
 
-    private void ApplyTitleBarButtonColors(ElementTheme theme)
+    private void ApplyTitleBarButtonColors()
     {
         var titleBar = AppWindow.TitleBar;
-        var isLight = theme == ElementTheme.Light;
+        var isLight = RootGrid.ActualTheme == ElementTheme.Light;
         titleBar.BackgroundColor = Color.FromArgb(0, 0, 0, 0);
         titleBar.InactiveBackgroundColor = Color.FromArgb(0, 0, 0, 0);
         titleBar.ButtonBackgroundColor = Color.FromArgb(0, 0, 0, 0);

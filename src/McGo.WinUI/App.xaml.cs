@@ -11,7 +11,6 @@ using McGo.Core.Downloads;
 using McGo.Core.Logging;
 using McGo.WinUI.Services;
 using Windows.Graphics.Imaging;
-using Windows.Storage;
 
 namespace McGo.WinUI;
 
@@ -56,6 +55,10 @@ public partial class App : Application
             _smokePageTag = commandLine
                 .FirstOrDefault(value => value.StartsWith("--smoke-page=", StringComparison.OrdinalIgnoreCase))?
                 ["--smoke-page=".Length..];
+            if (!string.IsNullOrWhiteSpace(_smokeReportPath))
+            {
+                _smokeReportPath = Path.GetFullPath(_smokeReportPath);
+            }
             if (!string.IsNullOrWhiteSpace(_smokeScreenshotDirectory))
             {
                 _smokeScreenshotDirectory = Path.GetFullPath(_smokeScreenshotDirectory);
@@ -70,6 +73,16 @@ public partial class App : Application
             if (!string.IsNullOrWhiteSpace(smokeGameDir))
             {
                 _smokeGameDirectoryOverride = Path.GetFullPath(smokeGameDir);
+            }
+            Directory.SetCurrentDirectory(_smokeWorkingDirectory);
+            var smokeTheme = commandLine.FirstOrDefault(value => value.StartsWith("--smoke-theme=", StringComparison.OrdinalIgnoreCase))?
+                ["--smoke-theme=".Length..];
+            if (smokeTheme is not null)
+            {
+                var settings = new McGo.Core.Configuration.AppSettings();
+                settings.LoadConfig();
+                settings.Config.Set("UI", "theme", smokeTheme);
+                settings.SaveConfig();
             }
         }
         else
@@ -611,10 +624,8 @@ public partial class App : Application
             throw new InvalidOperationException($"页面 {tag} 截图为空。");
         }
 
-        var folder = await StorageFolder.GetFolderFromPathAsync(_smokeScreenshotDirectory!);
         var fileName = $"{size.Width}x{size.Height}-{tag}.png";
-        var file = await folder.CreateFileAsync(fileName, CreationCollisionOption.ReplaceExisting);
-        await using var stream = await file.OpenStreamForWriteAsync();
+        await using var stream = File.Create(Path.Combine(_smokeScreenshotDirectory!, fileName));
         var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream.AsRandomAccessStream());
         var dpiMetadata = 96.0 * scale;
         encoder.SetPixelData(
