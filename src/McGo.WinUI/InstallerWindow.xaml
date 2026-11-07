@@ -8,7 +8,7 @@
         <MicaBackdrop />
     </Window.SystemBackdrop>
 
-    <Grid x:Name="RootGrid" Background="{ThemeResource LayerFillColorDefaultBrush}" RequestedTheme="Default">
+    <Grid x:Name="RootGrid" Background="{ThemeResource LayerFillColorDefaultBrush}" RequestedTheme="Dark">
         <Grid.RowDefinitions>
             <RowDefinition Height="48" />
             <RowDefinition Height="*" />

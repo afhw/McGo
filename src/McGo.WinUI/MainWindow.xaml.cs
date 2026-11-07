@@ -130,7 +130,7 @@ public sealed partial class MainWindow : Window
         var settings = new AppSettings();
         settings.LoadConfig();
         ApplyAppearance(
-            settings.Config.Get("UI", "theme", "auto"),
+            settings.Config.Get("UI", "theme", "dark"),
             settings.Config.Get("UI", "theme_image", ""));
     }
 
@@ -160,8 +160,8 @@ public sealed partial class MainWindow : Window
         var requestedTheme = (theme ?? "").Trim().ToLowerInvariant() switch
         {
             "light" => ElementTheme.Light,
-            "dark" => ElementTheme.Dark,
-            _ => ElementTheme.Default,
+            "auto" => ElementTheme.Default,
+            _ => ElementTheme.Dark,
         };
         RootGrid.RequestedTheme = requestedTheme;
         ApplyTitleBarButtonColors();

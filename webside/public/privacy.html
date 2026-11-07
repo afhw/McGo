@@ -7,30 +7,18 @@
     <title>隐私政策 | McGo</title>
     <style>
       :root {
-        color-scheme: light dark;
+        color-scheme: dark;
         font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
-        --background: #F3F3F3;
-        --surface: #FFFFFF;
-        --text: #1A1A1A;
-        --muted: #5C5C5C;
-        --accent: #005A9E;
-        --brand: #0067C0;
-        --on-brand: #FFFFFF;
-        --line: rgba(0, 0, 0, .16);
+        --background: #202020;
+        --surface: #2D2D2D;
+        --text: #FFFFFF;
+        --muted: #D0D0D0;
+        --accent: #4CC2FF;
+        --brand: #4CC2FF;
+        --on-brand: #002B40;
+        --line: rgba(255, 255, 255, .16);
         background: var(--background);
         color: var(--text);
-      }
-      @media (prefers-color-scheme: dark) {
-        :root {
-          --background: #202020;
-          --surface: #2D2D2D;
-          --text: #FFFFFF;
-          --muted: #D0D0D0;
-          --accent: #4CC2FF;
-          --brand: #4CC2FF;
-          --on-brand: #002B40;
-          --line: rgba(255, 255, 255, .16);
-        }
       }
       @supports (color: AccentColor) and (color: AccentColorText) {
         :root { --brand: AccentColor; --on-brand: AccentColorText; }
