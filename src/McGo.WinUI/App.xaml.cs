@@ -45,7 +45,8 @@ public partial class App : Application
         }
 
         var smokeLaunchPerformance = commandLine.Contains("--smoke-launch-performance", StringComparer.OrdinalIgnoreCase);
-        var smokePages = smokeLaunchPerformance || commandLine.Contains("--smoke-pages", StringComparer.OrdinalIgnoreCase);
+        var smokeJavaSelection = commandLine.Contains("--smoke-java-selection", StringComparer.OrdinalIgnoreCase);
+        var smokePages = smokeJavaSelection || smokeLaunchPerformance || commandLine.Contains("--smoke-pages", StringComparer.OrdinalIgnoreCase);
         string? smokeJavaPath = null;
         if (smokePages)
         {
@@ -121,6 +122,11 @@ public partial class App : Application
 
         if (smokePages)
         {
+            if (smokeJavaSelection)
+            {
+                _ = RunJavaSelectionSmokeAsync((MainWindow)_window);
+                return;
+            }
             if (smokeLaunchPerformance)
             {
                 _ = RunLaunchPerformanceSmokeAsync((MainWindow)_window, smokeJavaPath);
@@ -146,6 +152,32 @@ public partial class App : Application
         }
 
         MusicPlaybackService.ApplySavedSettings();
+    }
+
+    private static async Task RunJavaSelectionSmokeAsync(MainWindow window)
+    {
+        var results = new List<string>();
+        var failed = false;
+        try
+        {
+            window.NavigateToTag("launch");
+            await Task.Delay(150);
+            if (window.CurrentPage is not Pages.LaunchPage page)
+                throw new InvalidOperationException("Navigation did not open LaunchPage.");
+            await page.RunJavaSelectionSmokeChecksAsync().WaitAsync(TimeSpan.FromSeconds(40));
+            results.Add("PASS Java 8/17/21 automatic selection updates launch path and candidate");
+            results.Add("PASS stale Java probes cannot replace the latest version selection");
+            results.Add("PASS missing exact Java major is reported without selecting a higher runtime");
+            results.Add("PASS manual Java selection is preserved when switching versions");
+        }
+        catch (Exception exc)
+        {
+            failed = true;
+            results.Add("FAIL Java selection: " + exc);
+        }
+        WriteSmokeReport(results);
+        CleanupSmokeWorkingDirectory();
+        Environment.Exit(failed ? 1 : 0);
     }
 
     private static async Task RunLaunchPerformanceSmokeAsync(MainWindow window, string? javaPath)

@@ -93,6 +93,10 @@ public sealed partial class LaunchPage : Page
     private bool _wideLayout;
     private bool _unloaded;
     private int _javaEnvironmentRequest;
+    private int _javaSelectionRequest;
+    private Task<IReadOnlyList<string>>? _javaCandidatesTask;
+    private string _javaCandidatesDirectory = "";
+    private Task<bool> _javaSelectionTask = Task.FromResult(false);
     private int _versionRefreshRequest;
     private int _modsRefreshRequest;
     private int _worldsRefreshRequest;
@@ -114,6 +118,7 @@ public sealed partial class LaunchPage : Page
         {
             _unloaded = true;
             ++_javaEnvironmentRequest;
+            ++_javaSelectionRequest;
             ++_versionRefreshRequest;
             ++_modsRefreshRequest;
             ++_worldsRefreshRequest;
@@ -176,6 +181,8 @@ public sealed partial class LaunchPage : Page
         _resourceMarket.ModrinthCdnBase = _settings.Config.Get("DOWNLOAD", "modrinth_cdn_base", "");
         GameDirectoryBox.Text = _settings.Config.Get("GAME", "directory", AppConstants.DefaultGameDirectory);
         JavaPathBox.Text = _settings.Config.Get("JAVA", "path", "java");
+        AutoJavaCheckBox.IsChecked = _settings.Config.GetBool("JAVA", "auto_select", true);
+        UpdateJavaModeControls();
         MemorySlider.Value = UiHelpers.ClampDouble(AppSettings.RecommendedMemoryMb(), 1024, 65536);
         UpdateMemoryControls();
         JavaVersionText.Text = "正在检测 Java...";
@@ -329,6 +336,7 @@ public sealed partial class LaunchPage : Page
     {
         if (SelectedVersionId is not string versionId)
         {
+            ++_javaSelectionRequest;
             ++_worldsRefreshRequest;
             _quickPlayWorldIds.Clear();
             QuickPlayBox.ItemsSource = null;
@@ -364,6 +372,10 @@ public sealed partial class LaunchPage : Page
         RefreshVersionMods();
         UpdateLaunchStatus("已选择版本，等待启动", 0, "当前步骤：等待启动");
         _loadingVersion = false;
+        if (AutoJavaCheckBox.IsChecked == true)
+        {
+            _javaSelectionTask = SelectJavaForVersionAsync();
+        }
     }
 
 
@@ -372,15 +384,17 @@ public sealed partial class LaunchPage : Page
         _settings.Config.Set("GAME", "directory", GameDirectoryBox.Text.Trim());
         _settings.Config.Set("USER", "username", SelectedAccountName() ?? "");
         _settings.Config.Set("JAVA", "path", JavaPathBox.Text.Trim());
+        _settings.Config.Set("JAVA", "auto_select", AutoJavaCheckBox.IsChecked == true ? "True" : "False");
         _settings.SaveConfig();
         await RefreshVersionListAsync();
-        await DetectJavaVersionAsync(JavaPathBox.Text);
+        await RefreshJavaEnvironmentAsync(JavaPathBox.Text, showFeedback: false);
         UpdateLaunchMethod();
         OutputBox.Text = "设置已保存。";
     }
 
     private async void RefreshJavaCandidates(object sender, RoutedEventArgs e)
     {
+        _javaCandidatesTask = null;
         foreach (var path in _javaProbes.Where(pair => pair.Value.IsCompleted).Select(pair => pair.Key).ToList())
         {
             _javaProbes.Remove(path);
@@ -408,7 +422,6 @@ public sealed partial class LaunchPage : Page
     private async Task RefreshJavaEnvironmentAsync(string selectedPath, bool showFeedback)
     {
         var request = ++_javaEnvironmentRequest;
-        var gameDirectory = GameDirectoryBox.Text.Trim();
         var javaPath = selectedPath.Trim().Length == 0 ? "java" : selectedPath.Trim();
         JavaVersionText.Text = "正在检测 Java...";
         if (showFeedback)
@@ -416,20 +429,29 @@ public sealed partial class LaunchPage : Page
             UpdateLaunchStatus("正在扫描 Java 运行时...", 0, "当前步骤：检测 Java");
         }
 
-        var candidatesTask = Task.Run(() => JavaDiscovery.FindCandidates(gameDirectory, javaPath));
-        var majorTask = ProbeJavaAsync(javaPath);
-        string? preferred = null;
         try
         {
-            await Task.WhenAll(candidatesTask, majorTask);
+            var candidates = await GetJavaCandidatesAsync();
             if (request != _javaEnvironmentRequest)
             {
                 return;
             }
 
-            var candidates = await candidatesTask;
-            preferred = candidates.FirstOrDefault(candidate => SamePathOrText(candidate, javaPath));
-            preferred ??= await PickJavaForSelectedVersionAsync(candidates, request);
+            SetJavaCandidates(candidates, javaPath);
+            if (AutoJavaCheckBox.IsChecked == true && SelectedVersionId is not null)
+            {
+                _javaSelectionTask = SelectJavaForVersionAsync();
+                await _javaSelectionTask;
+            }
+            else
+            {
+                var major = await ProbeJavaAsync(javaPath);
+                if (request == _javaEnvironmentRequest && SamePathOrText(javaPath, JavaPathBox.Text.Trim())
+                    && (AutoJavaCheckBox.IsChecked != true || SelectedVersionId is null))
+                {
+                    UpdateJavaVersionStatus(javaPath, major);
+                }
+            }
         }
         catch (Exception exc)
         {
@@ -442,77 +464,109 @@ public sealed partial class LaunchPage : Page
             return;
         }
 
-        if (request != _javaEnvironmentRequest)
-        {
-            return;
-        }
+    }
 
+    private Task<IReadOnlyList<string>> GetJavaCandidatesAsync()
+    {
+        var directory = GameDirectoryBox.Text.Trim();
+        var path = JavaPathBox.Text.Trim();
+        if (_javaCandidatesTask is null || !SamePathOrText(directory, _javaCandidatesDirectory))
+        {
+            _javaCandidatesDirectory = directory;
+            _javaCandidatesTask = Task.Run(() => JavaDiscovery.FindCandidates(directory, path));
+        }
+        return _javaCandidatesTask;
+    }
+
+    private void SetJavaCandidates(IReadOnlyList<string> candidates, string path)
+    {
         _loadingJavaCandidates = true;
         try
         {
-            var candidates = await candidatesTask;
-            JavaCandidatesBox.ItemsSource = candidates;
-            if (candidates.Count > 0)
-            {
-                JavaCandidatesBox.SelectedItem = preferred ?? candidates[0];
-            }
+            var displayed = candidates.Contains(path, StringComparer.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(path)
+                ? candidates : new[] { path }.Concat(candidates).ToList();
+            JavaCandidatesBox.ItemsSource = displayed;
+            JavaCandidatesBox.SelectedItem = displayed.FirstOrDefault(candidate => SamePathOrText(candidate, path));
         }
         finally
         {
             _loadingJavaCandidates = false;
         }
 
-        UpdateJavaVersionStatus(javaPath, await majorTask);
     }
 
-    // Only an exact Java major match is considered compatible.
-    private async Task<string?> PickJavaForSelectedVersionAsync(IReadOnlyList<string> candidates, int request)
+    private void UpdateJavaModeControls()
     {
+        var automatic = AutoJavaCheckBox.IsChecked == true;
+        JavaPathBox.IsEnabled = !automatic;
+        JavaCandidatesBox.IsEnabled = !automatic;
+    }
+
+    private async void AutoJavaChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_initialized) return;
+        ++_javaSelectionRequest;
+        ++_javaEnvironmentRequest;
+        UpdateJavaModeControls();
+        if (AutoJavaCheckBox.IsChecked == true)
+        {
+            _javaCandidatesTask = null;
+            _javaSelectionTask = SelectJavaForVersionAsync();
+            await _javaSelectionTask;
+        }
+        else
+        {
+            await DetectJavaVersionAsync(JavaPathBox.Text);
+        }
+    }
+
+    private async Task<bool> SelectJavaForVersionAsync()
+    {
+        var request = ++_javaSelectionRequest;
         var versionId = SelectedVersionId;
-        if (string.IsNullOrWhiteSpace(versionId))
+        var directory = GameDirectoryBox.Text.Trim();
+        var required = versionId is null ? 0 : KnownVersion(versionId)?.RequiredJava ?? 0;
+        bool IsCurrent() => !_unloaded && request == _javaSelectionRequest
+            && AutoJavaCheckBox.IsChecked == true && SelectedVersionId == versionId
+            && SamePathOrText(directory, GameDirectoryBox.Text.Trim());
+        if (required <= 0 || !IsCurrent())
         {
-            return null;
+            return false;
         }
 
-        var required = KnownVersion(versionId)?.RequiredJava ?? 0;
-        if (required <= 0)
+        JavaVersionText.Text = $"正在匹配 Java {required}...";
+        try
         {
-            return null;
-        }
-
-        var detected = new List<(string Path, int Major)>();
-        foreach (var candidate in candidates)
-        {
-            var major = await ProbeJavaAsync(candidate);
-            if (request != _javaEnvironmentRequest || SelectedVersionId != versionId)
+            var candidates = await GetJavaCandidatesAsync();
+            if (!IsCurrent()) return false;
+            var current = JavaPathBox.Text.Trim();
+            foreach (var candidate in new[] { current }.Concat(candidates)
+                         .Where(path => !string.IsNullOrWhiteSpace(path) && Path.IsPathFullyQualified(path))
+                         .Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                return null;
+                var major = await ProbeJavaAsync(candidate);
+                if (!IsCurrent()) return false;
+                if (major != required) continue;
+
+                JavaPathBox.Text = candidate;
+                SetJavaCandidates(candidates, candidate);
+                UpdateJavaVersionStatus(candidate, major);
+                SetJavaDownloadStatus($"已自动选择 Java {major}", 0);
+                return true;
             }
-            if (major > 0)
+
+            if (IsCurrent())
             {
-                detected.Add((candidate, major));
+                JavaVersionText.Text = $"未找到 Java {required}";
+                SetJavaDownloadStatus($"当前版本需要 Java {required}，请下载匹配的 Java 运行时。", 0);
+                UpdateVersionSummary(versionId);
             }
         }
-
-        if (detected.Count == 0)
+        catch (Exception exc)
         {
-            return null;
+            if (IsCurrent()) SetJavaDownloadStatus("自动选择 Java 失败：" + exc.Message, 0);
         }
-
-        var exact = detected.FirstOrDefault(item => item.Major == required);
-        if (exact.Path is not null)
-        {
-            return exact.Path;
-        }
-
-        // 不做「高版本也能跑」的推断：Java 的向后兼容在实际游戏里很差，
-        // 例如 Java 21 跑 1.12.2 的 Forge 基本必崩。版本对不上就明确提示，
-        // 让用户装对的运行时，而不是选一个看起来能启动、实际会炸的。
-        var found = string.Join("、", detected.Select(item => $"Java {item.Major}").Distinct());
-        SetJavaDownloadStatus(
-            $"当前版本需要 Java {required}，但只找到 {found}。Java 的向后兼容不可靠，请点「下载 Java」安装匹配的运行时。",
-            0);
-        return null;
+        return false;
     }
 
     private async Task<int> DetectJavaVersionAsync(string path)
@@ -587,26 +641,33 @@ public sealed partial class LaunchPage : Page
 
     private async void CheckJavaRuntime(object sender, RoutedEventArgs e)
     {
+        if (AutoJavaCheckBox.IsChecked == true && SelectedVersionId is not null)
+        {
+            _javaSelectionTask = SelectJavaForVersionAsync();
+            await _javaSelectionTask;
+            return;
+        }
         var javaPath = JavaPathBox.Text.Trim().Length == 0 ? "java" : JavaPathBox.Text.Trim();
+        var versionId = SelectedVersionId;
         var major = await DetectJavaVersionAsync(javaPath);
-        var required = SelectedVersionId is string versionId
-            ? _launcher.InferRequiredJavaVersion(GameDirectoryBox.Text.Trim(), versionId)
-            : 0;
+        if (_unloaded || JavaPathBox.Text.Trim() != javaPath || SelectedVersionId != versionId) return;
+        var required = versionId is null ? 0 : KnownVersion(versionId)?.RequiredJava ?? 0;
         UpdateJavaVersionStatus(javaPath, major);
         SetJavaDownloadStatus(major == 0
             ? $"无法识别 Java：{javaPath}"
-            : required > 0 && major < required
-                ? $"当前 Java {major} 低于所需 Java {required}，可下载推荐运行时"
+            : required > 0 && major != required
+                ? $"当前 Java {major} 与所需 Java {required} 不匹配，可下载推荐运行时"
                 : $"当前 Java {major} 可用于启动", 0);
         UpdateLaunchStatus(major == 0
             ? "无法识别当前 Java"
-            : required > 0 && major < required
-                ? $"当前 Java {major} 低于所需 Java {required}"
+            : required > 0 && major != required
+                ? $"当前 Java {major} 与所需 Java {required} 不匹配"
                 : "Java 版本满足要求", 0, "当前步骤：检测 Java");
         OutputBox.Text = major == 0
             ? $"无法识别 Java 版本：{javaPath}"
             : required > 0
-                ? $"当前 Java：{major}{Environment.NewLine}所选版本需要：Java {required}{Environment.NewLine}{(major >= required ? "Java 版本满足要求。" : "Java 版本过低，请下载推荐 Java 或更换路径。")}"
+                ? $"当前 Java：{major}{Environment.NewLine}所选版本需要：Java {required}{Environment.NewLine}" +
+                    (major == required ? "Java 版本满足要求。" : "Java 版本不匹配，请下载推荐 Java 或更换路径。")
                 : $"当前 Java：{major}";
     }
 
@@ -648,10 +709,14 @@ public sealed partial class LaunchPage : Page
                 });
             });
             var result = await JavaRuntimeService.DownloadJavaRuntimeAsync(required, installRoot, progress: progress, cancellationToken: cancellationToken);
+            ++_javaSelectionRequest;
+            ++_javaEnvironmentRequest;
+            _javaCandidatesTask = null;
             JavaPathBox.Text = result.JavaPath;
             _settings.Config.Set("JAVA", "path", result.JavaPath);
             _settings.SaveConfig();
             UpdateJavaVersionStatus(result.JavaPath, required);
+            await RefreshJavaEnvironmentAsync(result.JavaPath, showFeedback: false);
             SetJavaDownloadStatus(result.Reused ? $"Java {required} 已安装：{result.JavaPath}" : $"Java {required} 下载完成：{result.JavaPath}", 100);
             UpdateLaunchStatus(result.Reused ? $"已复用 Java {required}" : $"Java {required} 下载完成", 100, "当前步骤：Java 就绪");
             OutputBox.Text = string.Join(Environment.NewLine, [
@@ -681,8 +746,11 @@ public sealed partial class LaunchPage : Page
     {
         try
         {
+            if (!await PrepareJavaForLaunchAsync()) return;
+            var selection = CaptureLaunchSelection();
             UpdateLaunchStatus("正在生成启动命令...", 10, "当前步骤：生成命令");
             var account = await RefreshSelectedAccountForLaunchAsync();
+            EnsureLaunchSelection(selection);
             UpdateLaunchMethod(account);
             OutputBox.Text = string.Join(Environment.NewLine, BuildSelectedLaunchCommand(account));
             UpdateLaunchStatus("启动命令已生成。", 100, "当前步骤：生成命令");
@@ -805,6 +873,8 @@ public sealed partial class LaunchPage : Page
     {
         try
         {
+            if (!await PrepareJavaForLaunchAsync()) return;
+            var selection = CaptureLaunchSelection();
             var preflight = ValidateSelectedLaunchPreflight();
             if (!preflight.IsOk)
             {
@@ -824,6 +894,7 @@ public sealed partial class LaunchPage : Page
 
             UpdateLaunchStatus("正在刷新账号并准备启动...", 15, "当前步骤：准备账号");
             var account = await RefreshSelectedAccountForLaunchAsync();
+            EnsureLaunchSelection(selection);
             UpdateLaunchMethod(account);
             SetLaunchProgress(35, "当前步骤：启动前命令");
             RunPreLaunchCommand();
@@ -884,6 +955,27 @@ public sealed partial class LaunchPage : Page
         }
 
         return _launchPreflight.Validate(GameDirectoryBox.Text.Trim(), versionId, JavaPathBox.Text.Trim().Length == 0 ? "java" : JavaPathBox.Text.Trim(), includeAssets: true);
+    }
+
+    private async Task<bool> PrepareJavaForLaunchAsync()
+    {
+        if (AutoJavaCheckBox.IsChecked != true) return true;
+        _javaSelectionTask = SelectJavaForVersionAsync();
+        if (await _javaSelectionTask) return true;
+        if (!_unloaded)
+        {
+            OutputBox.Text = "未找到适合当前版本的 Java，请先下载匹配的运行时，或关闭自动选择后指定 Java 路径。";
+        }
+        return false;
+    }
+
+    private (string? Version, string Directory, string Java) CaptureLaunchSelection()
+        => (SelectedVersionId, GameDirectoryBox.Text.Trim(), JavaPathBox.Text.Trim());
+
+    private void EnsureLaunchSelection((string? Version, string Directory, string Java) selection)
+    {
+        if (_unloaded || CaptureLaunchSelection() != selection)
+            throw new InvalidOperationException("启动配置已改变，请重新启动。");
     }
 
     private void RepairSelectedVersion(object sender, RoutedEventArgs e)
@@ -1209,6 +1301,7 @@ public sealed partial class LaunchPage : Page
     internal async Task RunDataSmokeChecksAsync()
     {
         await _initializationCompleted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await _javaSelectionTask.WaitAsync(TimeSpan.FromSeconds(30));
         if (!_initialized)
         {
             throw new InvalidOperationException("启动页初始化未完成：" + OutputBox.Text);
@@ -1220,6 +1313,62 @@ public sealed partial class LaunchPage : Page
         {
             throw new InvalidOperationException("启动页未能列出全部已安装版本：" + OutputBox.Text);
         }
+    }
+
+    internal async Task RunJavaSelectionSmokeChecksAsync()
+    {
+        await RunDataSmokeChecksAsync();
+        ++_javaEnvironmentRequest;
+        ++_javaSelectionRequest;
+        _javaProbes.Clear();
+        var paths = new[] { "smoke-java-21.exe", "smoke-java-17.exe", "smoke-java-8.exe" }
+            .Select(name => Path.Combine(Path.GetTempPath(), name)).ToArray();
+        var majors = new[] { 21, 17, 8 };
+        for (var i = 0; i < paths.Length; i++) _javaProbes[paths[i]] = Task.FromResult(majors[i]);
+        _javaCandidatesDirectory = GameDirectoryBox.Text.Trim();
+        _javaCandidatesTask = Task.FromResult<IReadOnlyList<string>>(paths);
+        _versionsDirectory = GameDirectoryBox.Text.Trim();
+        _localVersions = new Dictionary<string, LocalVersionCandidate>
+        {
+            ["smoke-8"] = new("smoke-8", "正式版", 8),
+            ["smoke-17"] = new("smoke-17", "正式版", 17),
+            ["smoke-21"] = new("smoke-21", "正式版", 21),
+            ["smoke-missing"] = new("smoke-missing", "正式版", 99),
+        };
+        var versions = _localVersions.Values.Select(v => new VersionListItem(v.VersionId, v.DetectedType, null, false)).ToList();
+        VersionsList.ItemsSource = versions;
+        JavaPathBox.Text = paths[0];
+        AutoJavaCheckBox.IsChecked = true;
+        foreach (var required in new[] { 8, 17, 21 })
+        {
+            VersionsList.SelectedItem = versions.Single(v => v.VersionId == $"smoke-{required}");
+            if (!await _javaSelectionTask || KnownJavaMajor(JavaPathBox.Text) != required
+                || JavaCandidatesBox.SelectedItem as string != JavaPathBox.Text)
+            {
+                throw new InvalidOperationException($"Automatic Java {required} selection did not update the launch path and candidate.");
+            }
+        }
+
+        var slowProbe = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _javaProbes[paths[1]] = slowProbe.Task;
+        VersionsList.SelectedItem = versions.Single(v => v.VersionId == "smoke-17");
+        var staleSelection = _javaSelectionTask;
+        VersionsList.SelectedItem = versions.Single(v => v.VersionId == "smoke-21");
+        await _javaSelectionTask;
+        slowProbe.SetResult(17);
+        await staleSelection;
+        if (KnownJavaMajor(JavaPathBox.Text) != 21)
+            throw new InvalidOperationException("An obsolete Java probe overwrote the latest version selection.");
+
+        VersionsList.SelectedItem = versions.Single(v => v.VersionId == "smoke-missing");
+        if (await _javaSelectionTask || !JavaVersionText.Text.Contains("99"))
+            throw new InvalidOperationException("Missing Java was not reported.");
+
+        AutoJavaCheckBox.IsChecked = false;
+        JavaPathBox.Text = paths[0];
+        VersionsList.SelectedItem = versions.Single(v => v.VersionId == "smoke-8");
+        if (JavaPathBox.Text != paths[0] || !JavaPathBox.IsEnabled || !JavaCandidatesBox.IsEnabled)
+            throw new InvalidOperationException("Manual Java selection was overwritten.");
     }
 
     internal void RunSmokeChecks()
@@ -1353,7 +1502,10 @@ public sealed partial class LaunchPage : Page
 
         try
         {
+            if (!await PrepareJavaForLaunchAsync()) return;
+            var selection = CaptureLaunchSelection();
             var account = await RefreshSelectedAccountForLaunchAsync();
+            EnsureLaunchSelection(selection);
             var command = BuildSelectedLaunchCommand(account);
             var options = VersionSettingsService.LaunchOptionsForVersion(GameDirectoryBox.Text.Trim(), _versionSettings, versionId, _settings.Config.GetBool("GAME", "enable_resource_isolation", true));
             var scriptDir = Path.Combine(GameDirectoryBox.Text.Trim(), "mcgo_scripts");

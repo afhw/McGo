@@ -608,6 +608,140 @@ runner.Add("Java discovery unifies candidates and picks exact major", () =>
     Assert.Equal("未检测到可用 Java", JavaDiscovery.DescribeDetectedMajors([]));
 });
 
+runner.Add("Java discovery finds every managed runtime including nested archives", () =>
+{
+    using var temp = TempDir.Create();
+    var executable = OperatingSystem.IsWindows() ? "java.exe" : "java";
+    var runtimeRoot = Path.Combine(temp.Path, "java_runtimes");
+    var expected = new[]
+    {
+        Path.Combine(runtimeRoot, "bin", executable),
+        Path.Combine(runtimeRoot, "java-8", "jdk8u432", "bin", executable),
+        Path.Combine(runtimeRoot, "java-17", "bin", executable),
+        Path.Combine(runtimeRoot, "java-21", "jdk-21", "bin", executable),
+    };
+    foreach (var path in expected)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "");
+    }
+    Directory.CreateDirectory(Path.Combine(runtimeRoot, "empty-installation"));
+
+    var candidates = JavaDiscovery.FindCandidates(temp.Path, expected[2], windowsJavaRoots: []);
+
+    Assert.Equal(expected[2], candidates[0]);
+    Assert.Equal("java", candidates[1]);
+    Assert.True(expected.All(path => candidates.Contains(path, StringComparer.OrdinalIgnoreCase)));
+    Assert.Equal(candidates.Count, candidates.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+});
+
+runner.Add("Java discovery finds multiple JDKs under each Program Files vendor", () =>
+{
+    using var temp = TempDir.Create();
+    var executable = OperatingSystem.IsWindows() ? "java.exe" : "java";
+    var roots = new[] { Path.Combine(temp.Path, "Program Files"), Path.Combine(temp.Path, "Program Files (x86)") };
+    var expected = new List<string>();
+    foreach (var root in roots)
+    {
+        foreach (var vendor in new[] { "Java", "Eclipse Adoptium", "Microsoft" })
+        {
+            foreach (var major in new[] { 8, 17, 21 })
+            {
+                var path = Path.Combine(root, vendor, $"jdk-{major}", "bin", executable);
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, "");
+                expected.Add(path);
+            }
+        }
+    }
+    var unrelated = Path.Combine(roots[0], "Unrelated", "jdk-21", "bin", executable);
+    Directory.CreateDirectory(Path.GetDirectoryName(unrelated)!);
+    File.WriteAllText(unrelated, "");
+
+    var originalPath = Environment.GetEnvironmentVariable("PATH");
+    try
+    {
+        Environment.SetEnvironmentVariable("PATH", "");
+        var candidates = JavaDiscovery.FindCandidates(temp.Path, "", windowsJavaRoots: roots);
+        Assert.True(expected.All(path => candidates.Contains(path, StringComparer.OrdinalIgnoreCase)));
+        Assert.False(candidates.Contains(unrelated, StringComparer.OrdinalIgnoreCase));
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("PATH", originalPath);
+    }
+});
+
+runner.Add("Java discovery ignores long PATH entries without Java before vendor discovery", () =>
+{
+    using var temp = TempDir.Create();
+    var executable = OperatingSystem.IsWindows() ? "java.exe" : "java";
+    var root = Path.Combine(temp.Path, "Program Files");
+    var vendorJava = Path.Combine(root, "Eclipse Adoptium", "jdk-17", "bin", executable);
+    Directory.CreateDirectory(Path.GetDirectoryName(vendorJava)!);
+    File.WriteAllText(vendorJava, "");
+    var pathDirectories = Enumerable.Range(0, 64)
+        .Select(index => Path.Combine(temp.Path, $"path-{index:D2}"))
+        .ToArray();
+    foreach (var directory in pathDirectories)
+    {
+        Directory.CreateDirectory(directory);
+    }
+
+    var originalPath = Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.Process);
+    try
+    {
+        Environment.SetEnvironmentVariable("PATH", string.Join(Path.PathSeparator, pathDirectories),
+            EnvironmentVariableTarget.Process);
+        var candidates = JavaDiscovery.FindCandidates(temp.Path, "", windowsJavaRoots: [root]);
+
+        Assert.True(candidates.Contains(vendorJava, StringComparer.OrdinalIgnoreCase));
+        Assert.True(pathDirectories.All(directory =>
+            !candidates.Contains(Path.Combine(directory, executable), StringComparer.OrdinalIgnoreCase)));
+        Assert.True(candidates.Count <= 40);
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("PATH", originalPath, EnvironmentVariableTarget.Process);
+    }
+});
+
+runner.Add("Java discovery caps unique candidates at forty", () =>
+{
+    using var temp = TempDir.Create();
+    var executable = OperatingSystem.IsWindows() ? "java.exe" : "java";
+    var expected = new List<string>();
+    for (var index = 0; index < 45; index++)
+    {
+        var path = Path.Combine(temp.Path, "java_runtimes", $"jdk-{index:D2}", "bin", executable);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "");
+        expected.Add(path);
+    }
+
+    var candidates = JavaDiscovery.FindCandidates(temp.Path, expected[0], windowsJavaRoots: []);
+
+    Assert.Equal(40, candidates.Count);
+    Assert.Equal(expected[0], candidates[0]);
+    Assert.Equal("java", candidates[1]);
+    Assert.True(expected.Take(39).All(path => candidates.Contains(path, StringComparer.OrdinalIgnoreCase)));
+    Assert.False(candidates.Contains(expected[39], StringComparer.OrdinalIgnoreCase));
+    Assert.Equal(candidates.Count, candidates.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+});
+
+runner.Add("Java discovery skips missing and non-directory installation roots", () =>
+{
+    using var temp = TempDir.Create();
+    File.WriteAllText(Path.Combine(temp.Path, "java_runtimes"), "");
+    File.WriteAllText(Path.Combine(temp.Path, "Java"), "");
+    var candidates = JavaDiscovery.FindCandidates(temp.Path, "java",
+        windowsJavaRoots: [temp.Path, Path.Combine(temp.Path, "missing"), ""]);
+
+    Assert.True(candidates.Count > 0);
+    Assert.Equal("java", candidates[0]);
+    Assert.True(candidates.Count <= 40);
+});
+
 runner.Add("Base Minecraft version ignores assetIndex ids", () =>
 {
     // 真实事故：1.8.9 的 assetIndex.id 就是 "1.8"，1.16.5 的甚至是纯数字 "5"。

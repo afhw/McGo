@@ -241,6 +241,7 @@ public sealed class AppSettings
                 ["directory"] = AppConstants.DefaultGameDirectory,
                 ["enable_resource_isolation"] = "True",
             },
+            ["JAVA"] = new Dictionary<string, string> { ["path"] = "java", ["auto_select"] = "True" },
             ["UI"] = new Dictionary<string, string> { ["advanced_mode"] = "False", ["theme"] = "dark", ["theme_image"] = "" },
             ["HOME"] = new Dictionary<string, string> { ["content_source"] = "", ["allow_network"] = "False" },
             ["MUSIC"] = new Dictionary<string, string> { ["path"] = "", ["enabled"] = "False", ["volume"] = "35", ["pause_on_launch"] = "True" },

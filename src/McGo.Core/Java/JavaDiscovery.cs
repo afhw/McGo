@@ -24,6 +24,13 @@ public static class JavaDiscovery
     /// 5) Program Files 下各厂商安装的 JDK
     /// </summary>
     public static IReadOnlyList<string> FindCandidates(string gameDirectory, string configuredPath)
+        => FindCandidates(gameDirectory, configuredPath, null);
+
+    /// <summary>Discover candidates with optional Program Files roots for isolated tests.</summary>
+    public static IReadOnlyList<string> FindCandidates(
+        string gameDirectory,
+        string configuredPath,
+        IEnumerable<string>? windowsJavaRoots)
     {
         var candidates = new List<string>();
         AddCandidate(candidates, configuredPath);
@@ -31,26 +38,42 @@ public static class JavaDiscovery
 
         if (!string.IsNullOrWhiteSpace(gameDirectory))
         {
-            AddCandidate(candidates, JavaRuntimeService.FindJavaInDirectory(Path.Combine(gameDirectory, "java_runtimes")));
+            AddInstallationCandidates(candidates, Path.Combine(gameDirectory, "java_runtimes"));
         }
 
-        foreach (var bundled in JavaRuntimeService.FindBundledRuntimeCandidates())
+        try
         {
-            AddCandidate(candidates, bundled);
+            foreach (var bundled in JavaRuntimeService.FindBundledRuntimeCandidates())
+            {
+                AddCandidate(candidates, bundled);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            // Continue with PATH and vendor installations when bundled runtimes are inaccessible.
         }
 
         foreach (var pathDir in EnumeratePathDirectories())
         {
-            AddCandidate(candidates, Path.Combine(pathDir, JavaExecutableName()));
+            var javaPath = Path.Combine(pathDir, JavaExecutableName());
+            if (File.Exists(javaPath))
+            {
+                AddCandidate(candidates, javaPath);
+            }
         }
 
-        if (OperatingSystem.IsWindows())
+        if (OperatingSystem.IsWindows() || windowsJavaRoots is not null)
         {
-            foreach (var root in EnumerateWindowsJavaRoots())
+            foreach (var root in windowsJavaRoots ?? EnumerateWindowsJavaRoots())
             {
-                AddCandidate(candidates, JavaRuntimeService.FindJavaInDirectory(Path.Combine(root, "Java")));
-                AddCandidate(candidates, JavaRuntimeService.FindJavaInDirectory(Path.Combine(root, "Eclipse Adoptium")));
-                AddCandidate(candidates, JavaRuntimeService.FindJavaInDirectory(Path.Combine(root, "Microsoft")));
+                if (string.IsNullOrWhiteSpace(root))
+                {
+                    continue;
+                }
+
+                AddInstallationCandidates(candidates, Path.Combine(root, "Java"));
+                AddInstallationCandidates(candidates, Path.Combine(root, "Eclipse Adoptium"));
+                AddInstallationCandidates(candidates, Path.Combine(root, "Microsoft"));
             }
         }
 
@@ -109,9 +132,64 @@ public static class JavaDiscovery
             Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
         }.Where(path => !string.IsNullOrWhiteSpace(path));
 
+    private static void AddInstallationCandidates(List<string> candidates, string root)
+    {
+        if (candidates.Count >= MaxCandidates || !Directory.Exists(root))
+        {
+            return;
+        }
+
+        // Keep support for a runtime extracted directly into the installation root.
+        var directJava = Path.Combine(root, "bin", JavaExecutableName());
+        if (!File.Exists(directJava))
+        {
+            directJava = Path.Combine(root, JavaExecutableName());
+        }
+        if (File.Exists(directJava))
+        {
+            AddCandidate(candidates, directJava);
+        }
+
+        string[] installations;
+        try
+        {
+            installations = Directory.GetDirectories(root, "*", new EnumerationOptions
+            {
+                IgnoreInaccessible = true,
+                AttributesToSkip = FileAttributes.ReparsePoint,
+            });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            return;
+        }
+
+        foreach (var installation in installations.OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+        {
+            if (candidates.Count >= MaxCandidates)
+            {
+                break;
+            }
+
+            try
+            {
+                AddCandidate(candidates, JavaRuntimeService.FindJavaInDirectory(installation));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+            {
+                // An unavailable installation must not hide its siblings.
+            }
+        }
+    }
+
     private static void AddCandidate(List<string> candidates, string? path)
     {
-        if (!string.IsNullOrWhiteSpace(path))
+        if (!string.IsNullOrWhiteSpace(path) && File.Exists(path.Trim()))
+        {
+            path = Path.GetFullPath(path.Trim());
+        }
+        if (candidates.Count < MaxCandidates && !string.IsNullOrWhiteSpace(path)
+            && !candidates.Contains(path.Trim(), StringComparer.OrdinalIgnoreCase))
         {
             candidates.Add(path.Trim());
         }
