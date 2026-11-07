@@ -22,9 +22,9 @@ public sealed class AppSettings
         AccountsPath = accountsPath ?? AppConstants.AccountsFile;
     }
 
-    public void LoadConfig()
+    public void LoadConfig(bool persistChanges = true)
     {
-        Config = IniDocument.Load(ConfigPath);
+        Config = IniDocument.Load(ConfigPath, persistChanges: persistChanges);
         Config.EnsureDefaults(DefaultSections);
         if (string.Equals(
                 Config.Get("UPDATE", "manifest_url"),
@@ -34,7 +34,10 @@ public sealed class AppSettings
             Config.Set("UPDATE", "manifest_url", AppConstants.DefaultUpdateManifestUrl);
         }
 
-        SaveConfig();
+        if (persistChanges)
+        {
+            SaveConfig();
+        }
     }
 
     public void SaveConfig() => Config.Save(ConfigPath);
@@ -82,14 +85,19 @@ public sealed class AppSettings
         return $"{displayName} ({label})";
     }
 
-    public List<JsonObject> LoadAccounts()
+    public List<JsonObject> LoadAccounts(bool persistChanges = true)
     {
-        if (File.Exists(AccountsPath))
+        var hasAccountsFile = File.Exists(AccountsPath);
+        // Read-only loads can use a backup without restoring the missing primary.
+        var storedAccounts = hasAccountsFile || !persistChanges
+            ? AtomicStorage.LoadJsonFile<List<JsonObject>?>(AccountsPath, null, persistChanges: persistChanges)
+            : null;
+        if (hasAccountsFile || storedAccounts is not null)
         {
-            var accounts = AtomicStorage.LoadJsonFile(AccountsPath, new List<JsonObject>())
+            var accounts = (storedAccounts ?? new List<JsonObject>())
                 .Select(SecureStore.HydrateAccountTokens)
                 .ToList();
-            if (!File.Exists(AccountsPath))
+            if (persistChanges && !File.Exists(AccountsPath))
             {
                 SaveAccounts(accounts);
             }
@@ -128,7 +136,10 @@ public sealed class AppSettings
             });
         }
 
-        SaveAccounts(migrated);
+        if (persistChanges)
+        {
+            SaveAccounts(migrated);
+        }
         return migrated;
     }
 

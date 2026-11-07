@@ -91,25 +91,70 @@ public sealed partial class LaunchPage : Page
     private bool _loadingJavaCandidates;
     private bool _responsiveLayoutInitialized;
     private bool _wideLayout;
+    private bool _unloaded;
     private int _javaEnvironmentRequest;
     private int _versionRefreshRequest;
+    private int _modsRefreshRequest;
+    private int _worldsRefreshRequest;
+    private readonly Dictionary<string, Task<int>> _javaProbes = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, LocalVersionCandidate> _localVersions = new(StringComparer.OrdinalIgnoreCase);
+    private string _versionsDirectory = "";
+    private readonly TaskCompletionSource _initializationCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public LaunchPage()
     {
         InitializeComponent();
         _versionSettingsService = new VersionSettingsService(_launcher);
         VersionSectionBar.SelectedItem = VersionSectionBar.Items[0];
-        LoadState();
-        _initialized = true;
+        IsEnabled = false;
+        UpdateLaunchReadiness();
+        RefreshVersionMods();
         Loaded += LaunchPage_Loaded;
+        Unloaded += (_, _) =>
+        {
+            _unloaded = true;
+            ++_javaEnvironmentRequest;
+            ++_versionRefreshRequest;
+            ++_modsRefreshRequest;
+            ++_worldsRefreshRequest;
+        };
     }
 
     private async void LaunchPage_Loaded(object sender, RoutedEventArgs e)
     {
         Loaded -= LaunchPage_Loaded;
-        await Task.WhenAll(
-            RefreshJavaEnvironmentAsync(JavaPathBox.Text, showFeedback: false),
-            RefreshVersionListAsync());
+        try
+        {
+            var state = await Task.Run(() =>
+            {
+                _settings.LoadConfig(persistChanges: false);
+                return (Versions: _versionSettingsService.LoadVersionSettings(), Accounts: _settings.LoadAccounts(persistChanges: false));
+            });
+            if (_unloaded)
+            {
+                return;
+            }
+
+            _versionSettings = state.Versions;
+            _accounts = state.Accounts;
+            LoadState();
+            _initialized = true;
+            IsEnabled = true;
+            await Task.WhenAll(
+                RefreshJavaEnvironmentAsync(JavaPathBox.Text, showFeedback: false),
+                RefreshVersionListAsync());
+        }
+        catch (Exception exc)
+        {
+            if (!_unloaded)
+            {
+                OutputBox.Text = "加载启动设置失败：" + exc.Message;
+            }
+        }
+        finally
+        {
+            _initializationCompleted.TrySetResult();
+        }
     }
 
     private void VersionSectionChanged(SelectorBar sender, SelectorBarSelectionChangedEventArgs e)
@@ -121,9 +166,6 @@ public sealed partial class LaunchPage : Page
 
     private void LoadState()
     {
-        _settings.LoadConfig();
-        _versionSettings = _versionSettingsService.LoadVersionSettings();
-        _accounts = _settings.LoadAccounts();
         ApplyAdvancedVisibility();
         _resourceMarket.ModrinthApiBase = _settings.Config.Get("DOWNLOAD", "modrinth_api_base", "");
         if (string.IsNullOrWhiteSpace(_resourceMarket.ModrinthApiBase))
@@ -179,7 +221,7 @@ public sealed partial class LaunchPage : Page
         try
         {
             candidates = await Task.Run(() => _launcher.GetLocalVersions(gameDir)
-                .Select(versionId => new LocalVersionCandidate(versionId, _versionSettingsService.DetectVersionType(gameDir, versionId)))
+                .Select(versionId => ReadLocalVersion(gameDir, versionId))
                 .ToList());
         }
         catch (Exception exc)
@@ -198,6 +240,8 @@ public sealed partial class LaunchPage : Page
             return;
         }
 
+        _versionsDirectory = gameDir;
+        _localVersions = candidates.ToDictionary(candidate => candidate.VersionId, StringComparer.OrdinalIgnoreCase);
         var allVersions = candidates.Select(candidate => candidate.VersionId).ToList();
         var versions = candidates
             .Where(candidate => VersionVisibleInCategory(candidate.VersionId, candidate.DetectedType, category))
@@ -241,7 +285,10 @@ public sealed partial class LaunchPage : Page
             UpdateLaunchStatus("当前分类没有可显示的版本", 0, "当前步骤：等待版本");
         }
 
-        RefreshVersionMods();
+        if (SelectedVersionId is null)
+        {
+            RefreshVersionMods();
+        }
     }
 
     private bool VersionVisibleInCategory(string versionId, string detectedType, string category)
@@ -262,10 +309,32 @@ public sealed partial class LaunchPage : Page
         };
     }
 
+    private LocalVersionCandidate ReadLocalVersion(string gameDir, string versionId)
+    {
+        var type = "未知类型";
+        try
+        {
+            type = _versionSettingsService.DetectVersionType(gameDir, versionId);
+            return new LocalVersionCandidate(versionId, type, _launcher.InferRequiredJavaVersion(gameDir, versionId));
+        }
+        catch (Exception exc) when (exc is System.Text.Json.JsonException or InvalidOperationException
+            or FormatException or IOException or UnauthorizedAccessException)
+        {
+            // A broken manifest must not hide other installed versions; launch preflight still validates it.
+            return new LocalVersionCandidate(versionId, type, 0);
+        }
+    }
+
     private void VersionsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (SelectedVersionId is not string versionId)
         {
+            ++_worldsRefreshRequest;
+            _quickPlayWorldIds.Clear();
+            QuickPlayBox.ItemsSource = null;
+            RefreshVersionMods();
+            UpdateVersionSummary(null);
+            UpdateLaunchReadiness();
             return;
         }
 
@@ -312,6 +381,10 @@ public sealed partial class LaunchPage : Page
 
     private async void RefreshJavaCandidates(object sender, RoutedEventArgs e)
     {
+        foreach (var path in _javaProbes.Where(pair => pair.Value.IsCompleted).Select(pair => pair.Key).ToList())
+        {
+            _javaProbes.Remove(path);
+        }
         await RefreshJavaEnvironmentAsync(JavaPathBox.Text.Trim(), showFeedback: true);
         UpdateLaunchStatus($"已刷新 Java 候选：{JavaCandidatesBox.Items.Count} 项。", 0, "当前步骤：检测 Java");
         OutputBox.Text = $"已刷新 Java 候选：{JavaCandidatesBox.Items.Count} 项。";
@@ -344,10 +417,19 @@ public sealed partial class LaunchPage : Page
         }
 
         var candidatesTask = Task.Run(() => JavaDiscovery.FindCandidates(gameDirectory, javaPath));
-        var majorTask = Task.Run(() => JavaRuntimeService.GetJavaMajorVersion(javaPath));
+        var majorTask = ProbeJavaAsync(javaPath);
+        string? preferred = null;
         try
         {
             await Task.WhenAll(candidatesTask, majorTask);
+            if (request != _javaEnvironmentRequest)
+            {
+                return;
+            }
+
+            var candidates = await candidatesTask;
+            preferred = candidates.FirstOrDefault(candidate => SamePathOrText(candidate, javaPath));
+            preferred ??= await PickJavaForSelectedVersionAsync(candidates, request);
         }
         catch (Exception exc)
         {
@@ -372,8 +454,7 @@ public sealed partial class LaunchPage : Page
             JavaCandidatesBox.ItemsSource = candidates;
             if (candidates.Count > 0)
             {
-                var explicitMatch = candidates.FirstOrDefault(candidate => SamePathOrText(candidate, javaPath));
-                JavaCandidatesBox.SelectedItem = explicitMatch ?? PickJavaForSelectedVersion(candidates) ?? candidates[0];
+                JavaCandidatesBox.SelectedItem = preferred ?? candidates[0];
             }
         }
         finally
@@ -384,14 +465,8 @@ public sealed partial class LaunchPage : Page
         UpdateJavaVersionStatus(javaPath, await majorTask);
     }
 
-    /// <summary>
-    /// 按当前选中版本需要的 Java 大版本，从候选里挑最合适的一个。
-    /// 规则：
-    /// 1) 有大版本与需求完全一致的，优先选它（启动成功率最高）；
-    /// 2) 否则选第一个「不低于」需求的（Java 向后兼容，新版能跑旧版本）；
-    /// 3) 都低于需求时返回 null，让调用方回退到原逻辑，同时在状态里提示用户。
-    /// </summary>
-    private string? PickJavaForSelectedVersion(IReadOnlyList<string> candidates)
+    // Only an exact Java major match is considered compatible.
+    private async Task<string?> PickJavaForSelectedVersionAsync(IReadOnlyList<string> candidates, int request)
     {
         var versionId = SelectedVersionId;
         if (string.IsNullOrWhiteSpace(versionId))
@@ -399,7 +474,7 @@ public sealed partial class LaunchPage : Page
             return null;
         }
 
-        var required = _launcher.InferRequiredJavaVersion(GameDirectoryBox.Text.Trim(), versionId);
+        var required = KnownVersion(versionId)?.RequiredJava ?? 0;
         if (required <= 0)
         {
             return null;
@@ -408,7 +483,11 @@ public sealed partial class LaunchPage : Page
         var detected = new List<(string Path, int Major)>();
         foreach (var candidate in candidates)
         {
-            var major = JavaRuntimeService.GetJavaMajorVersion(candidate);
+            var major = await ProbeJavaAsync(candidate);
+            if (request != _javaEnvironmentRequest || SelectedVersionId != versionId)
+            {
+                return null;
+            }
             if (major > 0)
             {
                 detected.Add((candidate, major));
@@ -441,7 +520,7 @@ public sealed partial class LaunchPage : Page
         var request = ++_javaEnvironmentRequest;
         var javaPath = path.Trim().Length == 0 ? "java" : path.Trim();
         JavaVersionText.Text = "正在检测 Java...";
-        var major = await Task.Run(() => JavaRuntimeService.GetJavaMajorVersion(javaPath));
+        var major = await ProbeJavaAsync(javaPath, refresh: true);
         if (request == _javaEnvironmentRequest)
         {
             UpdateJavaVersionStatus(javaPath, major);
@@ -449,6 +528,29 @@ public sealed partial class LaunchPage : Page
 
         return major;
     }
+
+    private Task<int> ProbeJavaAsync(string path, bool refresh = false)
+    {
+        var key = string.IsNullOrWhiteSpace(path) ? "java" : path.Trim();
+        if (!_javaProbes.TryGetValue(key, out var probe) || (refresh && probe.IsCompleted))
+        {
+            probe = Task.Run(() => JavaRuntimeService.GetJavaMajorVersion(key));
+            _javaProbes[key] = probe;
+        }
+
+        return probe;
+    }
+
+    // UI updates only consume completed probes; they must never start a process or wait for one.
+    private int KnownJavaMajor(string path)
+    {
+        var key = string.IsNullOrWhiteSpace(path) ? "java" : path.Trim();
+        return _javaProbes.TryGetValue(key, out var probe) && probe.IsCompletedSuccessfully ? probe.Result : 0;
+    }
+
+    private LocalVersionCandidate? KnownVersion(string versionId)
+        => SamePathOrText(_versionsDirectory, GameDirectoryBox.Text.Trim())
+            && _localVersions.TryGetValue(versionId, out var version) ? version : null;
 
     private async void SaveVersionSettings(object sender, RoutedEventArgs e)
     {
@@ -648,7 +750,7 @@ public sealed partial class LaunchPage : Page
         var versionId = SelectedVersionId;
         var hasVersion = !string.IsNullOrWhiteSpace(versionId);
         var javaPath = JavaPathBox.Text.Trim();
-        var javaMajor = JavaRuntimeService.GetJavaMajorVersion(javaPath.Length == 0 ? "java" : javaPath);
+        var javaMajor = KnownJavaMajor(javaPath);
 
         // 身份区：头像用名字首字，符合 Minecraft 玩家习惯
         var name = SelectedAccountName();
@@ -875,9 +977,11 @@ public sealed partial class LaunchPage : Page
     private void OpenSavesFolder(object sender, RoutedEventArgs e) => OpenVersionRuntimeSubfolder("saves");
     private void OpenModsFolder(object sender, RoutedEventArgs e) => OpenDirectory(CurrentModsDirectory(), create: true);
 
-    private void RefreshVersionMods()
+    private async void RefreshVersionMods()
     {
+        var request = ++_modsRefreshRequest;
         _versionModsByLabel.Clear();
+        VersionModsList.ItemsSource = null;
         if (SelectedVersionId is not string versionId)
         {
             VersionModsList.ItemsSource = null;
@@ -892,7 +996,27 @@ public sealed partial class LaunchPage : Page
             return;
         }
 
-        var mods = ResourceMarketService.ListLocalResources("", "mod", CurrentModsDirectory());
+        var directory = CurrentModsDirectory();
+        SetVersionModControls(false, "正在扫描 Mod...");
+        IReadOnlyList<LocalResourceInfo> mods;
+        try
+        {
+            mods = await Task.Run(() => ResourceMarketService.ListLocalResources("", "mod", directory));
+        }
+        catch (Exception exc)
+        {
+            if (request == _modsRefreshRequest)
+            {
+                SetVersionModControls(false, "扫描 Mod 失败：" + exc.Message);
+            }
+            return;
+        }
+
+        if (request != _modsRefreshRequest || SelectedVersionId != versionId || directory != CurrentModsDirectory())
+        {
+            return;
+        }
+
         var labels = new List<string>();
         foreach (var mod in mods)
         {
@@ -1040,7 +1164,7 @@ public sealed partial class LaunchPage : Page
     }
 
     private bool VersionSupportsModManagement(string versionId)
-        => _versionSettingsService.DetectVersionType(GameDirectoryBox.Text.Trim(), versionId) is "Fabric" or "Forge" or "NeoForge" or "OptiFine";
+        => KnownVersion(versionId)?.DetectedType is "Fabric" or "Forge" or "NeoForge" or "OptiFine";
 
     private string ModrinthLoaderForVersion(string versionId)
         => _versionSettingsService.DetectVersionType(GameDirectoryBox.Text.Trim(), versionId) switch
@@ -1080,6 +1204,22 @@ public sealed partial class LaunchPage : Page
         WindowWidthPanel.Visibility = visibility;
         WindowHeightPanel.Visibility = visibility;
         AdvancedLaunchSettingsCard.Visibility = visibility;
+    }
+
+    internal async Task RunDataSmokeChecksAsync()
+    {
+        await _initializationCompleted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        if (!_initialized)
+        {
+            throw new InvalidOperationException("启动页初始化未完成：" + OutputBox.Text);
+        }
+
+        var gameDir = GameDirectoryBox.Text.Trim();
+        var installed = await Task.Run(() => _launcher.GetLocalVersions(gameDir));
+        if (!installed.ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(_localVersions.Keys))
+        {
+            throw new InvalidOperationException("启动页未能列出全部已安装版本：" + OutputBox.Text);
+        }
     }
 
     internal void RunSmokeChecks()
@@ -1329,34 +1469,62 @@ public sealed partial class LaunchPage : Page
             GcStrategy: UiHelpers.ComboText(GcStrategyBox, options.GcStrategy)));
     }
 
-    private void RefreshQuickPlayWorlds(object sender, RoutedEventArgs e)
+    private async void RefreshQuickPlayWorlds(object sender, RoutedEventArgs e)
     {
-        RefreshQuickPlayWorlds(CurrentQuickPlayWorld());
-        OutputBox.Text = "Quick Play 存档列表已刷新。";
+        await RefreshQuickPlayWorldsAsync(CurrentQuickPlayWorld());
     }
 
     private void RefreshQuickPlayWorlds(string selectedWorld)
+        => _ = RefreshQuickPlayWorldsAsync(selectedWorld);
+
+    private async Task RefreshQuickPlayWorldsAsync(string selectedWorld)
     {
+        var request = ++_worldsRefreshRequest;
+        var savesDir = Path.Combine(CurrentRuntimeDirectory(), "saves");
+        QuickPlayBox.IsEnabled = false;
+        // Preserve the saved selection while the directory scan is running.
         _quickPlayWorldIds.Clear();
         _quickPlayWorldIds.Add("");
-        var labels = new List<string> { "不快速进入存档" };
-        var savesDir = Path.Combine(CurrentRuntimeDirectory(), "saves");
-        if (Directory.Exists(savesDir))
+        if (!string.IsNullOrWhiteSpace(selectedWorld))
         {
-            foreach (var dir in Directory.GetDirectories(savesDir)
-                         .OrderByDescending(Directory.GetLastWriteTime)
-                         .Take(100))
+            _quickPlayWorldIds.Add(selectedWorld);
+        }
+        QuickPlayBox.ItemsSource = _quickPlayWorldIds.Select(id => id.Length == 0 ? "不快速进入存档" : id).ToList();
+        QuickPlayBox.SelectedIndex = _quickPlayWorldIds.Count - 1;
+        try
+        {
+            var worlds = await Task.Run(() => Directory.Exists(savesDir)
+                ? Directory.EnumerateDirectories(savesDir)
+                    .OrderByDescending(Directory.GetLastWriteTime)
+                    .Take(100).Select(Path.GetFileName).OfType<string>().ToList()
+                : new List<string>());
+            if (request != _worldsRefreshRequest || savesDir != Path.Combine(CurrentRuntimeDirectory(), "saves"))
             {
-                var id = Path.GetFileName(dir);
-                _quickPlayWorldIds.Add(id);
-                labels.Add(id);
+                return;
+            }
+
+            _quickPlayWorldIds.Clear();
+            _quickPlayWorldIds.Add("");
+            _quickPlayWorldIds.AddRange(worlds);
+            QuickPlayBox.ItemsSource = new[] { "不快速进入存档" }.Concat(worlds).ToList();
+            var index = _quickPlayWorldIds.FindIndex(item => string.Equals(item, selectedWorld, StringComparison.OrdinalIgnoreCase));
+            QuickPlayBox.SelectedIndex = index >= 0 ? index : 0;
+            UpdateVersionSummary(SelectedVersionId);
+        }
+        catch (Exception exc)
+        {
+            if (request == _worldsRefreshRequest)
+            {
+                OutputBox.Text = "扫描存档失败：" + exc.Message;
             }
         }
-
-        QuickPlayBox.ItemsSource = labels;
-        var index = string.IsNullOrWhiteSpace(selectedWorld) ? 0 : _quickPlayWorldIds.FindIndex(item => string.Equals(item, selectedWorld, StringComparison.OrdinalIgnoreCase));
-        QuickPlayBox.SelectedIndex = index >= 0 ? index : 0;
-        UpdateVersionSummary(SelectedVersionId);
+        finally
+        {
+            if (request == _worldsRefreshRequest)
+            {
+                QuickPlayBox.IsEnabled = true;
+            }
+        }
     }
 
     private string CurrentQuickPlayWorld()
@@ -1375,7 +1543,7 @@ public sealed partial class LaunchPage : Page
 
     private void AccountSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (SelectedAccount() is { } account)
+        if (_initialized && SelectedAccount() is { } account)
         {
             _settings.Config.Set("ACCOUNTS", "selected_account_id", account["id"]?.GetValue<string>() ?? "");
             _settings.SaveConfig();
@@ -1427,6 +1595,9 @@ public sealed partial class LaunchPage : Page
         }
 
         JavaVersionText.Text = knownMajor > 0 ? $"Java {knownMajor}" : "无法获取 Java 版本";
+        _javaProbes[value] = Task.FromResult(knownMajor);
+        UpdateLaunchReadiness();
+        UpdateVersionSummary(SelectedVersionId);
     }
 
     private void SetJavaDownloadStatus(string message, int progress)
@@ -1456,10 +1627,7 @@ public sealed partial class LaunchPage : Page
         }
 
         var gameDir = GameDirectoryBox.Text.Trim();
-        var displayName = VersionSettingsService.VersionDisplayName(_versionSettings, versionId);
-        var type = _versionSettingsService.DetectVersionType(gameDir, versionId);
-        var requiredJava = _launcher.InferRequiredJavaVersion(gameDir, versionId);
-        var quickPlay = CurrentQuickPlayWorld();
+        var requiredJava = KnownVersion(versionId)?.RequiredJava ?? 0;
         var runtime = VersionSettingsService.RuntimeDirectoryForVersion(
             gameDir,
             _versionSettings,
@@ -1468,7 +1636,7 @@ public sealed partial class LaunchPage : Page
 
         // 列表里已经显示版本名与类型，这里补上列表看不到、但决定能不能启动的信息
         var parts = new List<string>();
-        var actualJava = JavaRuntimeService.GetJavaMajorVersion(JavaPathBox.Text.Trim());
+        var actualJava = KnownJavaMajor(JavaPathBox.Text);
         if (requiredJava > 0)
         {
             // Java 需求是关键信息，且版本不匹配时必须当场说清楚，不能等点了启动才报错
@@ -1481,6 +1649,10 @@ public sealed partial class LaunchPage : Page
             {
                 parts.Add($"需要 Java {requiredJava}");
             }
+        }
+        else
+        {
+            parts.Add("无法读取 Java 需求，请检查版本清单");
         }
 
         parts.Add("运行目录：" + runtime);
@@ -1665,7 +1837,7 @@ public sealed partial class LaunchPage : Page
     private static int PositiveInt(JsonNode? value, int fallback)
         => int.TryParse(value?.ToString(), out var parsed) && parsed >= 0 ? parsed : fallback;
 
-                private sealed record LocalVersionCandidate(string VersionId, string DetectedType);
+    private sealed record LocalVersionCandidate(string VersionId, string DetectedType, int RequiredJava);
 
     // 断点必须按页面实际宽度计算：StackPanel 会按内容收缩，
     // 用它自己的 ActualWidth 会在宽屏上误判成窄屏。

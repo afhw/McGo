@@ -190,6 +190,132 @@ runner.Add("App settings migrate Python update manifest to CSharp manifest", () 
     var settings = new AppSettings(configPath, Path.Combine(temp.Path, "accounts.json"));
     settings.LoadConfig();
     Assert.Equal(McGo.Core.App.AppConstants.DefaultUpdateManifestUrl, settings.Config.Get("UPDATE", "manifest_url"));
+    Assert.Contains(McGo.Core.App.AppConstants.DefaultUpdateManifestUrl, File.ReadAllText(configPath));
+});
+
+foreach (var primaryState in new[] { "missing", "corrupt", "valid" })
+foreach (var backupState in new[] { "missing", "corrupt", "valid" })
+{
+    runner.Add($"Read-only config preserves files: primary={primaryState}, backup={backupState}", () =>
+    {
+        using var temp = TempDir.Create();
+        var configPath = Path.Combine(temp.Path, "launcher_config.ini");
+        foreach (var fixture in new[]
+        {
+            (Path: configPath, State: primaryState, Value: "primary"),
+            (Path: AtomicStorage.BackupPath(configPath), State: backupState, Value: "backup"),
+        })
+        {
+            if (fixture.State == "missing") continue;
+            File.WriteAllText(fixture.Path, fixture.State == "corrupt" ? "[UPDATE" :
+                $"; Preserve formatting\n[USER]\nusername={fixture.Value}\n[UPDATE]\nmanifest_url={McGo.Core.App.AppConstants.LegacyUpdateManifestUrl}\n");
+            File.SetLastWriteTimeUtc(fixture.Path, new DateTime(2001, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        }
+        var before = Directory.GetFiles(temp.Path).ToDictionary(path => path,
+            path => (Content: Convert.ToBase64String(File.ReadAllBytes(path)), LastWrite: File.GetLastWriteTimeUtc(path)));
+
+        var settings = new AppSettings(configPath, Path.Combine(temp.Path, "accounts.json"));
+        settings.LoadConfig(persistChanges: false);
+        Assert.Equal(primaryState == "valid" ? "primary" : backupState == "valid" ? "backup" : "",
+            settings.Config.Get("USER", "username"));
+        Assert.Equal("dark", settings.Config.Get("UI", "theme"));
+        Assert.Equal(McGo.Core.App.AppConstants.DefaultUpdateManifestUrl, settings.Config.Get("UPDATE", "manifest_url"));
+        Assert.Equal(before.Count, Directory.GetFiles(temp.Path).Length);
+        foreach (var (path, snapshot) in before)
+        {
+            Assert.True(File.Exists(path));
+            Assert.Equal(snapshot.Content, Convert.ToBase64String(File.ReadAllBytes(path)));
+            Assert.Equal(snapshot.LastWrite, File.GetLastWriteTimeUtc(path));
+        }
+    });
+
+    runner.Add($"Read-only accounts preserve files and hydrate: primary={primaryState}, backup={backupState}", () =>
+    {
+        using var temp = TempDir.Create();
+        var accountsPath = Path.Combine(temp.Path, "accounts.json");
+        foreach (var fixture in new[]
+        {
+            (Path: accountsPath, State: primaryState, Value: "primary"),
+            (Path: AtomicStorage.BackupPath(accountsPath), State: backupState, Value: "backup"),
+        })
+        {
+            if (fixture.State == "missing") continue;
+            var account = SecureStore.RedactAccountTokens(new JsonObject
+            {
+                ["id"] = fixture.Value,
+                ["access_token"] = "secret",
+                ["refresh_token"] = "refresh-secret",
+            });
+            File.WriteAllText(fixture.Path, fixture.State == "corrupt" ? "[" : new JsonArray(account).ToJsonString());
+            File.SetLastWriteTimeUtc(fixture.Path, new DateTime(2001, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        }
+        var before = Directory.GetFiles(temp.Path).ToDictionary(path => path,
+            path => (Content: Convert.ToBase64String(File.ReadAllBytes(path)), LastWrite: File.GetLastWriteTimeUtc(path)));
+        var settings = new AppSettings(Path.Combine(temp.Path, "launcher_config.ini"), accountsPath);
+        settings.Config.Set("USER", "username", "Legacy");
+
+        var accounts = settings.LoadAccounts(persistChanges: false);
+        var expectedId = primaryState == "valid" ? "primary" : backupState == "valid" ? "backup" : null;
+        if (expectedId is not null)
+        {
+            Assert.Equal(1, accounts.Count);
+            Assert.Equal(expectedId, accounts[0]["id"]?.GetValue<string>());
+            Assert.Equal("secret", accounts[0]["access_token"]?.GetValue<string>());
+            Assert.Equal("refresh-secret", accounts[0]["refresh_token"]?.GetValue<string>());
+        }
+        else if (primaryState == "missing")
+        {
+            Assert.Equal(1, accounts.Count);
+            Assert.Equal("Legacy", accounts[0]["username"]?.GetValue<string>());
+        }
+        else
+        {
+            Assert.Equal(0, accounts.Count);
+        }
+        Assert.Equal(before.Count, Directory.GetFiles(temp.Path).Length);
+        foreach (var (path, snapshot) in before)
+        {
+            Assert.True(File.Exists(path));
+            Assert.Equal(snapshot.Content, Convert.ToBase64String(File.ReadAllBytes(path)));
+            Assert.Equal(snapshot.LastWrite, File.GetLastWriteTimeUtc(path));
+        }
+    });
+}
+
+runner.Add("Read-only settings migrate accounts in memory without creating directories", () =>
+{
+    using var temp = TempDir.Create();
+    var directory = Path.Combine(temp.Path, "absent");
+    var settings = new AppSettings(Path.Combine(directory, "launcher_config.ini"), Path.Combine(directory, "accounts.json"));
+    settings.LoadConfig(persistChanges: false);
+    Assert.Equal("dark", settings.Config.Get("UI", "theme"));
+    settings.Config.Set("USER", "username", "Legacy");
+    settings.Config.Set("USER", "uuid", "legacy-uuid");
+    settings.Config.Set("USER", "accessToken", "legacy-access");
+    settings.Config.Set("AUTH", "refresh_token", "legacy-refresh");
+    var accounts = settings.LoadAccounts(persistChanges: false);
+    Assert.Equal(2, accounts.Count);
+    Assert.Equal("offline", accounts[0]["type"]?.GetValue<string>());
+    Assert.Equal("Legacy", accounts[0]["username"]?.GetValue<string>());
+    Assert.Equal("legacy-uuid", accounts[0]["uuid"]?.GetValue<string>());
+    Assert.Equal("legacy-access", accounts[0]["access_token"]?.GetValue<string>());
+    Assert.Equal("microsoft", accounts[1]["type"]?.GetValue<string>());
+    Assert.Equal("legacy-refresh", accounts[1]["refresh_token"]?.GetValue<string>());
+    Assert.True(!Directory.Exists(directory));
+});
+
+runner.Add("Default settings loads still persist defaults and migrated accounts", () =>
+{
+    using var temp = TempDir.Create();
+    var configPath = Path.Combine(temp.Path, "launcher_config.ini");
+    var accountsPath = Path.Combine(temp.Path, "accounts.json");
+    var settings = new AppSettings(configPath, accountsPath);
+    settings.LoadConfig();
+    Assert.Equal("dark", IniDocument.Load(configPath).Get("UI", "theme"));
+    settings.Config.Set("USER", "username", "Legacy");
+    var accounts = settings.LoadAccounts();
+    Assert.Equal(1, accounts.Count);
+    Assert.Equal("Legacy", AtomicStorage.LoadJsonFile(accountsPath, new List<JsonObject>())[0]["username"]?.GetValue<string>());
 });
 
 runner.Add("App log rotates and redacts secrets", () =>

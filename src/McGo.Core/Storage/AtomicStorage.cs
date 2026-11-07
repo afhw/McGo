@@ -43,10 +43,10 @@ public static class AtomicStorage
         AtomicWriteText(path, JsonSerializer.Serialize(data, options) + "\n");
     }
 
-    public static T LoadJsonFile<T>(string path, T fallback)
-        => LoadRecoverable(path, text => JsonSerializer.Deserialize<T>(text) ?? throw new JsonException("JSON root is null."), fallback);
+    public static T LoadJsonFile<T>(string path, T fallback, bool persistChanges = true)
+        => LoadRecoverable(path, text => JsonSerializer.Deserialize<T>(text) ?? throw new JsonException("JSON root is null."), fallback, persistChanges: persistChanges);
 
-    public static T LoadRecoverable<T>(string path, Func<string, T> parser, T fallback)
+    public static T LoadRecoverable<T>(string path, Func<string, T> parser, T fallback, bool persistChanges = true)
     {
         var targetPath = Path.GetFullPath(path);
         var backupPath = BackupPath(targetPath);
@@ -55,7 +55,7 @@ public static class AtomicStorage
             return value!;
         }
 
-        if (primaryCorrupt)
+        if (persistChanges && primaryCorrupt)
         {
             Quarantine(targetPath);
         }
@@ -65,7 +65,10 @@ public static class AtomicStorage
             return fallback;
         }
 
-        RestoreBackup(targetPath, backupPath);
+        if (persistChanges)
+        {
+            RestoreBackup(targetPath, backupPath);
+        }
         return value!;
     }
 

@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.WindowsRuntime;
@@ -43,7 +44,9 @@ public partial class App : Application
             return;
         }
 
-        var smokePages = commandLine.Contains("--smoke-pages", StringComparer.OrdinalIgnoreCase);
+        var smokeLaunchPerformance = commandLine.Contains("--smoke-launch-performance", StringComparer.OrdinalIgnoreCase);
+        var smokePages = smokeLaunchPerformance || commandLine.Contains("--smoke-pages", StringComparer.OrdinalIgnoreCase);
+        string? smokeJavaPath = null;
         if (smokePages)
         {
             _smokeReportPath = commandLine
@@ -74,14 +77,30 @@ public partial class App : Application
             {
                 _smokeGameDirectoryOverride = Path.GetFullPath(smokeGameDir);
             }
+            if (smokeLaunchPerformance)
+            {
+                smokeJavaPath = commandLine.FirstOrDefault(value => value.StartsWith("--smoke-java-path=", StringComparison.OrdinalIgnoreCase))?
+                    ["--smoke-java-path=".Length..];
+                if (!string.IsNullOrWhiteSpace(smokeJavaPath))
+                {
+                    smokeJavaPath = Path.GetFullPath(Environment.ExpandEnvironmentVariables(smokeJavaPath));
+                }
+            }
             Directory.SetCurrentDirectory(_smokeWorkingDirectory);
             var smokeTheme = commandLine.FirstOrDefault(value => value.StartsWith("--smoke-theme=", StringComparison.OrdinalIgnoreCase))?
                 ["--smoke-theme=".Length..];
-            if (smokeTheme is not null)
+            if (smokeTheme is not null || !string.IsNullOrWhiteSpace(smokeJavaPath))
             {
                 var settings = new McGo.Core.Configuration.AppSettings();
                 settings.LoadConfig();
-                settings.Config.Set("UI", "theme", smokeTheme);
+                if (smokeTheme is not null)
+                {
+                    settings.Config.Set("UI", "theme", smokeTheme);
+                }
+                if (!string.IsNullOrWhiteSpace(smokeJavaPath))
+                {
+                    settings.Config.Set("JAVA", "path", smokeJavaPath);
+                }
                 settings.SaveConfig();
             }
         }
@@ -102,6 +121,12 @@ public partial class App : Application
 
         if (smokePages)
         {
+            if (smokeLaunchPerformance)
+            {
+                _ = RunLaunchPerformanceSmokeAsync((MainWindow)_window, smokeJavaPath);
+                return;
+            }
+
             if (commandLine.Contains("--smoke-global-task", StringComparer.OrdinalIgnoreCase))
             {
                 DownloadTaskManager.Current.Enqueue("smoke", "全局下载视觉烟测", async (record, token) =>
@@ -121,6 +146,114 @@ public partial class App : Application
         }
 
         MusicPlaybackService.ApplySavedSettings();
+    }
+
+    private static async Task RunLaunchPerformanceSmokeAsync(MainWindow window, string? javaPath)
+    {
+        const int heartbeatIntervalMs = 100;
+        const int navigationLimitMs = 1000;
+        const int heartbeatDelayLimitMs = 750;
+        const int observationMs = 3000;
+        const int rounds = 3;
+        var results = new List<string>
+        {
+            $"INFO launch-performance rounds={rounds} observation_ms={observationMs} heartbeat_interval_ms={heartbeatIntervalMs} navigation_limit_ms={navigationLimitMs} heartbeat_delay_limit_ms={heartbeatDelayLimitMs}",
+            $"INFO java_path={javaPath ?? "default (no slow Java fixture supplied)"}",
+            "INFO Measures navigation and UI responsiveness; does not assert Java detection completion or fixture execution.",
+        };
+        var failed = false;
+        var timer = window.DispatcherQueue.CreateTimer();
+        timer.Interval = TimeSpan.FromMilliseconds(heartbeatIntervalMs);
+        timer.IsRepeating = true;
+        var clock = new Stopwatch();
+        var previousHeartbeatMs = 0.0;
+        var maxHeartbeatDelayMs = 0.0;
+        var heartbeatCount = 0;
+
+        void RecordHeartbeat()
+        {
+            var now = clock.Elapsed.TotalMilliseconds;
+            maxHeartbeatDelayMs = Math.Max(maxHeartbeatDelayMs,
+                Math.Max(0, now - previousHeartbeatMs - heartbeatIntervalMs));
+            previousHeartbeatMs = now;
+        }
+
+        timer.Tick += (_, _) =>
+        {
+            RecordHeartbeat();
+            heartbeatCount++;
+        };
+
+        try
+        {
+            WriteSmokeReport(results);
+            if (!string.IsNullOrWhiteSpace(javaPath) && !File.Exists(javaPath))
+            {
+                throw new FileNotFoundException("The supplied smoke Java executable does not exist.", javaPath);
+            }
+
+            // Settle initial window activation without warming LaunchPage or running functional checks.
+            await Task.Delay(500);
+            for (var round = 1; round <= rounds; round++)
+            {
+                previousHeartbeatMs = 0;
+                maxHeartbeatDelayMs = 0;
+                heartbeatCount = 0;
+                clock.Restart();
+                timer.Start();
+                double navigationMs;
+                double awayNavigationMs;
+                try
+                {
+                    // Arm the heartbeat before synchronous navigation so constructor stalls are included.
+                    var navigation = Stopwatch.StartNew();
+                    window.NavigateToTag("launch");
+                    navigationMs = navigation.Elapsed.TotalMilliseconds;
+                    if (window.CurrentPage is not Pages.LaunchPage)
+                    {
+                        throw new InvalidOperationException("Navigation did not open LaunchPage.");
+                    }
+
+                    await Task.Delay(observationMs);
+                    navigation.Restart();
+                    window.NavigateToTag("about");
+                    awayNavigationMs = navigation.Elapsed.TotalMilliseconds;
+                    if (window.CurrentPage is not Pages.AboutPage)
+                    {
+                        throw new InvalidOperationException("Navigation did not leave LaunchPage.");
+                    }
+
+                    await Task.Delay(250);
+                    // Include a stalled final interval even if the continuation beats the next timer tick.
+                    RecordHeartbeat();
+                }
+                finally
+                {
+                    timer.Stop();
+                    clock.Stop();
+                }
+
+                var passed = navigationMs <= navigationLimitMs && awayNavigationMs <= navigationLimitMs &&
+                    maxHeartbeatDelayMs <= heartbeatDelayLimitMs && heartbeatCount > 0;
+                failed |= !passed;
+                results.Add(FormattableString.Invariant(
+                    $"{(passed ? "PASS" : "FAIL")} launch-performance round={round} navigate_ms={navigationMs:F1} leave_ms={awayNavigationMs:F1} heartbeat_max_delay_ms={maxHeartbeatDelayMs:F1} heartbeat_count={heartbeatCount} elapsed_ms={clock.Elapsed.TotalMilliseconds:F1}"));
+                WriteSmokeReport(results);
+            }
+        }
+        catch (Exception exc)
+        {
+            failed = true;
+            results.Add($"FAIL launch-performance: {exc}");
+        }
+        finally
+        {
+            timer.Stop();
+            WriteSmokeReport(results);
+            CleanupSmokeWorkingDirectory();
+        }
+
+        Environment.Exit(failed ? 1 : 0);
     }
 
     private static async Task RunPageSmokeAsync(MainWindow window)
@@ -164,6 +297,7 @@ public partial class App : Application
                             downloadPage.RunSmokeChecks();
                             break;
                         case Pages.LaunchPage launchPage:
+                            await launchPage.RunDataSmokeChecksAsync();
                             launchPage.RunSmokeChecks();
                             break;
                         case Pages.ModpacksPage modpacksPage:

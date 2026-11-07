@@ -8,8 +8,8 @@ public sealed class IniDocument
 
     public IReadOnlyDictionary<string, Dictionary<string, string>> Sections => _sections;
 
-    public static IniDocument Load(string path)
-        => Storage.AtomicStorage.LoadRecoverable(path, Parse, new IniDocument());
+    public static IniDocument Load(string path, bool persistChanges = true)
+        => Storage.AtomicStorage.LoadRecoverable(path, Parse, new IniDocument(), persistChanges: persistChanges);
 
     private static IniDocument Parse(string text)
     {
