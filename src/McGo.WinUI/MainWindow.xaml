@@ -32,7 +32,7 @@
             Grid.Row="1"
             CompactModeThresholdWidth="640"
             CompactPaneLength="48"
-            ExpandedModeThresholdWidth="1010"
+            ExpandedModeThresholdWidth="1280"
             IsBackButtonVisible="Collapsed"
             IsPaneToggleButtonVisible="False"
             IsSettingsVisible="False"

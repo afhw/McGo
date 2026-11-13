@@ -34,10 +34,13 @@ public sealed partial class OnlinePage : Page
     private bool _natRunning;
     private bool _capsulePackageBusy;
     private int _capsuleVersionScanRequest;
+    private bool? _compactLayout;
 
     public OnlinePage()
     {
         InitializeComponent();
+        SizeChanged += (_, _) => ApplyResponsiveLayout();
+        Loaded += (_, _) => ApplyResponsiveLayout();
         _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
         _versionSettingsService = new VersionSettingsService(_launcher);
         OnlineSectionBar.SelectedItem = OnlineSectionBar.Items[0];
@@ -47,6 +50,30 @@ public sealed partial class OnlinePage : Page
         LoadSettings();
         ApplyP2PRole();
         Loaded += OnlinePage_Loaded;
+    }
+
+    private void ApplyResponsiveLayout()
+    {
+        if (ActualWidth <= 0) return;
+        var compact = ActualWidth < 700;
+        if (_compactLayout == compact) return;
+        _compactLayout = compact;
+        P2PPrimarySettingsGrid.ColumnSpacing = compact ? 0 : 10;
+        P2PPrimarySettingsGrid.RowDefinitions.Clear();
+        for (var row = 0; row < (compact ? 3 : 2); row++)
+            P2PPrimarySettingsGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        Grid.SetColumnSpan(RoomFieldPanel, compact ? 2 : 1);
+        Grid.SetRow(SecretBox, compact ? 1 : 0);
+        Grid.SetColumn(SecretBox, compact ? 0 : 1);
+        Grid.SetColumnSpan(SecretBox, compact ? 2 : 1);
+        Grid.SetRow(P2PRoleHintPanel, compact ? 2 : 1);
+
+        RelaySettingsGrid.ColumnSpacing = compact ? 0 : 12;
+        RelaySettingsGrid.RowSpacing = compact ? 10 : 0;
+        Grid.SetColumnSpan(RelayHostBox, compact ? 2 : 1);
+        Grid.SetRow(RelayPortBox, compact ? 1 : 0);
+        Grid.SetColumn(RelayPortBox, compact ? 0 : 1);
+        Grid.SetColumnSpan(RelayPortBox, compact ? 2 : 1);
     }
 
     private async void OnlinePage_Loaded(object sender, RoutedEventArgs e)
@@ -905,7 +932,7 @@ public sealed partial class OnlinePage : Page
             PullCapsuleButton.IsEnabled = false;
             SetP2PStatus("状态：胶囊补包已加入全局队列", 40);
             DownloadTaskManager.Current.Enqueue("capsule", "补齐联机胶囊文件", (record, token) =>
-                PullCapsuleFilesTaskAsync(record, runtimeDir, files, config, udpEnabled, token));
+                PullCapsuleFilesTaskAsync(record, runtimeDir, files, config, udpEnabled, token), outputDirectory: runtimeDir);
         }
         catch (Exception exc)
         {
@@ -955,7 +982,7 @@ public sealed partial class OnlinePage : Page
             SetP2PStatus("状态：胶囊补包完成", 100);
             return $"胶囊补包完成：下载 {result.Downloaded}/{result.TotalMissing}";
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             AppendOnline("胶囊补包已取消。");
             SetP2PStatus("状态：胶囊补包已取消", 0);

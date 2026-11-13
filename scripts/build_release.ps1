@@ -1,52 +1,28 @@
 param(
   [switch]$SkipRelay,
-  # 发布版本号（如 "2.1.0"）。与 -DownloadUrl 同时提供时生成 dist/update.json 更新清单。
+  # 可选版本断言；实际版本读取构建产物，不覆盖产物版本。
   [string]$ReleaseVersion,
-  # 更新可执行文件的下载地址（HTTP/HTTPS 绝对地址）。
+  # HTTP/HTTPS 地址或以 / 开头的网站路径。
   [string]$DownloadUrl,
   # 下载地址指向安装器而非可直接替换的 exe 时设置。
   [switch]$Installer,
   # 更新说明/更新日志文本。
-  [string]$ReleaseNotes = ""
+  [string]$ReleaseNotes = "",
+  [switch]$ValidateOnly
 )
 
 $ErrorActionPreference = "Stop"
 
-function Write-UpdateManifest {
-  param(
-    [Parameter(Mandatory = $true)][string]$ArtifactPath,
-    [Parameter(Mandatory = $true)][string]$Version,
-    [Parameter(Mandatory = $true)][string]$Url,
-    [Parameter(Mandatory = $true)][string]$OutputPath,
-    [bool]$IsInstaller = $false,
-    [string]$Notes = ""
-  )
+. (Join-Path $PSScriptRoot 'release_metadata.ps1')
 
-  if (-not (Test-Path -LiteralPath $ArtifactPath)) {
-    throw "找不到用于生成更新清单的发布文件：$ArtifactPath"
-  }
-
-  $uri = $null
-  if (-not [Uri]::TryCreate($Url, [UriKind]::Absolute, [ref]$uri) -or ($uri.Scheme -ne "http" -and $uri.Scheme -ne "https")) {
-    throw "更新清单 url 必须是 HTTP 或 HTTPS 绝对地址：$Url"
-  }
-
-  $sha256 = (Get-FileHash -LiteralPath $ArtifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
-  $size = (Get-Item -LiteralPath $ArtifactPath).Length
-  # 字段顺序/名称必须与 McGo.Core.Updates.UpdaterService.BuildUpdateManifest 保持一致。
-  $manifest = [ordered]@{
-    version   = $Version.Trim()
-    url       = $Url.Trim()
-    sha256    = $sha256
-    size      = $size
-    installer = [bool]$IsInstaller
-    notes     = $Notes.Trim()
-  }
-
-  $json = $manifest | ConvertTo-Json -Depth 4
-  [System.IO.File]::WriteAllText($OutputPath, $json, (New-Object System.Text.UTF8Encoding($false)))
-  Write-Host "更新清单已写入 $OutputPath (version=$Version, sha256=$sha256, size=$size, installer=$IsInstaller)"
+if ($ReleaseVersion -and -not $DownloadUrl -and -not $Installer) {
+  throw 'ReleaseVersion requires DownloadUrl when building an executable update.'
 }
+if ($DownloadUrl) { Assert-ReleaseUrl -Url $DownloadUrl }
+if ($Installer) {
+  & (Join-Path $PSScriptRoot 'build_csharp_installer.ps1') -DownloadUrl $DownloadUrl -ValidateOnly
+}
+if ($ValidateOnly) { return }
 
 $ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $OutputDir = Join-Path $ProjectRoot "dist"
@@ -106,19 +82,26 @@ if (-not $SkipRelay) {
   }
 }
 
-if ($ReleaseVersion -and $DownloadUrl) {
+if ($Installer) {
+  $installerParameters = @{
+    SkipClientBuild = $true
+    OutputDirectory = $OutputDir
+    ManifestPath = (Join-Path $OutputDir 'update.json')
+    ReleaseVersion = $ReleaseVersion
+    ReleaseNotes = $ReleaseNotes
+  }
+  if ($DownloadUrl) { $installerParameters.DownloadUrl = $DownloadUrl }
+  & (Join-Path $PSScriptRoot 'build_csharp_installer.ps1') @installerParameters
+}
+elseif ($DownloadUrl) {
   $manifestArtifact = Join-Path $AppOutputDir "McGo.WinUI.exe"
   $manifestPath = Join-Path $OutputDir "update.json"
   Write-UpdateManifest `
     -ArtifactPath $manifestArtifact `
-    -Version $ReleaseVersion `
+    -ExpectedVersion $ReleaseVersion `
     -Url $DownloadUrl `
     -OutputPath $manifestPath `
-    -IsInstaller:$Installer.IsPresent `
-    -Notes $ReleaseNotes
-}
-elseif ($ReleaseVersion -or $DownloadUrl) {
-  Write-Warning "同时提供 -ReleaseVersion 与 -DownloadUrl 才会生成更新清单，已跳过 update.json 生成。"
+    -Notes $ReleaseNotes | Out-Null
 }
 
 Write-Host "McGo C# release written to $OutputDir"

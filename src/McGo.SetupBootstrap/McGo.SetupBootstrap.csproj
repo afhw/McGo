@@ -10,10 +10,23 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationIcon>..\McGo.WinUI\Assets\AppIcon.ico</ApplicationIcon>
     <AssemblyName>McGo.SetupBootstrap</AssemblyName>
-    <Version>1.1.1</Version>
+    <Version>1.1.2</Version>
     <AssemblyTitle>McGo 安装程序</AssemblyTitle>
     <Product>McGo</Product>
     <Description>McGo C# / WinUI 3 安装程序</Description>
     <Company>McGo</Company>
   </PropertyGroup>
+
+  <!-- Run after NuGet imports, which can still describe the previously restored compiler. -->
+  <Target Name="UsePatchedNativeAotPacks" BeforeTargets="ProcessFrameworkReferences"
+          Condition="'$(PublishAot)' == 'true' And '$(TargetFramework)' == 'net8.0-windows'">
+    <ItemGroup>
+      <KnownILCompilerPack Update="Microsoft.DotNet.ILCompiler"
+                           Condition="'%(TargetFramework)' == 'net8.0'"
+                           ILCompilerPackVersion="$(McGoRuntimePatchVersion)" />
+      <KnownILLinkPack Update="Microsoft.NET.ILLink.Tasks"
+                       Condition="'%(TargetFramework)' == 'net8.0'"
+                       ILLinkPackVersion="$(McGoRuntimePatchVersion)" />
+    </ItemGroup>
+  </Target>
 </Project>

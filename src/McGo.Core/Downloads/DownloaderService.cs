@@ -49,8 +49,9 @@ public sealed class DownloaderService
 
     public static string? MavenLibraryPath(string name) => LauncherService.MavenLibraryPath(name);
 
-    public static bool MatchesFile(string path, long expectedSize = 0, string expectedSha1 = "")
+    public static bool MatchesFile(string path, long expectedSize = 0, string expectedSha1 = "", CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (!File.Exists(path))
         {
             return false;
@@ -61,11 +62,15 @@ public sealed class DownloaderService
             return false;
         }
 
-        return string.IsNullOrWhiteSpace(expectedSha1) || FileUtilities.Sha1File(path).Equals(expectedSha1, StringComparison.OrdinalIgnoreCase);
+        cancellationToken.ThrowIfCancellationRequested();
+        var matches = string.IsNullOrWhiteSpace(expectedSha1) || FileUtilities.Sha1File(path).Equals(expectedSha1, StringComparison.OrdinalIgnoreCase);
+        cancellationToken.ThrowIfCancellationRequested();
+        return matches;
     }
 
-    public static List<DownloadJob> BuildCoreJobs(JsonObject versionJson, string gameDirectory, string versionId, string mirrorSource)
+    public static List<DownloadJob> BuildCoreJobs(JsonObject versionJson, string gameDirectory, string versionId, string mirrorSource, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var jobs = new List<DownloadJob>();
         var client = versionJson["downloads"]?["client"] as JsonObject;
         if (client is not null)
@@ -80,6 +85,7 @@ public sealed class DownloaderService
 
         foreach (var library in versionJson["libraries"]?.AsArray().OfType<JsonObject>() ?? [])
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var artifact = library["downloads"]?["artifact"] as JsonObject;
             var path = artifact?["path"]?.GetValue<string>();
             if (string.IsNullOrWhiteSpace(path) && !IsNativeOnlyLibrary(library) && library["name"] is JsonValue nameValue && nameValue.TryGetValue<string>(out var name))
@@ -120,9 +126,10 @@ public sealed class DownloaderService
         return jobs;
     }
 
-    public static List<MissingGameFile> CollectMissingGameFiles(JsonObject versionJson, string gameDirectory, string versionId, bool includeAssets = true)
+    public static List<MissingGameFile> CollectMissingGameFiles(JsonObject versionJson, string gameDirectory, string versionId, bool includeAssets = true, CancellationToken cancellationToken = default)
     {
-        var jobs = BuildCoreJobs(versionJson, gameDirectory, versionId, "official");
+        cancellationToken.ThrowIfCancellationRequested();
+        var jobs = BuildCoreJobs(versionJson, gameDirectory, versionId, "official", cancellationToken);
         var assetIndexJob = BuildAssetIndexJob(versionJson, gameDirectory, "official");
         if (assetIndexJob is not null)
         {
@@ -131,10 +138,15 @@ public sealed class DownloaderService
             {
                 try
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (JsonNode.Parse(File.ReadAllText(assetIndexJob.TargetPath)) is JsonObject assetIndexJson)
                     {
-                        jobs.AddRange(BuildAssetJobs(assetIndexJson, gameDirectory, "official"));
+                        jobs.AddRange(BuildAssetJobs(assetIndexJson, gameDirectory, "official", cancellationToken));
                     }
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
                 }
                 catch
                 {
@@ -142,10 +154,17 @@ public sealed class DownloaderService
             }
         }
 
-        return jobs
-            .Where(job => !MatchesFile(job.TargetPath, job.Size, job.Sha1))
-            .Select(job => new MissingGameFile(job.TargetPath, job.Kind))
-            .ToList();
+        var missing = new List<MissingGameFile>();
+        foreach (var job in jobs)
+        {
+            if (!MatchesFile(job.TargetPath, job.Size, job.Sha1, cancellationToken))
+            {
+                missing.Add(new MissingGameFile(job.TargetPath, job.Kind));
+            }
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return missing;
     }
 
     public static DownloadJob? BuildAssetIndexJob(JsonObject versionJson, string gameDirectory, string mirrorSource)
@@ -166,8 +185,9 @@ public sealed class DownloaderService
             "asset-index");
     }
 
-    public static List<DownloadJob> BuildAssetJobs(JsonObject assetIndexJson, string gameDirectory, string mirrorSource)
+    public static List<DownloadJob> BuildAssetJobs(JsonObject assetIndexJson, string gameDirectory, string mirrorSource, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var jobs = new List<DownloadJob>();
         var objects = assetIndexJson["objects"] as JsonObject;
         if (objects is null)
@@ -177,6 +197,7 @@ public sealed class DownloaderService
 
         foreach (var pair in objects)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (pair.Value is not JsonObject item)
             {
                 continue;
@@ -262,7 +283,7 @@ public sealed class DownloaderService
                 workers.Add(RunJobAsync(job, gate, state, linked));
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (linked.IsCancellationRequested)
         {
             // 取消（外部取消或其它任务失败后的快速退出）时不再派发新任务。
         }
@@ -278,7 +299,7 @@ public sealed class DownloaderService
     private async Task RunJobAsync(DownloadJob job, SemaphoreSlim gate, DownloadRunState state, CancellationTokenSource linked)
     {
         // 同一目标文件可能被多个任务引用（版本 json 里重复的库条目）。并发下必须串行化，
-        // 否则共用同一个 .download 临时文件会互相破坏；串行化后后到者直接复用，与并发前一致。
+        // 串行化后后到者直接复用，避免重复下载，与并发前一致。
         var pathGate = state.GateFor(job.TargetPath);
         var pathGateHeld = false;
         try
@@ -287,7 +308,7 @@ public sealed class DownloaderService
             pathGateHeld = true;
             var jobCancellation = linked.Token;
             jobCancellation.ThrowIfCancellationRequested();
-            if (MatchesFile(job.TargetPath, job.Size, job.Sha1))
+            if (MatchesFile(job.TargetPath, job.Size, job.Sha1, jobCancellation))
             {
                 state.Complete(job, reused: true, bytes: 0);
                 return;
@@ -297,7 +318,7 @@ public sealed class DownloaderService
             var jobBytes = await DownloadSingleJobAsync(job, jobCancellation).ConfigureAwait(false);
             state.Complete(job, reused: false, bytes: jobBytes);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (linked.IsCancellationRequested)
         {
             // 取消不算任务失败，也不改变 summary 计数。
         }
@@ -336,17 +357,17 @@ public sealed class DownloaderService
     private async Task<long> DownloadSingleJobAsync(DownloadJob job, CancellationToken cancellationToken)
     {
         const int maxAttempts = 3;
-        var tempPath = job.TargetPath + ".download";
         for (var attempt = 1; ; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var tempPath = job.TargetPath + "." + Guid.NewGuid().ToString("N") + ".download";
             var jobBytes = 0L;
             try
             {
                 using var response = await _httpClient.GetAsync(job.Url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
                 response.EnsureSuccessStatusCode();
                 await using (var input = await response.Content.ReadAsStreamAsync(cancellationToken))
-                await using (var output = File.Create(tempPath))
+                await using (var output = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
                 {
                     var buffer = new byte[128 * 1024];
                     int read;
@@ -357,29 +378,38 @@ public sealed class DownloaderService
                     }
                 }
 
-                if (!MatchesFile(tempPath, job.Size, job.Sha1))
+                cancellationToken.ThrowIfCancellationRequested();
+                if (response.Content.Headers.ContentLength is long contentLength && jobBytes != contentLength)
+                {
+                    throw new IOException($"下载长度不匹配：{Path.GetFileName(job.TargetPath)}");
+                }
+
+                if (!MatchesFile(tempPath, job.Size, job.Sha1, cancellationToken))
                 {
                     throw new InvalidOperationException($"下载文件校验失败：{Path.GetFileName(job.TargetPath)}");
                 }
 
+                cancellationToken.ThrowIfCancellationRequested();
                 File.Move(tempPath, job.TargetPath, overwrite: true);
                 return jobBytes;
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                TryDelete(tempPath);
                 throw;
             }
             catch when (attempt < maxAttempts)
             {
-                TryDelete(tempPath);
-                await Task.Delay(TimeSpan.FromMilliseconds(300 * attempt), cancellationToken);
             }
-            catch
+            catch (OperationCanceledException exception)
+            {
+                throw new TimeoutException($"下载超时：{Path.GetFileName(job.TargetPath)}", exception);
+            }
+            finally
             {
                 TryDelete(tempPath);
-                throw;
             }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(300 * attempt), cancellationToken);
         }
     }
 

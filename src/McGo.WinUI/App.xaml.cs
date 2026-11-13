@@ -46,7 +46,8 @@ public partial class App : Application
 
         var smokeLaunchPerformance = commandLine.Contains("--smoke-launch-performance", StringComparer.OrdinalIgnoreCase);
         var smokeJavaSelection = commandLine.Contains("--smoke-java-selection", StringComparer.OrdinalIgnoreCase);
-        var smokePages = smokeJavaSelection || smokeLaunchPerformance || commandLine.Contains("--smoke-pages", StringComparer.OrdinalIgnoreCase);
+        var smokeResize = commandLine.Contains("--smoke-resize", StringComparer.OrdinalIgnoreCase);
+        var smokePages = smokeResize || smokeJavaSelection || smokeLaunchPerformance || commandLine.Contains("--smoke-pages", StringComparer.OrdinalIgnoreCase);
         string? smokeJavaPath = null;
         if (smokePages)
         {
@@ -122,6 +123,11 @@ public partial class App : Application
 
         if (smokePages)
         {
+            if (smokeResize)
+            {
+                _ = RunResizeSmokeAsync((MainWindow)_window);
+                return;
+            }
             if (smokeJavaSelection)
             {
                 _ = RunJavaSelectionSmokeAsync((MainWindow)_window);
@@ -169,6 +175,9 @@ public partial class App : Application
             results.Add("PASS stale Java probes cannot replace the latest version selection");
             results.Add("PASS missing exact Java major is reported without selecting a higher runtime");
             results.Add("PASS manual Java selection is preserved when switching versions");
+            await page.RunLaunchCancellationSmokeAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            results.Add("PASS Mod dependency repair accepts the selected version object");
+            results.Add("PASS launch remains responsive, rejects duplicates, and cancels prelaunch commands");
         }
         catch (Exception exc)
         {
@@ -288,6 +297,119 @@ public partial class App : Application
         Environment.Exit(failed ? 1 : 0);
     }
 
+    private static async Task RunResizeSmokeAsync(MainWindow window)
+    {
+        var results = new List<string>();
+        var failed = false;
+        var steps = new (int Width, int Height, bool PaneOpen)[]
+        {
+            (1280, 820, true), (1000, 720, false), (900, 640, false), (820, 720, false),
+            (1100, 720, true), (1280, 820, false), (1440, 900, true), (1920, 1080, true), (820, 640, false),
+        };
+        foreach (var tag in new[] { "home", "launch", "download", "resources", "modpacks", "online", "accounts", "settings", "logs", "about" }
+                     .Where(tag => string.IsNullOrWhiteSpace(_smokePageTag) || tag.Equals(_smokePageTag, StringComparison.OrdinalIgnoreCase)))
+        {
+            window.NavigateToTag(tag);
+            await Task.Delay(250);
+            var page = window.CurrentPage!;
+            try
+            {
+                if (page is Pages.LaunchPage launch) await launch.RunDataSmokeChecksAsync();
+                if (page is Pages.HomePage home) await home.RunDataSmokeChecksAsync();
+            }
+            catch (Exception exc)
+            {
+                results.Add($"FAIL resize {tag} initialization: {exc}");
+                failed = true;
+                continue;
+            }
+
+            for (var step = 0; step < steps.Length; step++)
+            {
+                var requested = steps[step];
+                var size = FitToScreen(window, new Windows.Graphics.SizeInt32(requested.Width, requested.Height));
+                ResizeToClientSize(window, size);
+                await WaitForLayoutAsync(window, size);
+                window.SetNavigationPaneForSmoke(requested.PaneOpen);
+                await Task.Delay(350);
+                var context = $"resize {tag} step={step} window={size.Width}x{size.Height} page_width={page.ActualWidth:F0} pane={requested.PaneOpen}";
+                try
+                {
+                    if (!ReferenceEquals(page, window.CurrentPage))
+                        throw new InvalidOperationException("Resizing replaced the current page.");
+                    switch (page)
+                    {
+                        case Pages.HomePage home: home.RunSmokeChecks(); break;
+                        case Pages.LaunchPage launch: launch.RunSmokeChecks(); break;
+                        case Pages.DownloadPage download: download.RunSmokeChecks(); break;
+                        case Pages.ResourcesPage resources: resources.RunSmokeChecks(); break;
+                        case Pages.SettingsPage settings: settings.RunSmokeChecks(); break;
+                    }
+                    foreach (var (section, select) in ResizeSmokeSections(page))
+                    {
+                        select();
+                        await Task.Delay(75);
+                        var problems = FindHorizontalOverflow(page).Concat(FindClippedTexts(page)).ToList();
+                        if (problems.Count > 0)
+                            throw new InvalidOperationException(section + ": " + string.Join("; ", problems));
+                        if (step is 3 or 7 && !string.IsNullOrWhiteSpace(_smokeScreenshotDirectory))
+                            await CaptureSmokeScreenshotAsync(window, size, $"resize-{tag}-{section}");
+                    }
+                    results.Add("PASS " + context);
+                }
+                catch (Exception exc)
+                {
+                    failed = true;
+                    results.Add($"FAIL {context}: {exc.Message}");
+                    if (!string.IsNullOrWhiteSpace(_smokeScreenshotDirectory))
+                        await CaptureSmokeScreenshotAsync(window, size, $"failure-{tag}-{step}");
+                }
+                WriteSmokeReport(results);
+            }
+        }
+        WriteSmokeReport(results);
+        CleanupSmokeWorkingDirectory();
+        Environment.Exit(failed ? 1 : 0);
+    }
+
+    private static IEnumerable<(string Section, Action Select)> ResizeSmokeSections(Page page)
+    {
+        switch (page)
+        {
+            case Pages.LaunchPage launch:
+                yield return ("versions", () => launch.SelectVersionSettingsForSmoke(false));
+                yield return ("settings", () => launch.SelectVersionSettingsForSmoke(true));
+                break;
+            case Pages.DownloadPage download:
+                foreach (var section in new[] { "vanilla", "addons", "tasks" })
+                    yield return (section, () => download.SelectDownloadSectionForSmoke(section));
+                break;
+            case Pages.ResourcesPage resources:
+                foreach (var section in new[] { "market", "local" })
+                    yield return (section, () => resources.SelectResourceSectionForSmoke(section));
+                break;
+            case Pages.AccountsPage accounts:
+                foreach (var section in new[] { "overview", "offline", "microsoft", "external" })
+                    yield return (section, () => accounts.SelectLoginModeForSmoke(section));
+                break;
+            case Pages.SettingsPage settings:
+                foreach (var section in new[] { "environment", "download", "appearance", "music", "update" })
+                    yield return (section, () => settings.SelectSettingsSectionForSmoke(section));
+                break;
+            case Pages.OnlinePage online:
+                foreach (var section in new[] { "p2p", "nat", "servers", "capsule" })
+                    yield return (section, () => online.SelectOnlineSectionForSmoke(section));
+                break;
+            case Pages.ModpacksPage modpacks:
+                foreach (var section in new[] { "import", "export", "capsule", "crash" })
+                    yield return (section, () => modpacks.SelectModpackSectionForSmoke(section));
+                break;
+            default:
+                yield return ("main", () => { });
+                break;
+        }
+    }
+
     private static async Task RunPageSmokeAsync(MainWindow window)
     {
         var results = new List<string>();
@@ -320,6 +442,7 @@ public partial class App : Application
                     switch (window.CurrentPage)
                     {
                         case Pages.HomePage homePage:
+                            await homePage.RunDataSmokeChecksAsync();
                             homePage.RunSmokeChecks();
                             break;
                         case Pages.AccountsPage accountsPage:
@@ -505,8 +628,12 @@ public partial class App : Application
         var problems = new List<string>();
         // 以可视窗口宽度为准；页面根元素在水平 Disabled 的 ScrollViewer 里
         // 可能按内容期望宽度排布，用它自己的宽度会漏检真实溢出。
-        var viewportRight = root.XamlRoot?.Size.Width ?? root.ActualWidth;
-        var rootRight = viewportRight;
+        var rootRight = root.ActualWidth;
+        if (root.XamlRoot is { } xamlRoot)
+        {
+            var origin = root.TransformToVisual(xamlRoot.Content).TransformPoint(new Windows.Foundation.Point(0, 0));
+            rootRight = Math.Min(rootRight, xamlRoot.Size.Width - origin.X);
+        }
         Walk(root);
 
         void Walk(DependencyObject node)
@@ -544,7 +671,7 @@ public partial class App : Application
                     problems.Add($"{name} 右边界 {right:F0} 超出 {rootRight:F0}");
                 }
 
-                Walk(element);
+                if (!IsHorizontallyScrollable(element)) Walk(element);
             }
         }
 
@@ -644,12 +771,15 @@ public partial class App : Application
             IsHitTestVisible = false,
         };
 
-        var staging = host as Grid ?? new Grid();
+        var staging = host.XamlRoot?.Content as Panel ?? host as Panel;
+        if (staging is null) return source.DesiredSize.Width;
         staging.Children.Add(probe);
-        probe.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
-        var width = probe.DesiredSize.Width;
-        staging.Children.Remove(probe);
-        return width;
+        try
+        {
+            probe.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+            return probe.DesiredSize.Width;
+        }
+        finally { staging.Children.Remove(probe); }
     }
 
     /// <summary>判断元素是否位于控件模板内部（如 TextBox 的占位符），这类文字不按页面布局判定。</summary>
@@ -695,6 +825,7 @@ public partial class App : Application
         for (var i = 0; i < count; i++)
         {
             var child = VisualTreeHelper.GetChild(root, i);
+            if (child is FrameworkElement { Visibility: Visibility.Collapsed }) continue;
             if (child is T match)
             {
                 yield return match;

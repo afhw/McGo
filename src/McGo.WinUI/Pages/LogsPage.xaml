@@ -20,9 +20,14 @@
 
         <!--  一行工具栏：选文件 + 刷新 + 打开目录 + 清空  -->
         <Grid
+            x:Name="LogToolbar"
             Grid.Row="1"
             ColumnSpacing="8"
             VerticalAlignment="Center">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
@@ -35,6 +40,7 @@
                 PlaceholderText="选择日志文件"
                 SelectionChanged="LogFileChanged" />
             <Button
+                x:Name="RefreshLogsButton"
                 Grid.Column="1"
                 Click="RefreshLogs"
                 Style="{StaticResource McgoSecondaryButtonStyle}"
@@ -45,6 +51,7 @@
                 </StackPanel>
             </Button>
             <Button
+                x:Name="OpenLogsFolderButton"
                 Grid.Column="2"
                 Click="OpenLogsFolder"
                 Style="{StaticResource McgoSecondaryButtonStyle}"
@@ -52,6 +59,7 @@
                 <SymbolIcon Symbol="Folder" />
             </Button>
             <Button
+                x:Name="ClearLogsButton"
                 Grid.Column="3"
                 Click="ClearLogOutput"
                 Style="{StaticResource McgoSecondaryButtonStyle}"

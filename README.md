@@ -23,13 +23,35 @@ dotnet run --project tests/McGo.Core.Tests/McGo.Core.Tests.csproj
 .\scripts\build_release.ps1
 ```
 
-发布并生成自更新清单 `dist/update.json`（供客户端“检查更新”消费）：
+发布安装器及网站自更新清单（PowerShell 7，Windows x64）：
 
 ```powershell
-.\scripts\build_release.ps1 -ReleaseVersion "2.1.0" -DownloadUrl "https://example.com/downloads/McGo.WinUI.exe" -ReleaseNotes "本次更新说明"
+.\scripts\build_csharp_installer.ps1 -ReleaseNotes "本次更新说明"
 ```
 
-若下载地址指向安装器而非可直接替换的 exe，追加 `-Installer` 开关。清单包含 `version`、`url`、`sha256`、`size`、`installer`、`notes` 字段，与 `McGo.Core.Updates.UpdaterService` 的生成/消费逻辑一致。
+该命令构建 Release / win-x64 客户端和安装器，生成 `webside/public/download/McGo-CSharp-Preview-x64-Setup.exe`、同名 `.sha256` 和 `webside/public/update-csharp.json`。清单的版本来自最终安装器的 ProductVersion（去除 Git 构建后缀），大小和 SHA-256 来自最终文件；打包时验证内含客户端、Core 与安装器版本相同。网页直接读取此清单展示版本、MiB 大小和 SHA-256，下载地址也取自清单。经典版仍读取自己的 `update.json`。
+
+`-ReleaseVersion` 是可选的一致性断言，不能用它给旧产物标记新版本。`-DownloadUrl` 支持 HTTP(S) 绝对地址或以 `/` 开头的网站路径，文件名必须与 `-SetupName` 相同。自定义 `-OutputDirectory` 时清单默认写入该目录的 `update-csharp.json`，也可用 `-ManifestPath` 指定位置；部署时必须一起替换安装器、校验文件和清单。这些脚本不会签名或上传产物，SHA-256 只用于完整性校验；如在外部签名，必须针对签名后的最终文件重新生成清单和校验文件并验证。
+
+另一入口 `.\scripts\build_release.ps1 -Installer -SkipRelay` 会实际构建安装器，并在 `dist/` 生成安装器、校验文件和 `update.json`，不再把客户端 EXE 的哈希标成安装器哈希。不带 `-Installer` 时，加 `-DownloadUrl` 可为 `dist/app/McGo.WinUI.exe` 生成直接替换模式清单；网站与 C# 默认更新通道使用安装器。
+
+仅验证参数（不运行 dotnet，也不写入发布目录）：
+
+```powershell
+.\scripts\build_csharp_installer.ps1 -ValidateOnly
+.\tests\release\test_release_scripts.ps1
+node --test webside/src/releaseMetadata.test.js
+```
+
+构建后的验证与 UI 烟测（均不再构建）：
+
+```powershell
+.\scripts\verify_release.ps1 -ArtifactPath webside/public/download/McGo-CSharp-Preview-x64-Setup.exe -ManifestPath webside/public/update-csharp.json -AppDirectory dist/app
+.\tests\release\test_winui_smoke.ps1 -ExecutablePath dist/app/McGo.WinUI.exe
+.\tests\release\test_winui_smoke.ps1 -ExecutablePath dist/app/McGo.WinUI.exe -Resize -ReportPath artifacts/ci/ui-resize.txt
+```
+
+CI 使用支持 `.slnx` 的 SDK 与 .NET 8 运行时，执行 Release x64 安装器打包、完整负载逐文件哈希校验及网站测试。UI 烟测使用实际桌面尺寸，并检查同一页面连续缩放、导航栏开合及子选项卡的控件边界；Windows runner 没有交互桌面时明确记录 SKIP，已有桌面时的启动失败、超时或页面失败均使 CI 失败，报告保留为 CI artifact。完整 UI 检查需在有交互桌面的 Windows x64 runner 上执行。
 
 ## 文档导航
 

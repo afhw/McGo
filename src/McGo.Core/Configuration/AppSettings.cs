@@ -12,6 +12,9 @@ public sealed class AppSettings
     public const int DefaultMaxAssetThreads = 24;
     public const int MaxConcurrencyLimit = 64;
 
+    private IniDocument _baseline = new();
+    private IniDocument? _pendingMigrationSource;
+
     public IniDocument Config { get; private set; } = new();
     public string ConfigPath { get; }
     public string AccountsPath { get; }
@@ -24,23 +27,60 @@ public sealed class AppSettings
 
     public void LoadConfig(bool persistChanges = true)
     {
-        Config = IniDocument.Load(ConfigPath, persistChanges: persistChanges);
-        Config.EnsureDefaults(DefaultSections);
-        if (string.Equals(
-                Config.Get("UPDATE", "manifest_url"),
-                AppConstants.LegacyUpdateManifestUrl,
-                StringComparison.OrdinalIgnoreCase))
+        var path = Path.GetFullPath(ConfigPath);
+        lock (IniDocument.FileLock(path))
         {
-            Config.Set("UPDATE", "manifest_url", AppConstants.DefaultUpdateManifestUrl);
-        }
+            var document = IniDocument.Load(path, persistChanges: persistChanges);
+            var stored = document.Clone();
+            ApplyDefaults(document);
+            if (persistChanges && !document.ContentEquals(stored))
+            {
+                document.Save(path);
+            }
 
-        if (persistChanges)
-        {
-            SaveConfig();
+            Config = document;
+            // Defaults and migrations are not user edits, including on read-only loads.
+            _baseline = document.Clone();
+            _pendingMigrationSource = persistChanges ? null : stored;
         }
     }
 
-    public void SaveConfig() => Config.Save(ConfigPath);
+    public void SaveConfig()
+    {
+        var path = Path.GetFullPath(ConfigPath);
+        lock (IniDocument.FileLock(path))
+        {
+            var current = Config.Clone();
+            var latest = IniDocument.Load(path);
+            var stored = latest.Clone();
+            // A deferred migration must not reinterpret another writer's explicit choice.
+            var migrate = _pendingMigrationSource is not null && stored.ContentEquals(_pendingMigrationSource);
+            ApplyDefaults(latest, migrate);
+
+            latest.ApplyChangesFrom(_baseline, current);
+            if (!latest.ContentEquals(stored))
+            {
+                latest.Save(path);
+            }
+
+            // Keep the page's snapshot: refreshing it would turn unchanged controls
+            // into edits on the next bulk Set/SaveConfig call. Commit only after I/O succeeds.
+            _baseline = current;
+            _pendingMigrationSource = null;
+        }
+    }
+
+    private static void ApplyDefaults(IniDocument document, bool migrate = true)
+    {
+        document.EnsureDefaults(DefaultSections);
+        if (migrate && string.Equals(
+                document.Get("UPDATE", "manifest_url"),
+                AppConstants.LegacyUpdateManifestUrl,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            document.Set("UPDATE", "manifest_url", AppConstants.DefaultUpdateManifestUrl);
+        }
+    }
 
     public static (ulong TotalMb, ulong AvailableMb) SystemMemoryMb()
     {
@@ -167,7 +207,7 @@ public sealed class AppSettings
     {
         try
         {
-            return ReadDownloadOptions(IniDocument.Load(AppConstants.ConfigFile));
+            return ReadDownloadOptions(IniDocument.Load(AppConstants.ConfigFile, persistChanges: false));
         }
         catch
         {

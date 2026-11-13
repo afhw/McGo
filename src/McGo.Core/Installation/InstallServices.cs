@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using McGo.Core.Downloads;
 using McGo.Core.Storage;
 
 namespace McGo.Core.Installation;
@@ -14,6 +15,7 @@ public sealed class InstallServices
         ["bmclapi"] = "https://bmclapi2.bangbang93.com",
     };
 
+    private static readonly SemaphoreSlim DownloadPublishGate = new(1, 1);
     private readonly HttpClient _httpClient;
 
     public InstallServices(HttpClient? httpClient = null)
@@ -110,46 +112,95 @@ public sealed class InstallServices
         throw new InvalidOperationException(errors.Count == 0 ? $"无法获取版本 {versionId} 的下载地址" : string.Join("；", errors));
     }
 
-    public async Task StreamDownloadAsync(string url, string filePath, IProgress<DownloadSnapshot>? progress = null, string statusLabel = "下载中", string? mirrorSource = null, CancellationToken cancellationToken = default)
+    public Task StreamDownloadAsync(string url, string filePath, IProgress<DownloadSnapshot>? progress = null, string statusLabel = "下载中", string? mirrorSource = null, CancellationToken cancellationToken = default)
+        => StreamDownloadAsync(url, filePath, progress, statusLabel, mirrorSource, cancellationToken, 0, "");
+
+    private async Task StreamDownloadAsync(string url, string filePath, IProgress<DownloadSnapshot>? progress, string statusLabel, string? mirrorSource, CancellationToken cancellationToken, long expectedSize, string expectedSha1)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         Directory.CreateDirectory(Path.GetDirectoryName(filePath) ?? ".");
-        HttpResponseMessage? response = null;
         Exception? lastError = null;
         foreach (var source in MirrorSourceSequence(mirrorSource ?? "official"))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var candidateUrl = RewriteDownloadUrlForMirror(url, source);
+            var tempPath = filePath + "." + Guid.NewGuid().ToString("N") + ".download";
             try
             {
-                response = await _httpClient.GetAsync(candidateUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                using var response = await _httpClient.GetAsync(candidateUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
                 response.EnsureSuccessStatusCode();
-                break;
+                var contentLength = response.Content.Headers.ContentLength;
+                var total = contentLength ?? expectedSize;
+                long downloaded = 0;
+                await using (var input = await response.Content.ReadAsStreamAsync(cancellationToken))
+                await using (var output = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    var buffer = new byte[128 * 1024];
+                    int read;
+                    while ((read = await input.ReadAsync(buffer, cancellationToken)) > 0)
+                    {
+                        await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                        downloaded += read;
+                        if (total > 0)
+                        {
+                            progress?.Report(new DownloadSnapshot(Math.Min(1.0, (double)downloaded / total), statusLabel, Path.GetFileName(filePath), downloaded, total, 0, 0, 1, 0));
+                        }
+                    }
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                if (contentLength is long length && downloaded != length)
+                {
+                    throw new IOException($"下载长度不匹配：{Path.GetFileName(filePath)}");
+                }
+
+                if (!DownloaderService.MatchesFile(tempPath, expectedSize, expectedSha1, cancellationToken))
+                {
+                    throw new InvalidOperationException($"下载文件校验失败：{Path.GetFileName(filePath)}");
+                }
+
+                // Windows may reject concurrent overwrite renames to the same target.
+                // Serialize publication across service instances, keeping transfers concurrent.
+                await DownloadPublishGate.WaitAsync(cancellationToken);
+                try
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    File.Move(tempPath, filePath, overwrite: true);
+                }
+                finally
+                {
+                    DownloadPublishGate.Release();
+                }
+                progress?.Report(new DownloadSnapshot(1.0, statusLabel, Path.GetFileName(filePath), downloaded, total, 0, 1, 1, 0));
+                return;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception exc)
             {
-                response?.Dispose();
-                response = null;
-                lastError = exc;
+                lastError = exc is OperationCanceledException
+                    ? new TimeoutException($"下载超时：{Path.GetFileName(filePath)}", exc)
+                    : exc;
             }
-        }
-
-        if (response is null) throw lastError ?? new InvalidOperationException("下载失败：" + url);
-        await using var input = await response.Content.ReadAsStreamAsync(cancellationToken);
-        await using var output = File.Create(filePath);
-        var total = response.Content.Headers.ContentLength ?? 0;
-        var buffer = new byte[128 * 1024];
-        long downloaded = 0;
-        int read;
-        while ((read = await input.ReadAsync(buffer, cancellationToken)) > 0)
-        {
-            await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
-            downloaded += read;
-            if (total > 0)
+            finally
             {
-                progress?.Report(new DownloadSnapshot(Math.Min(1.0, (double)downloaded / total), statusLabel, Path.GetFileName(filePath), downloaded, total, 0, 0, 1, 0));
+                try
+                {
+                    File.Delete(tempPath);
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
             }
         }
 
-        progress?.Report(new DownloadSnapshot(1.0, statusLabel, Path.GetFileName(filePath), downloaded, total, 0, 1, 1, 0));
+        cancellationToken.ThrowIfCancellationRequested();
+        throw lastError ?? new InvalidOperationException("下载失败：" + url);
     }
 
     public static void ExtractZipBytes(byte[] zipBytes, string targetDir)
@@ -198,23 +249,30 @@ public sealed class InstallServices
 
     public async Task DownloadProfileLibrariesAsync(JsonObject profileJson, string gameDir, string mirrorSource, IProgress<DownloadSnapshot>? progress = null, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var libraries = profileJson["libraries"]?.AsArray().OfType<JsonObject>().ToList() ?? [];
         var completed = 0;
         foreach (var library in libraries)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var name = library["name"]?.GetValue<string>() ?? "";
             var relative = LibraryRelativePath(name);
             if (relative is null) continue;
             var urlBase = MirrorLibraryBase(library["url"]?.GetValue<string>() ?? "https://libraries.minecraft.net/", mirrorSource);
             var targetPath = Path.Combine(gameDir, "libraries", relative);
-            if (File.Exists(targetPath))
+            var artifact = library["downloads"]?["artifact"] as JsonObject;
+            var expectedSha1 = artifact?["sha1"]?.GetValue<string>() ?? library["sha1"]?.GetValue<string>() ?? "";
+            var size = (artifact?["size"] ?? library["size"]) as JsonValue;
+            var expectedSize = size is not null && size.TryGetValue<long>(out var longSize) ? longSize
+                : size is not null && size.TryGetValue<int>(out var intSize) ? intSize : 0L;
+            if (DownloaderService.MatchesFile(targetPath, expectedSize, expectedSha1, cancellationToken))
             {
                 completed++;
                 progress?.Report(new DownloadSnapshot(Math.Min(1.0, (double)completed / Math.Max(libraries.Count, 1)), "复用安装依赖", Path.GetFileName(targetPath), completed, libraries.Count, 0, completed, libraries.Count, completed));
                 continue;
             }
 
-            await StreamDownloadAsync($"{urlBase}/{relative.Replace('\\', '/')}", targetPath, progress, "下载安装依赖", mirrorSource, cancellationToken);
+            await StreamDownloadAsync($"{urlBase}/{relative.Replace('\\', '/')}", targetPath, progress, "下载安装依赖", mirrorSource, cancellationToken, expectedSize, expectedSha1);
             completed++;
         }
     }

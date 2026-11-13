@@ -28,6 +28,7 @@ public sealed partial class MainWindow : Window
     private bool _showDownload = true;
     internal Page? CurrentPage => NavFrame.Content as Page;
     internal FrameworkElement SmokeCaptureRoot => RootGrid;
+    internal void SetNavigationPaneForSmoke(bool open) => NavView.IsPaneOpen = open;
 
     public MainWindow()
     {

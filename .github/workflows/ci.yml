@@ -7,13 +7,41 @@ on:
 jobs:
   validate:
     runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "8.0.x"
-      - run: dotnet build McGo.slnx
-      - run: dotnet run --project tests/McGo.Core.Tests/McGo.Core.Tests.csproj
+          # .slnx requires SDK 9.0.200+; keep the .NET 8 runtime for the app/tests.
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - name: Check release script parameters and metadata
+        run: ./tests/release/test_release_scripts.ps1
+      - run: dotnet build McGo.slnx -c Release
+      - run: dotnet run --project tests/McGo.Core.Tests/McGo.Core.Tests.csproj -c Release
+      - name: Package Release x64 installer and website manifest
+        run: ./scripts/build_csharp_installer.ps1
+      - name: Verify final installer, payload and manifest
+        run: >-
+          ./scripts/verify_release.ps1
+          -ArtifactPath webside/public/download/McGo-CSharp-Preview-x64-Setup.exe
+          -ManifestPath webside/public/update-csharp.json
+          -AppDirectory dist/app
+      - name: Smoke test WinUI on the available Windows desktop
+        run: ./tests/release/test_winui_smoke.ps1 -ExecutablePath dist/app/McGo.WinUI.exe -AllowUnavailableDesktop
+      - name: Test resizing existing WinUI pages and navigation pane transitions
+        run: ./tests/release/test_winui_smoke.ps1 -ExecutablePath dist/app/McGo.WinUI.exe -Resize -ReportPath artifacts/ci/ui-resize.txt -AllowUnavailableDesktop
+      - name: Retain UI smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: winui-smoke-report
+          path: artifacts/ci/ui-*.txt
+          if-no-files-found: warn
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -30,4 +58,7 @@ jobs:
         working-directory: webside
       - name: Test website statistics frontend
         run: node --test src/publicStats.test.js
+        working-directory: webside
+      - name: Test website release metadata
+        run: node --test src/releaseMetadata.test.js
         working-directory: webside

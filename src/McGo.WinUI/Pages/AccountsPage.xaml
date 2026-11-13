@@ -34,7 +34,11 @@
 
             <!--  空状态：没有任何账号时，直接给出最快的一步  -->
             <Border x:Name="EmptyAccountsCard" Style="{StaticResource McgoCardStyle}" Visibility="Collapsed">
-                <Grid ColumnSpacing="16">
+                <Grid x:Name="EmptyAccountLayout" ColumnSpacing="16">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
@@ -44,6 +48,7 @@
                         <SymbolIcon Symbol="Contact" Style="{StaticResource McgoIconGlyphStyle}" />
                     </Border>
                     <StackPanel
+                        x:Name="EmptyAccountDescription"
                         Grid.Column="1"
                         VerticalAlignment="Center"
                         Spacing="2">
@@ -51,6 +56,7 @@
                         <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="先加一个离线账号就能开游戏：只需要一个用户名，之后可以随时换成 Microsoft 或外置登录。" />
                     </StackPanel>
                     <Button
+                        x:Name="AddFirstAccountButton"
                         Grid.Column="2"
                         VerticalAlignment="Center"
                         Click="StartOfflineAccountFlow"
@@ -232,7 +238,7 @@
                                 Style="{StaticResource McgoOutputBoxStyle}" />
 
                             <!--  手动链接属于高级路径，默认折叠  -->
-                            <Expander HorizontalAlignment="Stretch" IsExpanded="False">
+                            <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="False">
                                 <Expander.Header>
                                     <Grid ColumnSpacing="10">
                                         <Grid.ColumnDefinitions>
@@ -290,12 +296,13 @@
                                 <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="对接 authlib-injector 认证服务器，需要对应的同名皮肤站账号。" />
                             </StackPanel>
 
-                            <Grid ColumnSpacing="12" RowSpacing="10">
+                            <Grid x:Name="ExternalFieldsGrid" ColumnSpacing="12" RowSpacing="10">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
                                 <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
@@ -309,7 +316,7 @@
                                     Header="用户名"
                                     TextChanged="ExternalFormChanged" />
                                 <PasswordBox x:Name="ExternalPasswordBox" Grid.Row="1" Header="密码" />
-                                <Grid Grid.Row="1" Grid.Column="1" ColumnSpacing="6">
+                                <Grid x:Name="AuthlibPathPanel" Grid.Row="1" Grid.Column="1" ColumnSpacing="6">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
@@ -376,7 +383,7 @@
                                     Style="{StaticResource McgoSecondaryButtonStyle}" />
                             </Grid>
 
-                            <Expander HorizontalAlignment="Stretch" IsExpanded="False">
+                            <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="False">
                                 <Expander.Header>
                                     <Grid ColumnSpacing="10">
                                         <Grid.ColumnDefinitions>
@@ -419,7 +426,7 @@
                     </Border>
 
                     <!--  账号状态：默认折叠  -->
-                    <Expander HorizontalAlignment="Stretch" IsExpanded="False">
+                    <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="False">
                         <Expander.Header>
                             <Grid ColumnSpacing="10">
                                 <Grid.ColumnDefinitions>

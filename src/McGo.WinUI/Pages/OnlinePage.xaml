@@ -54,7 +54,7 @@
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
 
-                        <Grid ColumnSpacing="8">
+                        <Grid x:Name="RoomFieldPanel" ColumnSpacing="8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
@@ -77,6 +77,7 @@
                             PlaceholderText="可选" />
 
                         <StackPanel
+                            x:Name="P2PRoleHintPanel"
                             Grid.Row="1"
                             Grid.ColumnSpan="2"
                             Spacing="1">
@@ -167,6 +168,7 @@
                     <Expander
                         x:Name="P2PConnectionSettings"
                         HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Stretch"
                         IsExpanded="False">
                         <Expander.Header>
                             <Grid ColumnSpacing="10">
@@ -186,7 +188,11 @@
                             </Grid>
                         </Expander.Header>
                         <StackPanel Padding="0,10,0,0" Spacing="12">
-                            <Grid ColumnSpacing="12">
+                            <Grid x:Name="RelaySettingsGrid" ColumnSpacing="12">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="*" />
@@ -357,7 +363,7 @@
                     </Grid>
 
                     <!--  运行目录由版本设置自动推导，收进折叠面板  -->
-                    <Expander HorizontalAlignment="Stretch" IsExpanded="False">
+                    <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="False">
                         <Expander.Header>
                             <Grid ColumnSpacing="10">
                                 <Grid.ColumnDefinitions>
@@ -440,7 +446,7 @@
             </Border>
 
             <!--  ==================== 日志：默认折叠  ====================  -->
-            <Expander HorizontalAlignment="Stretch" IsExpanded="False">
+            <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="False">
                 <Expander.Header>
                     <Grid ColumnSpacing="10">
                         <Grid.ColumnDefinitions>

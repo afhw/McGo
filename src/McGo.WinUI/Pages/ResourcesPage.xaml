@@ -7,6 +7,8 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
     <ScrollViewer
+        MaxWidth="1200"
+        HorizontalAlignment="Stretch"
         HorizontalScrollBarVisibility="Disabled"
         HorizontalContentAlignment="Stretch"
         HorizontalScrollMode="Disabled"
@@ -15,12 +17,10 @@
         VerticalScrollMode="Auto">
         <Grid
             x:Name="ResponsiveLayoutRoot"
-            MaxWidth="1200"
             HorizontalAlignment="Stretch"
             Padding="24,20,24,28"
             ColumnSpacing="18"
-            RowSpacing="14"
-            SizeChanged="ResponsiveLayoutRoot_SizeChanged">
+            RowSpacing="14">
 
             <Grid.ColumnDefinitions>
                 <ColumnDefinition x:Name="ResourcePrimaryColumn" Width="*" />
@@ -33,7 +33,7 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <StackPanel x:Name="ResourcePageHeader" Spacing="3">
+            <StackPanel x:Name="ResourcePageHeader" Grid.ColumnSpan="2" Spacing="3">
                 <TextBlock Style="{StaticResource McgoPageTitleStyle}" Text="资源" />
                 <TextBlock Style="{StaticResource McgoPageSubtitleStyle}" Text="输入关键词搜索 Modrinth，选中结果就能装；本地资源也能在这里整理。" />
             </StackPanel>
@@ -212,7 +212,11 @@
                             Minimum="0" />
 
                         <!--  选中后立刻能操作，不用滚到列表底部  -->
-                        <Grid ColumnSpacing="12">
+                        <Grid x:Name="ResourceActionsGrid" ColumnSpacing="12" RowSpacing="8">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
@@ -223,6 +227,7 @@
                                 Content="一并安装必需依赖"
                                 IsChecked="True" />
                             <StackPanel
+                                x:Name="ResourceActionButtons"
                                 Grid.Column="1"
                                 Orientation="Horizontal"
                                 Spacing="8">

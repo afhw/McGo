@@ -1,0 +1,15 @@
+<Project>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'McGo.SetupBootstrap' Or '$(MSBuildProjectName)' == 'McGo.WinUI' Or '$(MSBuildProjectName)' == 'McGo.Core'">
+    <!-- Patch self-contained release runtimes for GHSA-p3jp-9v83-76w9. -->
+    <McGoRuntimePatchVersion>8.0.34</McGoRuntimePatchVersion>
+  </PropertyGroup>
+
+  <Target Name="UsePatchedMcGoRuntime" BeforeTargets="ProcessFrameworkReferences"
+          Condition="'$(McGoRuntimePatchVersion)' != '' And '$(TargetFrameworkVersion)' == 'v8.0'">
+    <ItemGroup>
+      <KnownFrameworkReference Update="Microsoft.NETCore.App;Microsoft.WindowsDesktop.App;Microsoft.WindowsDesktop.App.WPF;Microsoft.WindowsDesktop.App.WindowsForms;Microsoft.AspNetCore.App"
+                               Condition="'%(TargetFramework)' == 'net8.0'"
+                               LatestRuntimeFrameworkVersion="$(McGoRuntimePatchVersion)" />
+    </ItemGroup>
+  </Target>
+</Project>

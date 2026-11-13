@@ -5,18 +5,18 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    HorizontalContentAlignment="Stretch"
+    SizeChanged="ResponsiveLayoutRoot_SizeChanged"
     mc:Ignorable="d">
-    <ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto">
+    <ScrollViewer MaxWidth="1280" HorizontalAlignment="Stretch" HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto">
         <Grid
             x:Name="ResponsiveLayoutRoot"
-            MaxWidth="1280"
             HorizontalAlignment="Stretch"
             Padding="24,20,24,28"
             VerticalAlignment="Top"
             ColumnSpacing="20"
             RowSpacing="16"
-            SizeChanged="ResponsiveLayoutRoot_SizeChanged"
-            LayoutUpdated="ResponsiveLayoutRoot_LayoutUpdated">
+            SizeChanged="ResponsiveLayoutRoot_SizeChanged">
 
             <Grid.ColumnDefinitions>
                 <ColumnDefinition x:Name="LaunchActionColumn" Width="340" />
@@ -34,12 +34,13 @@
                     <TextBlock Style="{StaticResource McgoPageTitleStyle}" Text="启动" />
                 </StackPanel>
 
-                <Border Padding="20,22" Style="{StaticResource McgoCardStyle}">
-                    <StackPanel Spacing="16">
+                <Border x:Name="LaunchIdentityCard" Padding="20,22" Style="{StaticResource McgoCardStyle}">
+                    <StackPanel x:Name="LaunchIdentityContent" Spacing="16">
 
                         <!--  谁在玩：头像 + 名字，一眼确认身份  -->
-                        <StackPanel HorizontalAlignment="Center" Spacing="6">
+                        <StackPanel x:Name="LaunchIdentityPanel" HorizontalAlignment="Center" Spacing="6">
                             <Border
+                                x:Name="LaunchAvatarBorder"
                                 Width="76"
                                 Height="76"
                                 HorizontalAlignment="Center"
@@ -56,18 +57,20 @@
                                     Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
                                     Text="?" />
                             </Border>
-                            <TextBlock
-                                x:Name="AccountNameText"
-                                HorizontalAlignment="Center"
-                                FontSize="16"
-                                FontWeight="SemiBold"
-                                Text="未登录"
-                                TextTrimming="CharacterEllipsis" />
-                            <TextBlock
-                                x:Name="AccountTypeText"
-                                HorizontalAlignment="Center"
-                                Style="{StaticResource McgoStatLabelStyle}"
-                                Text="还没有账号" />
+                            <StackPanel VerticalAlignment="Center" Spacing="6">
+                                <TextBlock
+                                    x:Name="AccountNameText"
+                                    HorizontalAlignment="Center"
+                                    FontSize="16"
+                                    FontWeight="SemiBold"
+                                    Text="未登录"
+                                    TextTrimming="CharacterEllipsis" />
+                                <TextBlock
+                                    x:Name="AccountTypeText"
+                                    HorizontalAlignment="Center"
+                                    Style="{StaticResource McgoStatLabelStyle}"
+                                    Text="还没有账号" />
+                            </StackPanel>
                         </StackPanel>
 
                         <!--  唯一的主操作：按钮里直接写清楚版本  -->
@@ -97,25 +100,6 @@
                             </StackPanel>
                         </Button>
 
-                        <!--  两个次要入口，和 PCL 一样并排  -->
-                        <Grid ColumnSpacing="8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <Button
-                                HorizontalAlignment="Stretch"
-                                Click="ShowVersionSelectorTab"
-                                Content="版本选择"
-                                Style="{StaticResource McgoSecondaryButtonStyle}" />
-                            <Button
-                                Grid.Column="1"
-                                HorizontalAlignment="Stretch"
-                                Click="ShowVersionSettingsTab"
-                                Content="版本设置"
-                                Style="{StaticResource McgoSecondaryButtonStyle}" />
-                        </Grid>
-
                         <Button
                             HorizontalAlignment="Center"
                             Padding="6,2"
@@ -132,6 +116,7 @@
                         <StackPanel Spacing="6">
                             <ProgressBar
                                 x:Name="LaunchProgressBar"
+                                Visibility="Collapsed"
                                 Height="4"
                                 Maximum="100"
                                 Minimum="0" />
@@ -140,12 +125,15 @@
                                 Style="{StaticResource McgoStatLabelStyle}"
                                 Text="选好账号和版本就能开始"
                                 TextWrapping="Wrap" />
-                            <Grid ColumnSpacing="8">
+                            <Grid x:Name="LaunchProgressDetails" ColumnSpacing="8" Visibility="Collapsed">
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
                                 <TextBlock
                                     x:Name="LaunchStageText"
                                     Style="{StaticResource McgoStatLabelStyle}"
@@ -153,18 +141,19 @@
                                 <TextBlock
                                     x:Name="LaunchMethodText"
                                     Grid.Column="1"
+                                    Grid.Row="1"
                                     Style="{StaticResource McgoStatLabelStyle}"
                                     Text="未选择登录方式" />
                                 <TextBlock
                                     x:Name="LaunchProgressText"
-                                    Grid.Column="2"
+                                    Grid.Column="1"
                                     Style="{StaticResource McgoStatLabelStyle}"
                                     Text="0%" />
                             </Grid>
                         </StackPanel>
 
                         <!--  账号与运行环境：默认收起，需要时才展开  -->
-                        <Expander HorizontalAlignment="Stretch" IsExpanded="False">
+                        <Expander x:Name="LaunchEnvironmentExpander" HorizontalAlignment="Stretch" IsExpanded="False">
                             <Expander.Header>
                                 <TextBlock FontSize="13" Text="账号与运行环境" />
                             </Expander.Header>
@@ -237,11 +226,12 @@
             </StackPanel>
 
             <!--  ============ 右：版本 ============  -->
-            <StackPanel
+            <ContentControl
                 x:Name="VersionCenterPanel"
                 Grid.Row="0"
                 Grid.Column="1"
-                Spacing="12">
+                HorizontalContentAlignment="Stretch"
+                VerticalContentAlignment="Top">
 
                 <Border VerticalAlignment="Stretch" Style="{StaticResource McgoCardStyle}">
                     <StackPanel Spacing="10">
@@ -597,7 +587,7 @@
                         </StackPanel>
                     </StackPanel>
                 </Border>
-            </StackPanel>
+            </ContentControl>
         </Grid>
     </ScrollViewer>
 </Page>

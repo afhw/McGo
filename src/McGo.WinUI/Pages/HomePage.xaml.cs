@@ -19,6 +19,7 @@ public sealed partial class HomePage : Page
     private bool _wideLayout;
     private bool _hasVersion;
     private bool _hasAccount;
+    private Task _refreshTask = Task.CompletedTask;
 
     public HomePage()
     {
@@ -29,12 +30,15 @@ public sealed partial class HomePage : Page
     private void HomePage_Loaded(object sender, RoutedEventArgs e)
     {
         Loaded -= HomePage_Loaded;
-        ApplyResponsiveLayout(ActualWidth);
-        SizeChanged += (_, args) => ApplyResponsiveLayout(ActualWidth > 0 ? ActualWidth : args.NewSize.Width);
-        _ = RefreshAsync();
+        ApplyResponsiveLayout(ResponsiveLayoutRoot.ActualWidth);
+        _refreshTask = RefreshAsync();
     }
 
-    private async void RefreshStatus(object sender, RoutedEventArgs e) => await RefreshAsync();
+    private async void RefreshStatus(object sender, RoutedEventArgs e)
+    {
+        _refreshTask = RefreshAsync();
+        await _refreshTask;
+    }
 
     private static void Navigate(string tag)
     {
@@ -56,7 +60,7 @@ public sealed partial class HomePage : Page
     private void PrimaryAction(object sender, RoutedEventArgs e) => Navigate(_hasAccount ? "launch" : "accounts");
 
     /// <summary>次按钮补上当前还缺的那一步，不与主按钮重复。</summary>
-    private void SecondaryAction(object sender, RoutedEventArgs e) => Navigate("download");
+    private void SecondaryAction(object sender, RoutedEventArgs e) => Navigate(_hasVersion ? "launch" : "download");
 
     private async Task RefreshAsync()
     {
@@ -92,6 +96,7 @@ public sealed partial class HomePage : Page
         AccountChipText.Text = snapshot.AccountName == "未选择" ? "未登录账号" : snapshot.AccountName;
         ChipsSummaryText.Text = $"{AccountChipText.Text} · {snapshot.FirstVersion ?? "尚未安装版本"} · {snapshot.JavaStatusText}";
         JavaChipText.Text = snapshot.JavaStatusText;
+        JavaStatusText.Text = snapshot.JavaStatusText;
         FirstVersionText.Text = snapshot.FirstVersion ?? "尚未安装版本";
         VersionHintText.Text = snapshot.VersionCount == 0
             ? "先下载一个游戏版本"
@@ -130,33 +135,36 @@ public sealed partial class HomePage : Page
     private static HomeStatusSnapshot CaptureStatusSnapshot()
     {
         var settings = new AppSettings();
-        settings.LoadConfig();
-        var gameDirectory = settings.Config.Get("GpME", "directory", AppConstants.DefaultGameDirectory);
+        settings.LoadConfig(persistChanges: false);
+        var gameDirectory = settings.Config.Get("GAME", "directory", AppConstants.DefaultGameDirectory);
         var versions = new LauncherService().GetLocalVersions(gameDirectory);
-        var accounts = settings.LoadAccounts();
+        var accounts = settings.LoadAccounts(persistChanges: false);
         var selectedId = settings.Config.Get("ACCOUNTS", "selected_account_id", "");
-        var selectedAccount = accounts.FirstOrDefault(account => account["id"]?.GetValue<string>() == selectedId);
+        var selectedAccount = accounts.FirstOrDefault(account => account["id"]?.GetValue<string>() == selectedId) ?? accounts.FirstOrDefault();
         var accountName = selectedAccount is null
             ? "未选择"
             : selectedAccount["display_name"]?.GetValue<string>()
               ?? selectedAccount["username"]?.GetValue<string>()
               ?? "未命名";
         var javaPath = settings.Config.Get("JAVA", "path", "java");
-        var javaMajor = JavaRuntimeService.GetJavaMajorVersion(javaPath);
+        var autoJava = settings.Config.GetBool("JAVA", "auto_select", true);
+        var javaMajor = autoJava ? 0 : JavaRuntimeService.GetJavaMajorVersion(javaPath);
         var firstVersion = versions.Count == 0 ? null : versions[0];
 
         var readiness = (versions.Count, accountName, javaMajor) switch
         {
             (0, _, _) => "缺少游戏版本",
             (_, "未选择", _) => "缺少账号",
+            (_, _, _) when autoJava => "可选择版本启动",
             (_, _, <= 0) => "缺少 Java",
-            _ => "可以启动",
+            _ => "可选择版本启动",
         };
         var launchHint = (versions.Count, accountName, javaMajor) switch
         {
             (0, _, _) => "还没有本地版本。先到“下载”安装一个，再回来启动。",
             (_, "未选择", _) => "还没有选择账号。先添加离线或 Microsoft 账号。",
-            (_, _, <= 0) => "未识别到 Java。启动页可以一键检测或下载推荐运行时。",
+            (_, _, _) when autoJava => "选择游戏版本后自动匹配 Java。",
+            (_, _, <= 0) => "未识别到 Java。启动页可以检测或下载推荐运行时。",
             _ => $"{accountName} · {firstVersion} · Java {javaMajor}，随时可以开始游戏。",
         };
 
@@ -167,7 +175,7 @@ public sealed partial class HomePage : Page
             AppSettings.RecommendedMemoryMb() + " MB",
             accountName,
             firstVersion,
-            javaMajor > 0 ? $"Java {javaMajor}" : "Java 未识别",
+            autoJava ? "Java 自动匹配" : javaMajor > 0 ? $"Java {javaMajor}" : "Java 未识别",
             readiness,
             launchHint,
             settings.Config.Get("HOME", "content_source", "").Trim(),
@@ -188,16 +196,10 @@ public sealed partial class HomePage : Page
         bool AllowNetwork);
 
     private void ResponsiveLayoutRoot_SizeChanged(object sender, SizeChangedEventArgs e)
-        => ApplyResponsiveLayout(e.NewSize.Width);
-
-    /// <summary>窄窗口单列堆叠，宽窗口左右分栏；主操作卡片始终排在最前。</summary>
-    /// <summary>视口宽度：XamlRoot.Size 是真实客户区（DIP），容器宽度可能按内容收缩。</summary>
-    private double ViewportWidth
     {
-        get
+        if (e.NewSize.Width != e.PreviousSize.Width)
         {
-            var root = XamlRoot?.Size.Width ?? 0;
-            return root > 0 ? root : (ActualWidth > 0 ? ActualWidth : 0);
+            ApplyResponsiveLayout(e.NewSize.Width);
         }
     }
 
@@ -208,8 +210,16 @@ public sealed partial class HomePage : Page
             return;
         }
 
-        var wide = width >= 900;
+        var contentWidth = width - ResponsiveLayoutRoot.Padding.Left - ResponsiveLayoutRoot.Padding.Right;
+        var wide = contentWidth >= 900;
         _wideLayout = wide;
+        RefreshStatusLabel.Visibility = contentWidth >= 480 ? Visibility.Visible : Visibility.Collapsed;
+        HomeContentGrid.ColumnSpacing = wide ? 16 : 0;
+        var rows = wide ? 3 : 4;
+        while (HomeContentGrid.RowDefinitions.Count < rows)
+            HomeContentGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        while (HomeContentGrid.RowDefinitions.Count > rows)
+            HomeContentGrid.RowDefinitions.RemoveAt(HomeContentGrid.RowDefinitions.Count - 1);
         HomePrimaryColumn.Width = wide ? new GridLength(1.3, GridUnitType.Star) : new GridLength(1, GridUnitType.Star);
         HomeSecondaryColumn.Width = wide ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
         Grid.SetRow(StatusCard, wide ? 0 : 1);
@@ -217,17 +227,64 @@ public sealed partial class HomePage : Page
         Grid.SetRow(QuickLinksCard, wide ? 1 : 2);
         Grid.SetColumn(QuickLinksCard, 0);
         Grid.SetColumnSpan(QuickLinksCard, wide ? 2 : 1);
+        Grid.SetRow(CustomHomeCard, wide ? 2 : 3);
+        Grid.SetColumnSpan(CustomHomeCard, wide ? 2 : 1);
+    }
+
+    private void HomeActionsGrid_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (e.NewSize.Width > 0 && e.NewSize.Width != e.PreviousSize.Width)
+            ArrangeGrid(HomeActionsGrid, e.NewSize.Width >= 360 ? 2 : 1);
+    }
+
+    private void HomeStatsGrid_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (e.NewSize.Width <= 0 || e.NewSize.Width == e.PreviousSize.Width) return;
+        var columns = e.NewSize.Width >= 360 ? 3 : 2;
+        ArrangeGrid(HomeStatsGrid, columns);
+        Grid.SetColumnSpan((FrameworkElement)HomeStatsGrid.Children[2], columns == 2 ? 2 : 1);
+    }
+
+    private void QuickLinksGrid_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (e.NewSize.Width > 0 && e.NewSize.Width != e.PreviousSize.Width)
+            ArrangeGrid(QuickLinksGrid, e.NewSize.Width >= 880 ? 4 : e.NewSize.Width >= 440 ? 2 : 1);
+    }
+
+    private static void ArrangeGrid(Grid grid, int columns)
+    {
+        while (grid.ColumnDefinitions.Count < columns)
+            grid.ColumnDefinitions.Add(new ColumnDefinition());
+        while (grid.ColumnDefinitions.Count > columns)
+            grid.ColumnDefinitions.RemoveAt(grid.ColumnDefinitions.Count - 1);
+        foreach (var column in grid.ColumnDefinitions)
+            column.Width = new GridLength(1, GridUnitType.Star);
+
+        var children = grid.Children.Cast<FrameworkElement>().ToArray();
+        var rows = (children.Length + columns - 1) / columns;
+        while (grid.RowDefinitions.Count < rows)
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        while (grid.RowDefinitions.Count > rows)
+            grid.RowDefinitions.RemoveAt(grid.RowDefinitions.Count - 1);
+        for (var index = 0; index < children.Length; index++)
+        {
+            Grid.SetRow(children[index], index / columns);
+            Grid.SetColumn(children[index], index % columns);
+        }
     }
 
     internal void RunSmokeChecks()
     {
-        // 冒烟检查可能在测量完成前触发，先按当前视口重新应用一次布局再断言。
-        var wide = ViewportWidth >= 900;
-        ApplyResponsiveLayout(ViewportWidth);
+        var width = ResponsiveLayoutRoot.ActualWidth;
+        var wide = width - ResponsiveLayoutRoot.Padding.Left - ResponsiveLayoutRoot.Padding.Right >= 900;
+        if (width <= 0 || width > HomeScrollViewer.ActualWidth + 1)
+            throw new InvalidOperationException("主页内容宽度超出实际视口或尚未完成布局。");
         if (wide != _wideLayout
             || Grid.GetRow(StatusCard) != (wide ? 0 : 1)
             || Grid.GetColumn(StatusCard) != (wide ? 1 : 0)
-            || Grid.GetRow(QuickLinksCard) != (wide ? 1 : 2))
+            || Grid.GetRow(QuickLinksCard) != (wide ? 1 : 2)
+            || Grid.GetRow(CustomHomeCard) != (wide ? 2 : 3)
+            || Grid.GetColumnSpan(CustomHomeCard) != (wide ? 2 : 1))
         {
             throw new InvalidOperationException("主页响应式布局状态不正确。");
         }
@@ -236,5 +293,20 @@ public sealed partial class HomePage : Page
         {
             throw new InvalidOperationException("主页缺少主操作按钮。");
         }
+    }
+
+    internal async Task RunDataSmokeChecksAsync()
+    {
+        await _refreshTask.WaitAsync(TimeSpan.FromSeconds(30));
+        var settings = new AppSettings();
+        settings.LoadConfig(persistChanges: false);
+        if (GameDirectoryText.Text != settings.Config.Get("GAME", "directory", AppConstants.DefaultGameDirectory))
+            throw new InvalidOperationException("首页未使用当前游戏目录。");
+        var directory = GameDirectoryText.Text;
+        var expected = await Task.Run(() => new LauncherService().GetLocalVersions(directory).Count);
+        if (VersionCountText.Text != expected.ToString())
+            throw new InvalidOperationException("首页版本数量与当前游戏目录不一致。");
+        if (JavaStatusText.Text != JavaChipText.Text || JavaStatusText.Text.Contains("正在检测", StringComparison.Ordinal))
+            throw new InvalidOperationException("首页 Java 状态未完成刷新。");
     }
 }

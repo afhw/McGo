@@ -1,12 +1,29 @@
 param(
   [string]$OutputDirectory,
-  [string]$SetupName = "McGo-CSharp-Preview-x64-Setup.exe"
+  [string]$SetupName = "McGo-CSharp-Preview-x64-Setup.exe",
+  [string]$ManifestPath,
+  [string]$DownloadUrl,
+  [string]$ReleaseVersion,
+  [string]$ReleaseNotes = 'McGo C# WinUI 3 preview',
+  [switch]$SkipClientBuild,
+  [switch]$ValidateOnly
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'release_metadata.ps1')
 $ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+if ($SetupName -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*\.exe$') {
+  throw 'SetupName must be an .exe filename without directories.'
+}
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
   $OutputDirectory = Join-Path $ProjectRoot "webside\public\download"
+  if (-not $ManifestPath) { $ManifestPath = Join-Path $ProjectRoot 'webside\public\update-csharp.json' }
+}
+if (-not $ManifestPath) { $ManifestPath = Join-Path $OutputDirectory 'update-csharp.json' }
+if (-not $DownloadUrl) { $DownloadUrl = '/download/' + $SetupName }
+Assert-ReleaseUrl -Url $DownloadUrl
+if ([Uri]::UnescapeDataString(($DownloadUrl -split '\?')[0].Split('/')[-1]) -cne $SetupName) {
+  throw 'DownloadUrl filename must match SetupName.'
 }
 
 $OutputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
@@ -17,11 +34,17 @@ $AppOutput = Join-Path $ProjectRoot "dist\app"
 $SetupPath = Join-Path $OutputDirectory $SetupName
 $TemporarySetupPath = $SetupPath + ".tmp"
 $FooterMagic = [System.Text.Encoding]::ASCII.GetBytes("MCGOSETUPv1!")
-
-& (Join-Path $PSScriptRoot "build_release.ps1") -SkipRelay
-if ($LASTEXITCODE -ne 0) {
-  throw "Client release build failed with exit code $LASTEXITCODE"
+if ([IO.Path]::GetFullPath($ManifestPath) -in @($SetupPath, "$SetupPath.sha256", $TemporarySetupPath)) {
+  throw 'ManifestPath must not overwrite the installer or checksum.'
 }
+if ($ValidateOnly) { return }
+
+if (-not $SkipClientBuild) {
+  & (Join-Path $PSScriptRoot "build_release.ps1") -SkipRelay
+}
+$clientVersion = Assert-ArtifactVersion -Path (Join-Path $AppOutput 'McGo.WinUI.exe') -ExpectedVersion $ReleaseVersion
+Assert-ArtifactVersion -Path (Join-Path $AppOutput 'McGo.WinUI.dll') -ExpectedVersion $clientVersion | Out-Null
+Assert-ArtifactVersion -Path (Join-Path $AppOutput 'McGo.Core.dll') -ExpectedVersion $clientVersion | Out-Null
 
 $culturePattern = '^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})+$'
 $cultures = @(Get-ChildItem -LiteralPath $AppOutput -Directory | Where-Object Name -Match $culturePattern)
@@ -49,6 +72,7 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 dotnet publish (Join-Path $ProjectRoot "src\McGo.SetupBootstrap\McGo.SetupBootstrap.csproj") `
   -c Release `
+  -p:Platform=x64 `
   -r win-x64 `
   -o $BootstrapOutput
 if ($LASTEXITCODE -ne 0) {
@@ -59,6 +83,7 @@ $BootstrapPath = Join-Path $BootstrapOutput "McGo.SetupBootstrap.exe"
 if (-not (Test-Path -LiteralPath $BootstrapPath)) {
   throw "Setup bootstrap was not produced: $BootstrapPath"
 }
+Assert-ArtifactVersion -Path $BootstrapPath -ExpectedVersion $clientVersion | Out-Null
 
 Remove-Item -LiteralPath $TemporarySetupPath -Force -ErrorAction SilentlyContinue
 $output = [System.IO.File]::Create($TemporarySetupPath)
@@ -89,12 +114,16 @@ finally {
 }
 
 Move-Item -LiteralPath $TemporarySetupPath -Destination $SetupPath -Force
-$hash = (Get-FileHash -LiteralPath $SetupPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$manifest = Write-UpdateManifest -ArtifactPath $SetupPath -Url $DownloadUrl `
+  -OutputPath $ManifestPath -ExpectedVersion $clientVersion -IsInstaller $true -Notes $ReleaseNotes
+$hash = $manifest.sha256
 $checksumPath = $SetupPath + ".sha256"
 [System.IO.File]::WriteAllText(
   $checksumPath,
   "$hash  $SetupName`n",
   [System.Text.Encoding]::ASCII)
+
+& (Join-Path $PSScriptRoot 'verify_release.ps1') -ArtifactPath $SetupPath -ManifestPath $ManifestPath -AppDirectory $AppOutput
 
 $setup = Get-Item -LiteralPath $SetupPath
 Write-Host "Installer: $($setup.FullName)"

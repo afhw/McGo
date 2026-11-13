@@ -1,5 +1,6 @@
 ﻿using McGo.Core.Java;
 using System.Text.Json.Nodes;
+using System.Diagnostics;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using McGo.Core.App;
@@ -14,18 +15,25 @@ namespace McGo.WinUI.Pages;
 
 public sealed partial class DownloadPage : Page
 {
+    private const double DownloadPrimaryMinimumWidth = 520;
+    private const double DownloadSideWidth = 320;
+    private const double DownloadColumnSpacing = 18;
+    private const double TaskActionsSingleRowWidth = 184;
     private readonly AppSettings _settings = new();
     private readonly InstallServices _installServices = new();
     private readonly DownloaderService _downloader = new();
     private readonly LauncherService _launcher = new();
     private readonly VersionSettingsService _versionSettingsService;
-    private readonly DownloadTaskManager _taskManager = DownloadTaskManager.Current;
+    private DownloadTaskManager _taskManager = DownloadTaskManager.Current;
     private bool _loadingSettings;
     private bool _autoLoadAttempted;
     private bool _autoLoadingVersions;
     private bool _initialized;
+    private bool? _downloadWideLayout;
+    private bool? _taskActionsWrapped;
     private int _localVersionScanRequest;
-    private IReadOnlyList<string>? _renderedTaskRecords;
+    private IReadOnlyList<TaskListItem>? _renderedTaskRecords;
+    private bool _showingTaskError;
     private readonly Dictionary<LoaderPanel, string> _loaderSupportSignatures = [];
     private readonly Dictionary<(string Version, string Mirror), IReadOnlySet<string>> _loaderProbeCache = [];
     private IReadOnlyList<string> _localInstallVersions = [];
@@ -63,7 +71,8 @@ public sealed partial class DownloadPage : Page
         DownloadSectionBar.SelectedItem = DownloadSectionBar.Items[0];
         LoadSettings();
         Loaded += DownloadPage_Loaded;
-        SizeChanged += (_, args) => DownloadRootSizeChanged(this, args);
+        Loaded += DownloadLayoutLoaded;
+        SizeChanged += DownloadRootSizeChanged;
     }
 
     private void DownloadTaskManagerStateChanged(object? sender, EventArgs e)
@@ -169,6 +178,7 @@ public sealed partial class DownloadPage : Page
 
     internal void RunSmokeChecks()
     {
+        CheckResponsiveLayoutForSmoke();
         if (DownloadSectionBar.Items.Count != 5)
         {
             throw new InvalidOperationException("下载页缺少 Python 版下载任务分段。");
@@ -227,6 +237,168 @@ public sealed partial class DownloadPage : Page
         RemoteVersionsBox.ItemsSource = null;
         SelectNoLoader(InstallTypeBox);
         UpdateInstallAddonControls();
+        CheckTaskManagementForSmoke();
+    }
+
+    private void CheckTaskManagementForSmoke()
+    {
+        if (!DispatcherQueue.HasThreadAccess)
+        {
+            throw new InvalidOperationException("下载任务 smoke 必须在 UI 线程执行。");
+        }
+
+        var originalManager = _taskManager;
+        var originalSection = DownloadSectionBar.SelectedItem;
+        var originalSelectedId = (TaskRecordsList.SelectedItem as TaskListItem)?.Id;
+        var originalLog = DownloadLogBox.Text;
+        var originalLogSelectionStart = DownloadLogBox.SelectionStart;
+        var originalLogSelectionLength = DownloadLogBox.SelectionLength;
+        var isolatedManager = new DownloadTaskManager();
+
+        originalManager.StateChanged -= DownloadTaskManagerStateChanged;
+        _taskManager = isolatedManager;
+        isolatedManager.StateChanged += DownloadTaskManagerStateChanged;
+        try
+        {
+            _renderedTaskRecords = null;
+            TaskRecordsList.SelectedItem = null;
+            SelectDownloadSectionForSmoke("tasks");
+            UpdateTaskCenter();
+            Check(TaskRecordsList.SelectionMode == ListViewSelectionMode.Single, "任务列表必须允许单选");
+            Check(EmptyTaskRecordsText.Visibility == Visibility.Visible &&
+                  TaskRecordsList.Visibility == Visibility.Collapsed &&
+                  SelectedTaskSummaryText.Visibility == Visibility.Collapsed, "空队列没有显示独立空状态");
+            CheckActions(false, false, false, false, "空队列");
+
+            var attemptsA = 0;
+            var attemptsB = 0;
+            // Equal titles ensure that selection and commands really use task IDs.
+            var failedA = isolatedManager.Enqueue("smoke", "任务操作检查", (_, _) => ++attemptsA == 1
+                ? Task.FromException<string>(new IOException("smoke failure A"))
+                : Task.FromResult("smoke recovered A"), outputDirectory: AppContext.BaseDirectory);
+            var failedB = isolatedManager.Enqueue("smoke", "任务操作检查", (_, _) => ++attemptsB == 1
+                ? Task.FromException<string>(new IOException("smoke failure B"))
+                : Task.FromResult("smoke recovered B"));
+            Check(failedA.Status == "failed" && failedB.Status == "failed", "未生成两个独立失败任务");
+
+            SelectTask(failedA);
+            CheckActions(true, false, true, true, "失败任务 A 有目录");
+            Check(SelectedTaskRecord!.ErrorDetail.Contains("smoke failure A", StringComparison.Ordinal), "任务 A 错误详情串到其他任务");
+            SelectTask(failedB);
+            CheckActions(true, false, true, false, "失败任务 B 无目录");
+            Check(SelectedTaskRecord!.ErrorDetail.Contains("smoke failure B", StringComparison.Ordinal), "任务 B 错误详情串到其他任务");
+
+            // Use the actual click handlers; error dialogs and directory launching are intentionally not invoked.
+            RetrySelectedTask(RetrySelectedTaskButton, new RoutedEventArgs());
+            Check(failedB.Status == "completed" && attemptsB == 2 && attemptsA == 1 && failedA.Status == "failed",
+                "重试 B 没有只执行选中任务");
+            Check(SelectedTaskRecord?.Id == failedB.Id && failedB.ErrorDetail.Length == 0, "重试 B 后选择丢失或错误未清除");
+            CheckActions(false, false, false, false, "任务 B 重试完成");
+
+            SelectTask(failedA);
+            CheckActions(true, false, true, true, "重试 B 后仍可重试 A");
+            RetrySelectedTask(RetrySelectedTaskButton, new RoutedEventArgs());
+            Check(failedA.Status == "completed" && attemptsA == 2 && attemptsB == 2, "重试 B 后 A 无法独立重试");
+            Check(SelectedTaskRecord?.Id == failedA.Id && failedA.ErrorDetail.Length == 0, "重试 A 后选择丢失或错误未清除");
+            CheckActions(false, false, false, true, "任务 A 重试完成且保留目录");
+            Check(isolatedManager.Records.Count == 2 && TaskRecordsList.Items.Count == 2, "重试生成了重复历史行");
+            RetrySelectedTask(RetrySelectedTaskButton, new RoutedEventArgs());
+            Check(attemptsA == 2 && isolatedManager.QueuedCount == 0, "已完成任务被重复重试");
+
+            var canceledQueueExecutions = 0;
+            var survivorExecutions = 0;
+            DownloadTaskRecord? canceledQueued = null;
+            DownloadTaskRecord? survivor = null;
+            var active = isolatedManager.Enqueue("smoke", "当前任务取消检查", (record, token) =>
+            {
+                // Keep the dispatcher occupied on this UI stack without timers, waits, or background work.
+                canceledQueued = isolatedManager.Enqueue("smoke", "排队任务取消检查", (_, _) =>
+                {
+                    canceledQueueExecutions++;
+                    return Task.FromResult("unexpected execution");
+                });
+                survivor = isolatedManager.Enqueue("smoke", "保留排队任务检查", (_, _) =>
+                {
+                    survivorExecutions++;
+                    return Task.FromResult("smoke survivor completed");
+                });
+
+                SelectTask(canceledQueued);
+                CheckActions(false, true, false, false, "选中排队任务");
+                CancelSelectedTask(CancelSelectedTaskButton, new RoutedEventArgs());
+                Check(canceledQueued.Status == "canceled" && survivor.Status == "queued" &&
+                      isolatedManager.ActiveRecord?.Id == record.Id && !token.IsCancellationRequested &&
+                      isolatedManager.QueuedRecords.Single().Id == survivor.Id, "取消排队任务影响了其他任务");
+                Check(SelectedTaskRecord?.Id == canceledQueued.Id, "取消排队任务后选择丢失");
+                CheckActions(true, false, false, false, "排队任务已取消");
+
+                SelectTask(record);
+                CheckActions(false, true, false, false, "选中当前任务");
+                CancelSelectedTask(CancelSelectedTaskButton, new RoutedEventArgs());
+                Check(token.IsCancellationRequested && isolatedManager.IsCancelRequested, "取消当前任务没有传递取消信号");
+                Check(SelectedTaskRecord?.Id == record.Id && SelectedTaskSummaryText.Text.Contains("正在取消", StringComparison.Ordinal),
+                    "取消请求没有更新选中任务详情");
+                CheckActions(false, false, false, false, "当前任务正在取消");
+                return Task.FromResult("smoke canceled operation returned");
+            });
+
+            // The manager records exceptions thrown by checks inside an operation; surface them as smoke failures.
+            Check(active.Status == "canceled", "当前任务取消检查失败：" + active.ErrorDetail);
+            Check(canceledQueued?.Status == "canceled" && canceledQueueExecutions == 0 &&
+                  survivor?.Status == "completed" && survivorExecutions == 1, "取消后队列执行结果不正确");
+            Check(isolatedManager.ActiveRecord is null && isolatedManager.QueuedCount == 0, "检查结束后仍有活动或排队任务");
+            Check(SelectedTaskRecord?.Id == active.Id, "当前任务结束后选择丢失");
+            CheckActions(true, false, false, false, "当前任务已取消");
+
+            TaskRecordsList.SelectedItem = null;
+            CheckActions(false, false, false, false, "取消选择");
+            Check(SelectedTaskSummaryText.Text == "未选择任务", "取消选择后仍显示旧任务详情");
+        }
+        finally
+        {
+            isolatedManager.StateChanged -= DownloadTaskManagerStateChanged;
+            try
+            {
+                isolatedManager.ClearQueue();
+                isolatedManager.CancelCurrent();
+            }
+            finally
+            {
+                _taskManager = originalManager;
+                originalManager.StateChanged += DownloadTaskManagerStateChanged;
+                _renderedTaskRecords = null;
+                TaskRecordsList.SelectedItem = null;
+                UpdateTaskCenter();
+                TaskRecordsList.SelectedItem = TaskRecordsList.Items.OfType<TaskListItem>()
+                    .FirstOrDefault(item => item.Id == originalSelectedId);
+                DownloadSectionBar.SelectedItem = originalSection;
+                DownloadLogBox.Text = originalLog;
+                DownloadLogBox.SelectionStart = originalLogSelectionStart;
+                DownloadLogBox.SelectionLength = originalLogSelectionLength;
+            }
+        }
+
+        void SelectTask(DownloadTaskRecord record)
+        {
+            TaskRecordsList.SelectedItem = TaskRecordsList.Items.OfType<TaskListItem>().Single(item => item.Id == record.Id);
+            Check(TaskRecordsList.Visibility == Visibility.Visible && EmptyTaskRecordsText.Visibility == Visibility.Collapsed &&
+                  SelectedTaskRecord?.Id == record.Id && SelectedTaskSummaryText.Visibility == Visibility.Visible &&
+                  SelectedTaskSummaryText.Text.Contains($"#{record.Id} ", StringComparison.Ordinal) &&
+                  SelectedTaskSummaryText.Text.Contains(record.Detail, StringComparison.Ordinal), "原生任务选择未刷新对应详情");
+        }
+
+        void CheckActions(bool retry, bool cancel, bool error, bool directory, string state)
+            => Check(RetrySelectedTaskButton.IsEnabled == retry && CancelSelectedTaskButton.IsEnabled == cancel &&
+                     ViewSelectedTaskErrorButton.IsEnabled == error && OpenSelectedTaskDirectoryButton.IsEnabled == directory,
+                state + "的逐项操作按钮状态不正确");
+
+        static void Check(bool condition, string message)
+        {
+            if (!condition)
+            {
+                throw new InvalidOperationException("下载任务 smoke：" + message);
+            }
+        }
     }
 
     /// <summary>
@@ -313,23 +485,115 @@ public sealed partial class DownloadPage : Page
         });
     }
 
-    /// <summary>
-    /// 窄窗口把右栏（进度/日志）下沉到主内容下方并占满整行；
-    /// 否则两列会在 <900 DIP 时重叠。
-    /// </summary>
-    private void DownloadRootSizeChanged(object sender, SizeChangedEventArgs e)
+    private void DownloadLayoutLoaded(object sender, RoutedEventArgs e)
     {
-        var width = XamlRoot?.Size.Width ?? e.NewSize.Width;
-        if (width <= 0)
+        ApplyDownloadResponsiveLayout();
+        ApplyTaskActionsLayout();
+    }
+
+    private void DownloadRootSizeChanged(object sender, SizeChangedEventArgs e)
+        => ApplyDownloadResponsiveLayout();
+
+    private bool ShouldUseWideDownloadLayout(double width)
+        => width >= DownloadPrimaryMinimumWidth + DownloadSideWidth + DownloadColumnSpacing +
+                    ResponsiveLayoutRoot.Padding.Left + ResponsiveLayoutRoot.Padding.Right;
+
+    private void ApplyDownloadResponsiveLayout()
+    {
+        // Page width already excludes NavigationView; child desired widths must not drive the breakpoint.
+        var width = ActualWidth;
+        if (!_initialized || !double.IsFinite(width) || width <= 0)
         {
             return;
         }
 
-        var wide = width >= 900;
-        DownloadSideColumn.Width = wide ? new GridLength(320) : new GridLength(0);
+        // Constrain the named root on every resize, even when the column mode does not change.
+        if (ResponsiveLayoutRoot.MaxWidth != width)
+        {
+            ResponsiveLayoutRoot.MaxWidth = width;
+        }
+
+        var wide = ShouldUseWideDownloadLayout(width);
+        if (_downloadWideLayout == wide)
+        {
+            return;
+        }
+
+        _downloadWideLayout = wide;
+        ResponsiveLayoutRoot.ColumnSpacing = wide ? DownloadColumnSpacing : 0;
+        DownloadPrimaryColumn.MinWidth = wide ? DownloadPrimaryMinimumWidth : 0;
+        DownloadSideColumn.Width = new GridLength(wide ? DownloadSideWidth : 0);
+        Grid.SetColumnSpan(DownloadVanillaPanel, wide ? 1 : 2);
+        Grid.SetColumnSpan(DownloadAddonPanel, wide ? 1 : 2);
+        Grid.SetColumnSpan(DownloadTasksPanel, wide ? 1 : 2);
         Grid.SetRow(DownloadSidePanel, wide ? 2 : 3);
         Grid.SetColumn(DownloadSidePanel, wide ? 1 : 0);
         Grid.SetColumnSpan(DownloadSidePanel, wide ? 1 : 2);
+    }
+
+    private void TaskActionsToolbarSizeChanged(object sender, SizeChangedEventArgs e)
+        => ApplyTaskActionsLayout();
+
+    private void ApplyTaskActionsLayout()
+    {
+        if (!_initialized || TaskActionsToolbar.ActualWidth <= 0)
+        {
+            return;
+        }
+
+        var wrapped = TaskActionsToolbar.ActualWidth < TaskActionsSingleRowWidth;
+        if (_taskActionsWrapped == wrapped)
+        {
+            return;
+        }
+
+        _taskActionsWrapped = wrapped;
+        TaskActionsToolbar.ColumnSpacing = wrapped ? 0 : 8;
+        TaskActionsToolbar.RowSpacing = wrapped ? 8 : 0;
+        TaskActionsSecondaryColumn.Width = wrapped ? new GridLength(0) : GridLength.Auto;
+        Grid.SetRow(TaskActionsSecondaryGroup, wrapped ? 1 : 0);
+        Grid.SetColumn(TaskActionsSecondaryGroup, wrapped ? 0 : 1);
+    }
+
+    internal void CheckResponsiveLayoutForSmoke()
+    {
+        // Read only: a missing or stale resize event must fail, rather than be repaired by the check.
+        var width = ActualWidth;
+        var wide = ShouldUseWideDownloadLayout(width);
+        if (width <= 0 || _downloadWideLayout != wide ||
+            Math.Abs(ResponsiveLayoutRoot.MaxWidth - width) > 0.5 ||
+            ResponsiveLayoutRoot.ActualWidth > width + 1 ||
+            ResponsiveLayoutRoot.ColumnSpacing != (wide ? DownloadColumnSpacing : 0) ||
+            DownloadPrimaryColumn.MinWidth != (wide ? DownloadPrimaryMinimumWidth : 0) ||
+            DownloadSideColumn.Width.Value != (wide ? DownloadSideWidth : 0) ||
+            Grid.GetColumnSpan(DownloadVanillaPanel) != (wide ? 1 : 2) ||
+            Grid.GetColumnSpan(DownloadAddonPanel) != (wide ? 1 : 2) ||
+            Grid.GetColumnSpan(DownloadTasksPanel) != (wide ? 1 : 2) ||
+            Grid.GetRow(DownloadSidePanel) != (wide ? 2 : 3) ||
+            Grid.GetColumn(DownloadSidePanel) != (wide ? 1 : 0) ||
+            Grid.GetColumnSpan(DownloadSidePanel) != (wide ? 1 : 2))
+        {
+            throw new InvalidOperationException($"下载页响应式布局未跟随实际页面宽度 {width:0.#} 更新。");
+        }
+
+        if (wide && (DownloadPrimaryColumn.ActualWidth < DownloadPrimaryMinimumWidth - 1 ||
+                     DownloadSideColumn.ActualWidth < DownloadSideWidth - 1))
+        {
+            throw new InvalidOperationException("下载页双栏没有保留主内容与进度栏的最小宽度。");
+        }
+
+        if (DownloadTasksPanel.Visibility == Visibility.Visible && TaskActionsToolbar.ActualWidth > 0)
+        {
+            var wrapped = TaskActionsToolbar.ActualWidth < TaskActionsSingleRowWidth;
+            if (_taskActionsWrapped != wrapped ||
+                Grid.GetRow(TaskActionsSecondaryGroup) != (wrapped ? 1 : 0) ||
+                Grid.GetColumn(TaskActionsSecondaryGroup) != (wrapped ? 0 : 1) ||
+                TaskActionsToolbar.ColumnSpacing != (wrapped ? 0 : 8) ||
+                TaskActionsToolbar.RowSpacing != (wrapped ? 8 : 0))
+            {
+                throw new InvalidOperationException("下载任务工具栏没有随可用宽度换行。");
+            }
+        }
     }
 
     private static void Navigate(string tag)
@@ -663,7 +927,8 @@ public sealed partial class DownloadPage : Page
         _taskManager.Enqueue(
             "download",
             title,
-            (record, token) => ExecuteDownloadTaskAsync(record, versionId, mirror, gameDir, javaPath, [.. installTypes], token));
+            (record, token) => ExecuteDownloadTaskAsync(record, versionId, mirror, gameDir, javaPath, [.. installTypes], token),
+            outputDirectory: gameDir);
         AppendDownload($"已加入全局队列：{title}");
         await Task.CompletedTask;
     }
@@ -756,6 +1021,126 @@ public sealed partial class DownloadPage : Page
     {
         var count = _taskManager.ClearQueue();
         AppendDownload($"已清空等待队列：移除 {count} 个任务。");
+    }
+
+    private DownloadTaskRecord? SelectedTaskRecord
+        => TaskRecordsList.SelectedItem is TaskListItem selected
+            ? _taskManager.Records.FirstOrDefault(record => record.Id == selected.Id)
+            : null;
+
+    private void TaskRecordSelectionChanged(object sender, SelectionChangedEventArgs e)
+        => UpdateSelectedTaskActions();
+
+    private void RetrySelectedTask(object sender, RoutedEventArgs e)
+    {
+        if (SelectedTaskRecord is { } record)
+        {
+            AppendDownload(_taskManager.Retry(record.Id)
+                ? $"已重新加入全局队列：{record.Title}"
+                : "所选任务当前不可重试。");
+        }
+
+        UpdateTaskCenter();
+    }
+
+    private void CancelSelectedTask(object sender, RoutedEventArgs e)
+    {
+        if (SelectedTaskRecord is { } record)
+        {
+            AppendDownload(_taskManager.Cancel(record.Id)
+                ? $"已请求取消任务：{record.Title}"
+                : "所选任务当前不可取消。");
+        }
+
+        UpdateTaskCenter();
+    }
+
+    private async void ViewSelectedTaskError(object sender, RoutedEventArgs e)
+    {
+        var record = SelectedTaskRecord;
+        if (_showingTaskError || record is null || string.IsNullOrWhiteSpace(record.ErrorDetail))
+        {
+            return;
+        }
+
+        _showingTaskError = true;
+        UpdateSelectedTaskActions();
+        try
+        {
+            var errorText = new TextBox
+            {
+                Text = record.ErrorDetail,
+                IsReadOnly = true,
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                MaxHeight = 360,
+            };
+            ScrollViewer.SetVerticalScrollBarVisibility(errorText, ScrollBarVisibility.Auto);
+            ScrollViewer.SetHorizontalScrollBarVisibility(errorText, ScrollBarVisibility.Disabled);
+            var dialog = new ContentDialog
+            {
+                XamlRoot = XamlRoot,
+                Title = new TextBlock { Text = $"任务 #{record.Id}：{record.Title}", TextWrapping = TextWrapping.Wrap },
+                Content = errorText,
+                CloseButtonText = "关闭",
+            };
+            await dialog.ShowAsync();
+        }
+        catch (Exception exc)
+        {
+            AppendDownload("无法显示任务错误：" + exc.Message);
+        }
+        finally
+        {
+            _showingTaskError = false;
+            UpdateSelectedTaskActions();
+        }
+    }
+
+    private void UpdateSelectedTaskActions()
+    {
+        if (!_initialized)
+        {
+            return;
+        }
+
+        var record = SelectedTaskRecord;
+        var isActive = record is not null && _taskManager.ActiveRecord?.Id == record.Id;
+        RetrySelectedTaskButton.IsEnabled = record is not null && !isActive && (record.Status is "failed" or "canceled");
+        CancelSelectedTaskButton.IsEnabled = record is not null &&
+            (record.Status == "queued" || (isActive && record.Status == "running" && !_taskManager.IsCancelRequested));
+        ViewSelectedTaskErrorButton.IsEnabled = !_showingTaskError && !string.IsNullOrWhiteSpace(record?.ErrorDetail);
+        OpenSelectedTaskDirectoryButton.IsEnabled = !string.IsNullOrWhiteSpace(record?.OutputDirectory);
+        SelectedTaskSummaryText.Visibility = _taskManager.Records.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        SelectedTaskSummaryText.Text = record is null
+            ? "未选择任务"
+            : $"#{record.Id} {record.Title} | {StatusLabel(record.Status)} | {record.Progress}%{Environment.NewLine}{record.Detail}";
+    }
+
+    private void OpenSelectedTaskDirectory(object sender, RoutedEventArgs e)
+    {
+        var directory = SelectedTaskRecord?.OutputDirectory;
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            return;
+        }
+
+        try
+        {
+            if (!Directory.Exists(directory))
+            {
+                AppendDownload("任务目录尚未创建或已不可用：" + directory);
+                DownloadLogExpander.IsExpanded = true;
+                return;
+            }
+
+            Process.Start(new ProcessStartInfo(directory) { UseShellExecute = true });
+        }
+        catch (Exception exc)
+        {
+            AppendDownload("无法打开任务目录：" + exc.Message);
+            DownloadLogExpander.IsExpanded = true;
+        }
     }
 
     private List<string> SelectedInstallTypes()
@@ -998,7 +1383,8 @@ public sealed partial class DownloadPage : Page
         _taskManager.Enqueue(
             "install",
             title,
-            (record, token) => ExecuteAddonInstallTaskAsync(record, installType, minecraftVersion, requestedVersion, mirror, gameDir, javaPath, token));
+            (record, token) => ExecuteAddonInstallTaskAsync(record, installType, minecraftVersion, requestedVersion, mirror, gameDir, javaPath, token),
+            outputDirectory: gameDir);
         AppendDownload($"已加入全局队列：{title}");
         await Task.CompletedTask;
     }
@@ -1192,8 +1578,6 @@ public sealed partial class DownloadPage : Page
             item.SpeedBytes = speed;
             item.Detail = $"[{snapshot.Phase}] {snapshot.CompletedJobs}/{snapshot.TotalJobs}，复用 {snapshot.ReusedJobs}，写入 {AppFormatter.FormatBytes(snapshot.DownloadedBytes)}，{AppFormatter.FormatBytes(speed)}/s，{file}";
         });
-        DownloadProgressBar.Value = record.Progress;
-        UpdateDownloadMetrics(record.Detail);
     }
 
     private void ApplyInstallProgress(DownloadTaskRecord record, DownloadSnapshot snapshot)
@@ -1209,9 +1593,10 @@ public sealed partial class DownloadPage : Page
             item.SpeedBytes = snapshot.SpeedBytes > 0 ? snapshot.SpeedBytes : speed;
             item.Detail = $"[{snapshot.Phase}] {snapshot.CompletedFiles}/{snapshot.TotalFiles}，复用 {snapshot.ReusedFiles}，{AppFormatter.FormatBytes(item.SpeedBytes)}/s，{snapshot.CurrentFile}";
         });
-        DownloadProgressBar.Value = record.Progress;
-        UpdateInstallStatus(snapshot.Phase, record.Detail);
-        UpdateDownloadMetrics(record.Detail);
+        if (ReferenceEquals(_taskManager.ActiveRecord, record) && !_taskManager.IsCancelRequested)
+        {
+            UpdateInstallStatus(snapshot.Phase, record.Detail);
+        }
     }
 
     private static long UpdateSpeed(DownloadTaskRecord record, long downloadedBytes)
@@ -1247,7 +1632,7 @@ public sealed partial class DownloadPage : Page
         TaskQueueText.Text = $"队列：{_taskManager.QueuedCount} | 下一个：{nextTitle}";
         UpdateDownloadQueueSummary();
         CancelTaskButton.IsEnabled = active is not null && !_taskManager.IsCancelRequested;
-        RetryTaskButton.IsEnabled = _taskManager.LastFailedTitle is not null && active is null;
+        RetryTaskButton.IsEnabled = _taskManager.LastFailedTitle is not null;
         ClearQueueButton.IsEnabled = _taskManager.QueuedCount > 0;
         if (active is not null)
         {
@@ -1259,10 +1644,12 @@ public sealed partial class DownloadPage : Page
             // 没有正在运行的任务时必须清掉上一轮的实时指标，
             // 否则「正在取消…」这类旧文案会一直挂着，和「当前任务：无」自相矛盾。
             var lastRecord = _taskManager.Records.LastOrDefault();
-            DownloadProgressBar.Value = _taskManager.QueuedCount == 0 ? lastRecord?.Progress ?? 0 : 0;
-            UpdateDownloadMetrics(lastRecord is null ? "等待下载" : "已结束：" + StatusLabel(lastRecord.Status));
+            var hasQueuedTasks = _taskManager.QueuedCount > 0;
+            DownloadProgressBar.Value = hasQueuedTasks ? 0 : lastRecord?.Progress ?? 0;
+            UpdateDownloadMetrics(hasQueuedTasks ? "等待开始" : lastRecord is null ? "等待下载" : "已结束：" + StatusLabel(lastRecord.Status));
         }
         RefreshTaskRecords();
+        UpdateSelectedTaskActions();
     }
 
     /// <summary>
@@ -1273,13 +1660,17 @@ public sealed partial class DownloadPage : Page
     private void RefreshTaskRecords()
     {
         var records = RenderTaskRecords();
-        if (_renderedTaskRecords is not null && _renderedTaskRecords.SequenceEqual(records, StringComparer.Ordinal))
+        EmptyTaskRecordsText.Visibility = records.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        TaskRecordsList.Visibility = records.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        if (_renderedTaskRecords is not null && _renderedTaskRecords.SequenceEqual(records))
         {
             return;
         }
 
+        var selectedId = (TaskRecordsList.SelectedItem as TaskListItem)?.Id;
         _renderedTaskRecords = records;
         TaskRecordsList.ItemsSource = records;
+        TaskRecordsList.SelectedItem = records.FirstOrDefault(record => record.Id == selectedId);
     }
 
     private void UpdateDownloadMetrics(string message)
@@ -1317,13 +1708,14 @@ public sealed partial class DownloadPage : Page
         }
     }
 
-    private IReadOnlyList<string> RenderTaskRecords()
+    private IReadOnlyList<TaskListItem> RenderTaskRecords()
     {
         var records = _taskManager.Records;
-        if (records.Count == 0)
-        {
-            return ["暂无下载任务"];
-        }
+        var queueOrder = _taskManager.QueuedRecords
+            .Select((record, index) => (record.Id, Index: index))
+            .ToDictionary(item => item.Id, item => item.Index);
+        var historyOrder = records.Select((record, index) => (record.Id, Index: index))
+            .ToDictionary(item => item.Id, item => item.Index);
 
         var order = new Dictionary<string, int>
         {
@@ -1333,11 +1725,10 @@ public sealed partial class DownloadPage : Page
             ["canceled"] = 3,
             ["completed"] = 4,
         };
-        var items = new List<string>();
+        var items = new List<TaskListItem>();
         foreach (var record in records
                      .OrderBy(record => order.GetValueOrDefault(record.Status, 9))
-                     .ThenBy(record => record.Status is "running" or "queued" ? record.Id : -record.Id)
-                     .Take(50))
+                     .ThenBy(record => record.Status == "queued" ? queueOrder.GetValueOrDefault(record.Id, int.MaxValue) : -historyOrder[record.Id]))
         {
             // 列表只放稳定的信息（状态 + 标题）。进度、速度、文件计数每秒都在变，
             // 放进来会让 ItemsSource 每秒重设一次，ListView 不停重建容器导致整块不显示。
@@ -1345,10 +1736,15 @@ public sealed partial class DownloadPage : Page
             var builder = new System.Text.StringBuilder();
             builder.Append('[').Append(StatusLabel(record.Status)).Append("] ")
                 .Append(record.Title);
-            items.Add(builder.ToString());
+            items.Add(new TaskListItem(record.Id, $"#{record.Id} {builder}"));
         }
 
         return items;
+    }
+
+    private sealed record TaskListItem(int Id, string Label)
+    {
+        public override string ToString() => Label;
     }
 
     private void UpdateFromAnyThread(Action action)

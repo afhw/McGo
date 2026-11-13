@@ -18,13 +18,13 @@
             x:Name="ResponsiveLayoutRoot"
             HorizontalAlignment="Stretch"
             Padding="24,20,24,28"
-            ColumnSpacing="18"
+            ColumnSpacing="0"
             RowSpacing="16"
             SizeChanged="DownloadRootSizeChanged">
 
             <Grid.ColumnDefinitions>
                 <ColumnDefinition x:Name="DownloadPrimaryColumn" Width="*" />
-                <ColumnDefinition x:Name="DownloadSideColumn" Width="320" />
+                <ColumnDefinition x:Name="DownloadSideColumn" Width="0" />
             </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
@@ -33,7 +33,7 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <StackPanel x:Name="DownloadPageHeader" Spacing="3">
+            <StackPanel x:Name="DownloadPageHeader" Grid.ColumnSpan="2" Spacing="3">
                 <TextBlock Style="{StaticResource McgoPageTitleStyle}" Text="下载" />
                 <TextBlock Style="{StaticResource McgoPageSubtitleStyle}" Text="选一个版本装下来，加载器可以顺手一起装。" />
             </StackPanel>
@@ -56,6 +56,7 @@
                 x:Name="DownloadVanillaPanel"
                 Grid.Row="2"
                 Grid.Column="0"
+                Grid.ColumnSpan="2"
                 Spacing="14">
 
                 <!--  主操作卡：版本 + 装什么 + 一个按钮  -->
@@ -278,8 +279,9 @@
             <!--  ==================== 右侧：进度与结果 ====================  -->
             <StackPanel
                 x:Name="DownloadSidePanel"
-                Grid.Row="2"
-                Grid.Column="1"
+                Grid.Row="3"
+                Grid.Column="0"
+                Grid.ColumnSpan="2"
                 Spacing="12">
 
                 <Border Padding="18" Style="{StaticResource McgoCardStyle}">
@@ -350,6 +352,7 @@
                 x:Name="DownloadAddonPanel"
                 Grid.Row="2"
                 Grid.Column="0"
+                Grid.ColumnSpan="2"
                 Padding="22"
                 Style="{StaticResource McgoCardStyle}"
                 Visibility="Collapsed">
@@ -437,12 +440,12 @@
             </Border>
 
             <!--  ==================== 任务管理 ====================  -->
-            <!--  只占主列：横跨两列会盖住右侧的「进度」和「日志」，
-                   日志 Expander 被压在任务卡下面，用户点了当然看不到内容。  -->
+            <!--  宽屏只占主列；窄屏和下沉的进度、日志各占一行。  -->
             <Border
                 x:Name="DownloadTasksPanel"
                 Grid.Row="2"
                 Grid.Column="0"
+                Grid.ColumnSpan="2"
                 Padding="22"
                 Style="{StaticResource McgoCardStyle}"
                 Visibility="Collapsed">
@@ -451,6 +454,73 @@
                         <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="所有下载任务" />
                         <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="运行中、等待中、失败和已完成的任务都在这里。" />
                     </StackPanel>
+                    <Grid x:Name="TaskActionsToolbar" RowSpacing="8" SizeChanged="TaskActionsToolbarSizeChanged">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition x:Name="TaskActionsSecondaryColumn" Width="0" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button
+                                x:Name="RetrySelectedTaskButton"
+                                Width="40"
+                                Height="36"
+                                Padding="6"
+                                AutomationProperties.Name="重试所选任务"
+                                Click="RetrySelectedTask"
+                                IsEnabled="False"
+                                Style="{StaticResource McgoSecondaryButtonStyle}"
+                                ToolTipService.ToolTip="重试所选任务">
+                                <SymbolIcon Symbol="Refresh" />
+                            </Button>
+                            <Button
+                                x:Name="CancelSelectedTaskButton"
+                                Width="40"
+                                Height="36"
+                                Padding="6"
+                                AutomationProperties.Name="取消所选任务"
+                                Click="CancelSelectedTask"
+                                IsEnabled="False"
+                                Style="{StaticResource McgoSecondaryButtonStyle}"
+                                ToolTipService.ToolTip="取消所选任务">
+                                <SymbolIcon Symbol="Cancel" />
+                            </Button>
+                        </StackPanel>
+                        <StackPanel x:Name="TaskActionsSecondaryGroup" Grid.Row="1" Orientation="Horizontal" Spacing="8">
+                            <Button
+                                x:Name="ViewSelectedTaskErrorButton"
+                                Width="40"
+                                Height="36"
+                                Padding="6"
+                                AutomationProperties.Name="查看所选任务错误"
+                                Click="ViewSelectedTaskError"
+                                IsEnabled="False"
+                                Style="{StaticResource McgoSecondaryButtonStyle}"
+                                ToolTipService.ToolTip="查看所选任务错误">
+                                <SymbolIcon Symbol="Document" />
+                            </Button>
+                            <Button
+                                x:Name="OpenSelectedTaskDirectoryButton"
+                                Width="40"
+                                Height="36"
+                                Padding="6"
+                                AutomationProperties.Name="打开所选任务目录"
+                                Click="OpenSelectedTaskDirectory"
+                                IsEnabled="False"
+                                Style="{StaticResource McgoSecondaryButtonStyle}"
+                                ToolTipService.ToolTip="打开所选任务目录">
+                                <SymbolIcon Symbol="Folder" />
+                            </Button>
+                        </StackPanel>
+                    </Grid>
+                    <TextBlock
+                        x:Name="SelectedTaskSummaryText"
+                        Text="未选择任务"
+                        TextWrapping="Wrap" />
+                    <TextBlock x:Name="EmptyTaskRecordsText" Text="暂无下载任务" />
                     <!--  HorizontalContentAlignment 必须有：ListViewItem 默认按内容宽度撑开，
                           Wrap 文本在无宽度约束下会按整行单行测量，超长任务行就会横向冲出卡片。  -->
                     <ListView
@@ -458,7 +528,8 @@
                         MaxHeight="460"
                         MinHeight="220"
                         HorizontalContentAlignment="Stretch"
-                        SelectionMode="None">
+                        SelectionChanged="TaskRecordSelectionChanged"
+                        SelectionMode="Single">
                         <ListView.ItemTemplate>
                             <DataTemplate>
                                 <TextBlock

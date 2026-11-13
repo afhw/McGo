@@ -269,6 +269,9 @@ main, section, article, figure { min-width: 0; }
   .gallery-image { aspect-ratio: 16 / 9; }
 }
 
+.release-hash { font-size: 12px; color: var(--muted); min-width: 0; }
+.release-hash code { display: block; overflow-wrap: anywhere; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
   .download-button:hover, .secondary-button:hover { transform: none; }

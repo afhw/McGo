@@ -26,9 +26,35 @@ public sealed partial class AccountsPage : Page
     public AccountsPage()
     {
         InitializeComponent();
+        SizeChanged += (_, _) => ApplyResponsiveLayout();
+        Loaded += (_, _) => ApplyResponsiveLayout();
         _initialized = true;
         LoginModeBox.SelectedItem = LoginModeBox.Items[0];
         Refresh();
+    }
+
+    private void ApplyResponsiveLayout()
+    {
+        if (ActualWidth <= 0) return;
+        var compact = ActualWidth < 700;
+        EmptyAccountLayout.RowSpacing = compact ? 12 : 0;
+        EmptyAccountLayout.ColumnDefinitions[2].Width = compact ? new GridLength(0) : GridLength.Auto;
+        Grid.SetColumnSpan(EmptyAccountDescription, compact ? 2 : 1);
+        Grid.SetRow(AddFirstAccountButton, compact ? 1 : 0);
+        Grid.SetColumn(AddFirstAccountButton, compact ? 1 : 2);
+        Grid.SetColumnSpan(AddFirstAccountButton, compact ? 2 : 1);
+        AddFirstAccountButton.HorizontalAlignment = compact ? HorizontalAlignment.Left : HorizontalAlignment.Stretch;
+
+        // The path picker needs a full row before its two buttons squeeze the input.
+        var stackPath = ActualWidth < 1000;
+        Grid.SetRow(AuthlibPathPanel, stackPath ? 2 : 1);
+        Grid.SetColumn(AuthlibPathPanel, stackPath ? 0 : 1);
+        Grid.SetColumnSpan(AuthlibPathPanel, stackPath ? 2 : 1);
+        Grid.SetColumnSpan(ExternalPasswordBox, stackPath ? 2 : 1);
+        if (stackPath && ExternalFieldsGrid.RowDefinitions.Count == 2)
+            ExternalFieldsGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        else if (!stackPath && ExternalFieldsGrid.RowDefinitions.Count == 3)
+            ExternalFieldsGrid.RowDefinitions.RemoveAt(2);
     }
 
     private void RefreshAccounts(object sender, RoutedEventArgs e) => Refresh();
@@ -325,7 +351,7 @@ public sealed partial class AccountsPage : Page
             ExternalStatusText.Text = "已加入全局队列，等待下载 authlib-injector...";
             OutputBox.Text = ExternalStatusText.Text;
             DownloadTaskManager.Current.Enqueue("authlib", "下载 authlib-injector", (record, token) =>
-                DownloadAuthlibInjectorTaskAsync(record, targetDir, token));
+                DownloadAuthlibInjectorTaskAsync(record, targetDir, token), outputDirectory: targetDir);
         }
         catch (Exception exc)
         {
@@ -351,7 +377,7 @@ public sealed partial class AccountsPage : Page
             OutputBox.Text = "authlib-injector 已下载：" + result.Path;
             return "authlib-injector 已下载";
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             ExternalStatusText.Text = "authlib-injector 下载已取消。";
             OutputBox.Text = ExternalStatusText.Text;

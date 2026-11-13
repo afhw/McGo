@@ -1,0 +1,30 @@
+export function parseReleaseMetadata(manifest, manifestUrl, { installer = false } = {}) {
+  if (!manifest || typeof manifest.version !== 'string' || !manifest.version.trim()
+    || !Number.isSafeInteger(manifest.size) || manifest.size <= 0
+    || typeof manifest.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(manifest.sha256)
+    || typeof manifest.url !== 'string' || !manifest.url.trim()
+    || (installer && (manifest.installer !== true || manifest.product !== 'mcgo-winui'))) {
+    throw new Error('Invalid release metadata');
+  }
+  const url = new URL(manifest.url, manifestUrl);
+  if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.hash) {
+    throw new Error('Invalid release download URL');
+  }
+  const checksumUrl = new URL(url);
+  checksumUrl.pathname += '.sha256';
+  return {
+    href: url.href,
+    name: decodeURIComponent(url.pathname.split('/').at(-1)),
+    size: `${(manifest.size / 1024 / 1024).toFixed(1)} MiB`,
+    bytes: manifest.size,
+    version: manifest.version.trim(),
+    sha256: manifest.sha256,
+    checksumHref: checksumUrl.href,
+  };
+}
+
+export async function loadReleaseMetadata(path, options = {}, fetcher = fetch) {
+  const response = await fetcher(path, { cache: 'no-store', signal: options.signal });
+  if (!response.ok) throw new Error(`Release metadata HTTP ${response.status}`);
+  return parseReleaseMetadata(await response.json(), response.url, options);
+}

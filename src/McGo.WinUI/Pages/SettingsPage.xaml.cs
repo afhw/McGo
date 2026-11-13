@@ -36,6 +36,7 @@ public sealed partial class SettingsPage : Page
         LoadSettings();
         _loadingSettings = false;
         ApplyAdvancedVisibility();
+        ApplyJavaMode();
         _ = RefreshHomeContentAsync(showFeedback: false);
         Loaded += SettingsPage_Loaded;
     }
@@ -43,7 +44,64 @@ public sealed partial class SettingsPage : Page
     private async void SettingsPage_Loaded(object sender, RoutedEventArgs e)
     {
         Loaded -= SettingsPage_Loaded;
+        ApplyResponsiveLayout(SettingsLayoutRoot.ActualWidth);
         await RefreshJavaCandidatesAsync(JavaPathBox.Text);
+    }
+
+    private void SettingsLayoutRoot_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (e.NewSize.Width != e.PreviousSize.Width)
+            ApplyResponsiveLayout(e.NewSize.Width);
+    }
+
+    private void ApplyResponsiveLayout(double width)
+    {
+        if (width <= 0) return;
+
+        // This viewport already excludes the navigation pane and honors MaxWidth.
+        var padding = width < 600 ? 16 : 24;
+        SettingsContentRoot.Padding = new Thickness(padding, 16, padding, 28);
+        SettingsSaveGrid.Padding = new Thickness(padding, 0, padding, 0);
+        var formWidth = width - padding * 2 - 38;
+        var columns = formWidth >= 540 ? 2 : 1;
+        var pickerColumns = formWidth >= 420 ? 2 : 1;
+        ArrangeGrid(GameDirectoryPickerGrid, pickerColumns, autoLastColumn: true);
+        ArrangeGrid(JavaPathPickerGrid, pickerColumns, autoLastColumn: true);
+        ArrangeGrid(JavaCandidatesPickerGrid, pickerColumns, autoLastColumn: true);
+        ArrangeGrid(HomeContentPickerGrid, pickerColumns, autoLastColumn: true);
+        ArrangeGrid(MusicPickerGrid, pickerColumns, autoLastColumn: true);
+        ArrangeGrid(DownloadOptionsGrid, columns);
+        ArrangeGrid(ConcurrencyGrid, columns);
+        ArrangeGrid(ThemePickerGrid, columns == 2 ? 3 : 1, autoLastColumn: true);
+        ArrangeGrid(FeatureOptionsGrid, columns);
+        ArrangeGrid(MusicOptionsGrid, columns);
+        ArrangeGrid(MusicActionsGrid, formWidth >= 320 ? 2 : 1);
+        ArrangeGrid(UpdateActionsGrid, formWidth >= 480 ? 3 : 1);
+        ArrangeGrid(SettingsSaveGrid, width >= 600 ? 2 : 1, autoLastColumn: true);
+        SaveAllButton.HorizontalAlignment = width >= 600 ? HorizontalAlignment.Right : HorizontalAlignment.Stretch;
+    }
+
+    private static void ArrangeGrid(Grid grid, int columns, bool autoLastColumn = false)
+    {
+        while (grid.ColumnDefinitions.Count < columns)
+            grid.ColumnDefinitions.Add(new ColumnDefinition());
+        while (grid.ColumnDefinitions.Count > columns)
+            grid.ColumnDefinitions.RemoveAt(grid.ColumnDefinitions.Count - 1);
+        for (var index = 0; index < columns; index++)
+            grid.ColumnDefinitions[index].Width = autoLastColumn && columns > 1 && index == columns - 1
+                ? GridLength.Auto : new GridLength(1, GridUnitType.Star);
+
+        var children = grid.Children.Cast<FrameworkElement>().ToArray();
+        var rows = (children.Length + columns - 1) / columns;
+        while (grid.RowDefinitions.Count < rows)
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        while (grid.RowDefinitions.Count > rows)
+            grid.RowDefinitions.RemoveAt(grid.RowDefinitions.Count - 1);
+        for (var index = 0; index < children.Length; index++)
+        {
+            Grid.SetRow(children[index], index / columns);
+            Grid.SetColumn(children[index], index % columns);
+        }
     }
 
     private void SettingsSectionChanged(SelectorBar sender, SelectorBarSelectionChangedEventArgs e)
@@ -58,6 +116,14 @@ public sealed partial class SettingsPage : Page
 
     internal void RunSmokeChecks()
     {
+        var automatic = AutoJavaCheckBox.IsChecked;
+        AutoJavaCheckBox.IsChecked = true;
+        if (JavaPathBox.IsEnabled || JavaCandidatesBox.IsEnabled || ChooseJavaButton.IsEnabled)
+            throw new InvalidOperationException("自动 Java 模式仍允许编辑手动路径。");
+        AutoJavaCheckBox.IsChecked = false;
+        if (!JavaPathBox.IsEnabled || !JavaCandidatesBox.IsEnabled || !ChooseJavaButton.IsEnabled)
+            throw new InvalidOperationException("手动 Java 模式无法编辑路径。");
+        AutoJavaCheckBox.IsChecked = automatic;
         var originalAdvanced = AdvancedModeCheckBox.IsChecked;
         AdvancedModeCheckBox.IsChecked = false;
         if (CoreThreadsBox.Visibility != Visibility.Collapsed || ModrinthApiBaseBox.Visibility != Visibility.Collapsed)
@@ -105,6 +171,7 @@ public sealed partial class SettingsPage : Page
         _settings.LoadConfig();
         GameDirectoryBox.Text = _settings.Config.Get("GAME", "directory", AppConstants.DefaultGameDirectory);
         JavaPathBox.Text = _settings.Config.Get("JAVA", "path", "java");
+        AutoJavaCheckBox.IsChecked = _settings.Config.GetBool("JAVA", "auto_select", true);
         _loadingJavaCandidates = true;
         try
         {
@@ -182,6 +249,7 @@ public sealed partial class SettingsPage : Page
         var modrinthCdnBase = NormalizeOptionalHttpBase(ModrinthCdnBaseBox.Text, "Modrinth CDN");
         _settings.Config.Set("GAME", "directory", GameDirectoryBox.Text.Trim());
         _settings.Config.Set("JAVA", "path", JavaPathBox.Text.Trim());
+        _settings.Config.Set("JAVA", "auto_select", (AutoJavaCheckBox.IsChecked == true).ToString());
         _settings.Config.Set("DOWNLOAD", "max_core_threads", UiHelpers.NumberValue(CoreThreadsBox, 1, 64, 12).ToString());
         _settings.Config.Set("DOWNLOAD", "max_asset_threads", UiHelpers.NumberValue(AssetThreadsBox, 1, 96, 24).ToString());
         _settings.Config.Set("DOWNLOAD", "speed_limit_kbps", UiHelpers.NumberValue(SpeedLimitBox, 0, 1_048_576, 0).ToString());
@@ -218,6 +286,19 @@ public sealed partial class SettingsPage : Page
         {
             GameDirectoryBox.Text = folder.Path;
         }
+    }
+
+    private void AutoJavaChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_loadingSettings) ApplyJavaMode();
+    }
+
+    private void ApplyJavaMode()
+    {
+        var manual = AutoJavaCheckBox.IsChecked != true;
+        JavaPathBox.IsEnabled = manual;
+        JavaCandidatesBox.IsEnabled = manual;
+        ChooseJavaButton.IsEnabled = manual;
     }
 
     private async void ChooseJavaFile(object sender, RoutedEventArgs e)
@@ -475,6 +556,8 @@ public sealed partial class SettingsPage : Page
                 cancellationToken: cancellationToken);
             _lastUpdateManifest = result;
             _lastUpdatePath = result["path"]?.GetValue<string>();
+            if (!string.IsNullOrWhiteSpace(_lastUpdatePath))
+                DownloadTaskManager.Current.Update(record, item => item.OutputDirectory = Path.GetDirectoryName(_lastUpdatePath) ?? "");
             UpdateOutputBox.Text = result.ToJsonString(JsonOptions);
             var downloadedVersion = result["version"]?.GetValue<string>() ?? "";
             SetUpdateStatus(downloadedVersion.Length > 0 ? $"McGo {downloadedVersion} 已下载" : "更新已下载");
@@ -485,7 +568,7 @@ public sealed partial class SettingsPage : Page
                     : "更新已下载，但清单未声明受支持的应用方式。";
             return downloadedVersion.Length > 0 ? $"McGo {downloadedVersion} 已下载" : "更新已下载";
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             SetUpdateStatus("更新下载已取消");
             StatusText.Text = "更新下载已取消。";

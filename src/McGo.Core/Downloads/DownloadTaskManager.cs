@@ -9,9 +9,11 @@ public sealed class DownloadTaskManager
     private readonly object _gate = new();
     private readonly Queue<DownloadTaskWorkItem> _queue = new();
     private readonly List<DownloadTaskRecord> _records = [];
+    private readonly Dictionary<int, DownloadTaskWorkItem> _tasksById = [];
+    private readonly List<DownloadTaskWorkItem> _failedTasks = [];
     private DownloadTaskWorkItem? _activeTask;
-    private DownloadTaskWorkItem? _lastFailedTask;
     private CancellationTokenSource? _activeCancellation;
+    private Task _cancellationCallbacks = Task.CompletedTask;
     private bool _dispatching;
     private bool _cancelRequested;
     private int _nextId = 1;
@@ -32,7 +34,7 @@ public sealed class DownloadTaskManager
 
     public string? LastFailedTitle
     {
-        get { lock (_gate) return _lastFailedTask?.Title; }
+        get { lock (_gate) return _failedTasks.LastOrDefault()?.Title; }
     }
 
     public int QueuedCount
@@ -53,6 +55,11 @@ public sealed class DownloadTaskManager
     public IReadOnlyList<DownloadTaskRecord> Records
     {
         get { lock (_gate) return _records.ToArray(); }
+    }
+
+    public IReadOnlyList<DownloadTaskRecord> QueuedRecords
+    {
+        get { lock (_gate) return _queue.Select(task => task.Record).ToArray(); }
     }
 
     public bool HasAttentionRequired
@@ -91,15 +98,18 @@ public sealed class DownloadTaskManager
     public DownloadTaskRecord Enqueue(
         string kind,
         string title,
-        Func<DownloadTaskRecord, CancellationToken, Task<string>> operation)
+        Func<DownloadTaskRecord, CancellationToken, Task<string>> operation,
+        string? outputDirectory = null)
     {
         DownloadTaskWorkItem item;
         lock (_gate)
         {
             item = new DownloadTaskWorkItem(_nextId++, kind, title, operation);
             item.Record.Status = "queued";
+            item.Record.OutputDirectory = outputDirectory ?? "";
             item.Record.Detail = _activeTask is null && _queue.Count == 0 ? "准备开始" : "等待前面的任务完成";
             _queue.Enqueue(item);
+            _tasksById.Add(item.Id, item);
             _records.Add(item.Record);
             PruneRecordsLocked();
         }
@@ -114,7 +124,7 @@ public sealed class DownloadTaskManager
     {
         lock (_gate)
         {
-            if (!_records.Contains(record))
+            if (!ReferenceEquals(_activeTask?.Record, record) || record.Status != "running" || _cancelRequested)
             {
                 return;
             }
@@ -128,43 +138,102 @@ public sealed class DownloadTaskManager
 
     public bool CancelCurrent()
     {
-        string? title;
+        int? id;
         lock (_gate)
         {
-            if (_activeTask is null || _activeCancellation is null)
+            id = _activeTask?.Id;
+        }
+
+        return id.HasValue && Cancel(id.Value);
+    }
+
+    public bool Cancel(int id)
+    {
+        string title;
+        bool wasRunning;
+        lock (_gate)
+        {
+            if (!_tasksById.TryGetValue(id, out var task))
             {
                 return false;
             }
 
-            _cancelRequested = true;
-            _activeTask.Record.Detail = "正在取消...";
-            title = _activeTask.Title;
-            _activeCancellation.Cancel();
+            wasRunning = ReferenceEquals(task, _activeTask) && task.Record.Status == "running";
+            if (wasRunning)
+            {
+                if (_activeCancellation is null || _cancelRequested || task.Record.Status != "running")
+                {
+                    return false;
+                }
+
+                _cancelRequested = true;
+                task.Record.Detail = "正在取消...";
+                task.Record.SpeedBytes = 0;
+                // CancelAsync signals the token immediately without running callbacks under _gate.
+                _cancellationCallbacks = _activeCancellation.CancelAsync();
+            }
+            else
+            {
+                if (task.Record.Status != "queued")
+                {
+                    return false;
+                }
+
+                var count = _queue.Count;
+                for (var index = 0; index < count; index++)
+                {
+                    var queued = _queue.Dequeue();
+                    if (queued.Id != id)
+                    {
+                        _queue.Enqueue(queued);
+                    }
+                }
+
+                task.Record.Status = "canceled";
+                task.Record.Detail = "已从等待队列移除";
+                task.Record.SpeedBytes = 0;
+                PruneRecordsLocked();
+            }
+
+            title = task.Title;
         }
 
-        AppLog.Warning("Tasks", $"正在取消全局任务：{title}");
+        AppLog.Info("Tasks", wasRunning ? $"正在取消全局任务：{title}" : $"已取消排队任务：{title}");
         NotifyStateChanged();
         return true;
     }
 
     public bool RetryLastFailed()
     {
-        DownloadTaskWorkItem? task;
+        int? id;
         lock (_gate)
         {
-            task = _lastFailedTask;
-            if (task is null)
+            id = _failedTasks.LastOrDefault()?.Id;
+        }
+
+        return id.HasValue && Retry(id.Value);
+    }
+
+    public bool Retry(int id)
+    {
+        DownloadTaskWorkItem task;
+        lock (_gate)
+        {
+            if (!_tasksById.TryGetValue(id, out task!) ||
+                task.Record.Status is not ("failed" or "canceled"))
             {
                 return false;
             }
 
-            _lastFailedTask = null;
+            _failedTasks.Remove(task);
             ResetRecord(task.Record);
             task.Record.Detail = _activeTask is null && _queue.Count == 0 ? "准备重试" : "等待前面的任务完成";
             _queue.Enqueue(task);
+            _records.Remove(task.Record);
+            _records.Add(task.Record);
         }
 
-        AppLog.Info("Tasks", $"失败任务已重新加入全局队列：{task.Title}");
+        AppLog.Info("Tasks", $"任务已重新加入全局队列：{task.Title}");
         NotifyStateChanged();
         _ = DispatchQueueAsync();
         return true;
@@ -180,6 +249,7 @@ public sealed class DownloadTaskManager
             {
                 task.Record.Status = "canceled";
                 task.Record.Detail = "已从等待队列移除";
+                task.Record.SpeedBytes = 0;
             }
 
             PruneRecordsLocked();
@@ -218,6 +288,7 @@ public sealed class DownloadTaskManager
                     _activeTask = task;
                     cancellation = new CancellationTokenSource();
                     _activeCancellation = cancellation;
+                    _cancellationCallbacks = Task.CompletedTask;
                     _cancelRequested = false;
                     task.Record.Status = "running";
                     task.Record.Detail = "任务已开始";
@@ -230,6 +301,7 @@ public sealed class DownloadTaskManager
                     var result = await task.Operation(task.Record, cancellation.Token);
                     lock (_gate)
                     {
+                        cancellation.Token.ThrowIfCancellationRequested();
                         task.Record.Status = "completed";
                         task.Record.Progress = 100;
                         task.Record.Detail = string.IsNullOrWhiteSpace(result) ? "任务完成" : result;
@@ -237,7 +309,7 @@ public sealed class DownloadTaskManager
 
                     AppLog.Info("Tasks", $"全局任务完成：{task.Title}");
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
                 {
                     lock (_gate)
                     {
@@ -254,20 +326,36 @@ public sealed class DownloadTaskManager
                     {
                         task.Record.Status = "failed";
                         task.Record.Detail = message;
-                        _lastFailedTask = task;
+                        task.Record.ErrorDetail = AppLogWriter.Redact(exc.ToString());
+                        _failedTasks.Add(task);
                     }
 
                     AppLog.Error("Tasks", $"全局任务失败：{task.Title}；{message}", exc);
                 }
                 finally
                 {
-                    cancellation.Dispose();
+                    Task cancellationCallbacks;
                     lock (_gate)
                     {
+                        cancellationCallbacks = _cancellationCallbacks;
                         _activeCancellation = null;
                         _activeTask = null;
                         _cancelRequested = false;
+                        task.Record.SpeedBytes = 0;
                         PruneRecordsLocked();
+                    }
+
+                    try
+                    {
+                        await cancellationCallbacks;
+                    }
+                    catch (Exception exc)
+                    {
+                        AppLog.Warning("Tasks", "任务取消回调失败：" + exc.Message);
+                    }
+                    finally
+                    {
+                        cancellation.Dispose();
                     }
 
                     NotifyStateChanged();
@@ -297,6 +385,7 @@ public sealed class DownloadTaskManager
         foreach (var record in finished.Take(Math.Max(0, finished.Count - CompletedTaskLimit)))
         {
             _records.Remove(record);
+            _tasksById.Remove(record.Id);
         }
     }
 
@@ -305,6 +394,7 @@ public sealed class DownloadTaskManager
         record.Status = "queued";
         record.Progress = 0;
         record.Detail = "";
+        record.ErrorDetail = "";
         record.CompletedFiles = 0;
         record.TotalFiles = 0;
         record.ReusedFiles = 0;
@@ -347,6 +437,8 @@ public sealed class DownloadTaskRecord(int id, string kind, string title)
     public string Status { get; set; } = "queued";
     public int Progress { get; set; }
     public string Detail { get; set; } = "";
+    public string ErrorDetail { get; internal set; } = "";
+    public string OutputDirectory { get; set; } = "";
     public int CompletedFiles { get; set; }
     public int TotalFiles { get; set; }
     public int ReusedFiles { get; set; }

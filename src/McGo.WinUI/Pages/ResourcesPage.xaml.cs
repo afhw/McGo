@@ -34,21 +34,16 @@ public sealed partial class ResourcesPage : Page
     public ResourcesPage()
     {
         InitializeComponent();
+        SizeChanged += ResponsiveLayoutRoot_SizeChanged;
+        Loaded += (_, _) => ApplyResponsiveLayout(ActualWidth);
         _versionSettingsService = new VersionSettingsService(_launcher);
         LoadState();
         _initialized = true;
         ResourceSectionBar.SelectedItem = ResourceSectionBar.Items[0];
     }
 
-    /// <summary>视口宽度：XamlRoot.Size 才是真实客户区，容器宽度可能按内容收缩。</summary>
-    private double ViewportWidth
-    {
-        get
-        {
-            var root = XamlRoot?.Size.Width ?? 0;
-            return root > 0 ? root : (XamlRoot?.Size.Width ?? 0);
-        }
-    }
+    // Page width excludes the navigation pane, unlike XamlRoot.Size.
+    private double ViewportWidth => ActualWidth;
 
     private void ResponsiveLayoutRoot_SizeChanged(object sender, SizeChangedEventArgs e)
         => ApplyResponsiveLayout(ViewportWidth);
@@ -62,6 +57,15 @@ public sealed partial class ResourcesPage : Page
         }
 
         var wide = width >= 900;
+        var primaryContentWidth = Math.Min(width, 1200) - 48 - (wide ? 338 : 0) - 40;
+        var stackActions = primaryContentWidth < 500;
+        ResourceActionsGrid.ColumnSpacing = stackActions ? 0 : 12;
+        ResourceActionsGrid.RowSpacing = stackActions ? 8 : 0;
+        ResourceActionsGrid.ColumnDefinitions[1].Width = stackActions ? new GridLength(0) : GridLength.Auto;
+        Grid.SetColumnSpan(InstallResourceDependenciesCheckBox, stackActions ? 2 : 1);
+        Grid.SetRow(ResourceActionButtons, stackActions ? 1 : 0);
+        Grid.SetColumn(ResourceActionButtons, stackActions ? 0 : 1);
+        Grid.SetColumnSpan(ResourceActionButtons, stackActions ? 2 : 1);
         if (_responsiveLayoutInitialized && _wideLayout == wide)
         {
             return;
@@ -69,6 +73,7 @@ public sealed partial class ResourcesPage : Page
 
         _responsiveLayoutInitialized = true;
         _wideLayout = wide;
+        ResponsiveLayoutRoot.ColumnSpacing = wide ? 18 : 0;
         ResourcePrimaryColumn.Width = new GridLength(1, GridUnitType.Star);
         ResourceSideColumn.Width = wide ? new GridLength(320) : new GridLength(0);
         Grid.SetRow(ResourceSidePanel, wide ? 2 : 3);
@@ -285,7 +290,7 @@ public sealed partial class ResourcesPage : Page
                 RefreshLocalResources(sender, e);
                 return $"已安装 {result.Filename}";
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
                 ShowResourceMessage("资源安装已取消。");
                 throw;
@@ -299,7 +304,7 @@ public sealed partial class ResourcesPage : Page
             {
                 SetResourceBusy(false);
             }
-        });
+        }, outputDirectory: targetDir);
     }
 
     private void ShowSelectedResourceDetail(object sender, RoutedEventArgs e)
@@ -377,7 +382,7 @@ public sealed partial class ResourcesPage : Page
                 RefreshLocalResources(sender, e);
                 return result.DependenciesInstalled.Count == 0 ? "没有缺失前置" : $"已安装 {result.DependenciesInstalled.Count} 个前置";
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
                 ShowResourceMessage("前置安装已取消。");
                 throw;
@@ -391,7 +396,7 @@ public sealed partial class ResourcesPage : Page
             {
                 SetResourceBusy(false);
             }
-        });
+        }, outputDirectory: targetDir);
     }
 
     private void RefreshLocalResources(object sender, RoutedEventArgs e)
@@ -957,8 +962,7 @@ public sealed partial class ResourcesPage : Page
 
         // 宽屏左右分栏，窄屏单列堆叠。
         var wide = ViewportWidth >= 900;
-        ApplyResponsiveLayout(ViewportWidth);
-        if (wide != _wideLayout
+        if (!_responsiveLayoutInitialized || wide != _wideLayout
             || Grid.GetColumn(ResourceSidePanel) != (wide ? 1 : 0)
             || Grid.GetRow(ResourceSidePanel) != (wide ? 2 : 3)
             || Grid.GetColumnSpan(ResourceSidePanel) != (wide ? 1 : 2))

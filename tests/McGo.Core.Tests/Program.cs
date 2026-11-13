@@ -2842,6 +2842,10 @@ runner.Add("Resource market removes corrupt file when checksum mismatches", () =
     Assert.False(File.Exists(Path.Combine(temp.Path, "main.jar")));
 });
 
+LaunchWorkflowTests.Register(runner);
+ConfigurationRegressionTests.Register(runner);
+TaskManagementRegressionTests.Register(runner);
+DownloadReliabilityTests.Register(runner);
 return runner.Run();
 
 static void WriteVersion(string root, string versionId, JsonObject data, bool jar = true)

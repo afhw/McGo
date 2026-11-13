@@ -77,7 +77,7 @@ public sealed partial class LaunchPage : Page
     private readonly AppSettings _settings = new();
     private readonly LauncherService _launcher = new();
     private readonly VersionSettingsService _versionSettingsService;
-    private readonly LaunchPreflightService _launchPreflight = new();
+    private LaunchPreflightService _launchPreflight = new();
     private readonly DownloaderService _downloader = new();
     private readonly ResourceMarketService _resourceMarket = new();
     private readonly MicrosoftAuthenticator _microsoftAuthenticator = new(AppConstants.ClientId, AppConstants.RedirectUri);
@@ -92,6 +92,7 @@ public sealed partial class LaunchPage : Page
     private bool _responsiveLayoutInitialized;
     private bool _wideLayout;
     private bool _unloaded;
+    private CancellationTokenSource? _launchCancellation;
     private int _javaEnvironmentRequest;
     private int _javaSelectionRequest;
     private Task<IReadOnlyList<string>>? _javaCandidatesTask;
@@ -116,6 +117,7 @@ public sealed partial class LaunchPage : Page
         Loaded += LaunchPage_Loaded;
         Unloaded += (_, _) =>
         {
+            _launchCancellation?.Cancel();
             _unloaded = true;
             ++_javaEnvironmentRequest;
             ++_javaSelectionRequest;
@@ -683,7 +685,7 @@ public sealed partial class LaunchPage : Page
         var installRoot = Path.Combine(GameDirectoryBox.Text.Trim(), "java_runtimes");
         UpdateLaunchStatus($"Java {required} 已加入全局队列", 0, "当前步骤：等待下载 Java");
         DownloadTaskManager.Current.Enqueue("java", $"下载 Java {required}", (record, token) =>
-            DownloadRecommendedJavaAsync(record, required, installRoot, token));
+            DownloadRecommendedJavaAsync(record, required, installRoot, token), outputDirectory: installRoot);
     }
 
     private async Task<string> DownloadRecommendedJavaAsync(DownloadTaskRecord record, int required, string installRoot, CancellationToken cancellationToken)
@@ -726,7 +728,7 @@ public sealed partial class LaunchPage : Page
             ]);
             return result.Reused ? $"已复用 Java {required}" : $"Java {required} 下载完成";
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             UpdateLaunchStatus("Java 下载已取消", 0, "当前步骤：已取消");
             SetJavaDownloadStatus("Java 下载已取消", 0);
@@ -752,7 +754,9 @@ public sealed partial class LaunchPage : Page
             var account = await RefreshSelectedAccountForLaunchAsync();
             EnsureLaunchSelection(selection);
             UpdateLaunchMethod(account);
-            OutputBox.Text = string.Join(Environment.NewLine, BuildSelectedLaunchCommand(account));
+            var command = await BuildSelectedLaunchCommandAsync(account);
+            EnsureLaunchSelection(selection);
+            OutputBox.Text = string.Join(Environment.NewLine, command);
             UpdateLaunchStatus("启动命令已生成。", 100, "当前步骤：生成命令");
         }
         catch (Exception exc)
@@ -768,6 +772,12 @@ public sealed partial class LaunchPage : Page
     /// </summary>
     private void PrimaryLaunchAction(object sender, RoutedEventArgs e)
     {
+        if (_launchCancellation is not null)
+        {
+            _launchCancellation.Cancel();
+            PrimaryLaunchText.Text = "正在取消";
+            return;
+        }
         switch (_nextStep)
         {
             case LaunchNextStep.Account:
@@ -813,6 +823,14 @@ public sealed partial class LaunchPage : Page
             return;
         }
 
+        if (_launchCancellation is not null)
+        {
+            PrimaryLaunchText.Text = _launchCancellation.IsCancellationRequested ? "正在取消" : "取消启动";
+            PrimaryLaunchIcon.Symbol = Symbol.Cancel;
+            PrimaryLaunchSubText.Text = SelectedVersionId ?? "";
+            return;
+        }
+
         var account = SelectedAccount();
         var hasAccount = account is not null;
         var versionId = SelectedVersionId;
@@ -854,28 +872,29 @@ public sealed partial class LaunchPage : Page
         PrimaryLaunchSubText.Text = versionId!;
     }
 
-    /// <summary>左侧的“版本选择 / 版本设置”把注意力带到右侧对应分段。</summary>
-    private void ShowVersionSelectorTab(object sender, RoutedEventArgs e)
-    {
-        VersionSectionBar.SelectedItem = VersionSectionBar.Items[0];
-        VersionCenterPanel.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false });
-    }
-
-    private void ShowVersionSettingsTab(object sender, RoutedEventArgs e)
-    {
-        VersionSectionBar.SelectedItem = VersionSectionBar.Items[1];
-        VersionCenterPanel.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false });
-    }
-
     private void GoAccounts(object sender, RoutedEventArgs e) => NavigateToTag("accounts");
 
-    private async void LaunchGame(object sender, RoutedEventArgs e)
+    private async void LaunchGame(object sender, RoutedEventArgs e) => await LaunchGameAsync();
+
+    private async Task LaunchGameAsync()
     {
+        if (_launchCancellation is not null) return;
+        using var cancellation = new CancellationTokenSource();
+        _launchCancellation = cancellation;
+        var token = cancellation.Token;
+        VersionCenterPanel.IsEnabled = false;
+        LaunchEnvironmentExpander.IsEnabled = false;
+        UpdateLaunchStatus("正在准备启动...", 0, "当前步骤：匹配 Java");
         try
         {
-            if (!await PrepareJavaForLaunchAsync()) return;
+            if (!await PrepareJavaForLaunchAsync(token)) return;
             var selection = CaptureLaunchSelection();
-            var preflight = ValidateSelectedLaunchPreflight();
+            if (selection.Version is null) return;
+            UpdateLaunchStatus("正在校验游戏文件...", 5, "当前步骤：启动前检查");
+            var preflight = await _launchPreflight.ValidateAsync(selection.Directory, selection.Version,
+                string.IsNullOrWhiteSpace(selection.Java) ? "java" : selection.Java, cancellationToken: token);
+            token.ThrowIfCancellationRequested();
+            EnsureLaunchSelection(selection);
             if (!preflight.IsOk)
             {
                 UpdateLaunchStatus("启动前检查未通过，请先修复版本文件", 0, "当前步骤：启动前检查");
@@ -893,13 +912,20 @@ public sealed partial class LaunchPage : Page
             }
 
             UpdateLaunchStatus("正在刷新账号并准备启动...", 15, "当前步骤：准备账号");
-            var account = await RefreshSelectedAccountForLaunchAsync();
+            var account = await RefreshSelectedAccountForLaunchAsync(token);
+            token.ThrowIfCancellationRequested();
             EnsureLaunchSelection(selection);
             UpdateLaunchMethod(account);
             SetLaunchProgress(35, "当前步骤：启动前命令");
-            RunPreLaunchCommand();
+            var options = VersionSettingsService.LaunchOptionsForVersion(selection.Directory, _versionSettings,
+                selection.Version, _settings.Config.GetBool("GAME", "enable_resource_isolation", true));
+            await LaunchProcessService.RunPreLaunchCommandAsync(options.PreLaunchCommand, options.RuntimeDirectory, token);
+            token.ThrowIfCancellationRequested();
+            EnsureLaunchSelection(selection);
             SetLaunchProgress(65, "当前步骤：生成命令");
-            var command = BuildSelectedLaunchCommand(account);
+            var command = await BuildSelectedLaunchCommandAsync(account, token);
+            token.ThrowIfCancellationRequested();
+            EnsureLaunchSelection(selection);
             var startInfo = new ProcessStartInfo(command[0]) { UseShellExecute = false };
             foreach (var argument in command.Skip(1))
             {
@@ -911,57 +937,36 @@ public sealed partial class LaunchPage : Page
             UpdateLaunchStatus("Minecraft 已启动。", 100, "当前步骤：已启动");
             OutputBox.Text = "Minecraft 已启动。";
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            if (!_unloaded)
+            {
+                UpdateLaunchStatus("启动已取消", 0, "当前步骤：已取消");
+                OutputBox.Text = "启动已取消。";
+            }
+        }
         catch (Exception exc)
         {
             UpdateLaunchStatus("启动失败：" + exc.Message, 0, "当前步骤：启动失败");
             OutputBox.Text = "启动失败：" + exc.Message;
         }
-    }
-
-    private void RunPreLaunchCommand()
-    {
-        if (SelectedVersionId is not string versionId)
+        finally
         {
-            return;
-        }
-
-        var options = VersionSettingsService.LaunchOptionsForVersion(GameDirectoryBox.Text.Trim(), _versionSettings, versionId, _settings.Config.GetBool("GAME", "enable_resource_isolation", true));
-        if (string.IsNullOrWhiteSpace(options.PreLaunchCommand))
-        {
-            return;
-        }
-
-        Directory.CreateDirectory(options.RuntimeDirectory);
-        var shell = Environment.GetEnvironmentVariable("COMSPEC");
-        var startInfo = OperatingSystem.IsWindows() && !string.IsNullOrWhiteSpace(shell)
-            ? new ProcessStartInfo(shell, "/c " + options.PreLaunchCommand)
-            : new ProcessStartInfo("/bin/sh", "-c " + options.PreLaunchCommand);
-        startInfo.WorkingDirectory = options.RuntimeDirectory;
-        startInfo.UseShellExecute = false;
-        startInfo.CreateNoWindow = true;
-        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("启动前命令无法执行。");
-        process.WaitForExit();
-        if (process.ExitCode != 0)
-        {
-            throw new InvalidOperationException($"启动前命令失败，退出码 {process.ExitCode}。");
+            _launchCancellation = null;
+            ++_javaSelectionRequest;
+            VersionCenterPanel.IsEnabled = true;
+            LaunchEnvironmentExpander.IsEnabled = true;
+            LaunchProgressBar.Visibility = Visibility.Collapsed;
+            LaunchProgressDetails.Visibility = Visibility.Collapsed;
+            UpdateLaunchReadiness();
         }
     }
 
-    private LaunchPreflightResult ValidateSelectedLaunchPreflight()
-    {
-        if (SelectedVersionId is not string versionId)
-        {
-            return new LaunchPreflightResult([new LaunchPreflightIssue("version", "请先选择本地游戏版本。")], 0, 1);
-        }
-
-        return _launchPreflight.Validate(GameDirectoryBox.Text.Trim(), versionId, JavaPathBox.Text.Trim().Length == 0 ? "java" : JavaPathBox.Text.Trim(), includeAssets: true);
-    }
-
-    private async Task<bool> PrepareJavaForLaunchAsync()
+    private async Task<bool> PrepareJavaForLaunchAsync(CancellationToken cancellationToken = default)
     {
         if (AutoJavaCheckBox.IsChecked != true) return true;
         _javaSelectionTask = SelectJavaForVersionAsync();
-        if (await _javaSelectionTask) return true;
+        if (await _javaSelectionTask.WaitAsync(cancellationToken)) return true;
         if (!_unloaded)
         {
             OutputBox.Text = "未找到适合当前版本的 Java，请先下载匹配的运行时，或关闭自动选择后指定 Java 路径。";
@@ -998,7 +1003,7 @@ public sealed partial class LaunchPage : Page
 
         UpdateLaunchStatus($"补全 {versionId} 已加入全局队列", 0, "当前步骤：等待补全/校验");
         DownloadTaskManager.Current.Enqueue("repair", $"补全游戏 {versionId}", (record, token) =>
-            RepairSelectedVersionAsync(record, gameDirectory, versionId, versionJsonPath, token));
+            RepairSelectedVersionAsync(record, gameDirectory, versionId, versionJsonPath, token), outputDirectory: gameDirectory);
     }
 
     private async Task<string> RepairSelectedVersionAsync(
@@ -1041,7 +1046,7 @@ public sealed partial class LaunchPage : Page
             ]);
             return $"补全完成：{versionId}";
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             UpdateLaunchStatus("补全已取消", 0, "当前步骤：已取消");
             OutputBox.Text = "游戏补全已取消。";
@@ -1171,7 +1176,7 @@ public sealed partial class LaunchPage : Page
 
     private void RepairVersionModDependencies(object sender, RoutedEventArgs e)
     {
-        if (VersionsList.SelectedItem is not string versionId || !VersionSupportsModManagement(versionId))
+        if (SelectedModVersionId is not string versionId)
         {
             VersionModsStatusText.Text = "请先选择支持 Mod 的本地版本。";
             return;
@@ -1182,7 +1187,7 @@ public sealed partial class LaunchPage : Page
         var targetDirectory = CurrentModsDirectory();
         SetVersionModBusy(true, "已加入全局队列，等待补齐 Mod 前置...");
         DownloadTaskManager.Current.Enqueue("resource_dependencies", $"补齐 {versionId} 的 Mod 前置", (record, token) =>
-            RepairVersionModDependenciesAsync(record, gameVersion, loader, targetDirectory, token));
+            RepairVersionModDependenciesAsync(record, gameVersion, loader, targetDirectory, token), outputDirectory: targetDirectory);
     }
 
     private async Task<string> RepairVersionModDependenciesAsync(
@@ -1226,7 +1231,7 @@ public sealed partial class LaunchPage : Page
                 ? "没有缺失的 Mod 前置"
                 : $"已安装 {result.DependenciesInstalled.Count} 个 Mod 前置";
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             VersionModsStatusText.Text = "补齐 Mod 前置已取消。";
             OutputBox.Text = VersionModsStatusText.Text;
@@ -1257,6 +1262,9 @@ public sealed partial class LaunchPage : Page
 
     private bool VersionSupportsModManagement(string versionId)
         => KnownVersion(versionId)?.DetectedType is "Fabric" or "Forge" or "NeoForge" or "OptiFine";
+
+    private string? SelectedModVersionId
+        => SelectedVersionId is string id && VersionSupportsModManagement(id) ? id : null;
 
     private string ModrinthLoaderForVersion(string versionId)
         => _versionSettingsService.DetectVersionType(GameDirectoryBox.Text.Trim(), versionId) switch
@@ -1374,7 +1382,6 @@ public sealed partial class LaunchPage : Page
     internal void RunSmokeChecks()
     {
         var pageWidth = ViewportWidth;
-        ApplyResponsiveLayout(pageWidth);
         var wide = pageWidth >= 900;
 
         if (Grid.GetRow(VersionCenterPanel) != (wide ? 0 : 1) || Grid.GetColumn(VersionCenterPanel) != (wide ? 1 : 0))
@@ -1437,6 +1444,50 @@ public sealed partial class LaunchPage : Page
             AnimationDesired = false,
             VerticalAlignmentRatio = 0,
         });
+    }
+
+    internal async Task RunLaunchCancellationSmokeAsync()
+    {
+        var gameDir = Path.Combine(Directory.GetCurrentDirectory(), "launch-workflow-fixture");
+        var versionDir = Path.Combine(gameDir, "versions", "smoke-forge");
+        Directory.CreateDirectory(versionDir);
+        await File.WriteAllTextAsync(Path.Combine(versionDir, "smoke-forge.json"),
+            "{\"id\":\"smoke-forge\",\"mainClass\":\"net.minecraftforge.Main\",\"javaVersion\":{\"majorVersion\":8},\"libraries\":[]}");
+        GameDirectoryBox.Text = gameDir;
+        AutoJavaCheckBox.IsChecked = false;
+        JavaPathBox.Text = Path.Combine(gameDir, "no-game-should-start.exe");
+        _launchPreflight = new LaunchPreflightService(javaMajorVersionProvider: _ => 8);
+        await RefreshVersionListAsync();
+        if (SelectedModVersionId != "smoke-forge")
+            throw new InvalidOperationException("Mod dependency repair rejected the selected version object.");
+        var entry = VersionSettingsService.VersionSettingsEntry(_versionSettings, "smoke-forge");
+        entry["pre_launch_command"] = "ping -n 30 127.0.0.1 > nul";
+        var operation = LaunchGameAsync();
+        try
+        {
+            var timeout = Stopwatch.StartNew();
+            while (!operation.IsCompleted && LaunchStageText.Text != "当前步骤：启动前命令"
+                   && timeout.Elapsed < TimeSpan.FromSeconds(10))
+                await Task.Delay(25);
+            if (operation.IsCompleted || LaunchStageText.Text != "当前步骤：启动前命令")
+                throw new InvalidOperationException("Launch did not reach the asynchronous prelaunch command: " + OutputBox.Text);
+            if (VersionCenterPanel.IsEnabled || PrimaryLaunchText.Text != "取消启动")
+                throw new InvalidOperationException("Launch controls did not enter the cancelable busy state.");
+            var owner = _launchCancellation;
+            await LaunchGameAsync();
+            if (!ReferenceEquals(owner, _launchCancellation))
+                throw new InvalidOperationException("A second launch replaced the active operation.");
+            PrimaryLaunchAction(this, new RoutedEventArgs());
+            await operation.WaitAsync(TimeSpan.FromSeconds(10));
+            if (OutputBox.Text != "启动已取消。" || _launchCancellation is not null
+                || !VersionCenterPanel.IsEnabled || LaunchProgressBar.Visibility != Visibility.Collapsed)
+                throw new InvalidOperationException("Canceled launch did not restore its idle state.");
+        }
+        finally
+        {
+            _launchCancellation?.Cancel();
+            await operation.WaitAsync(TimeSpan.FromSeconds(10));
+        }
     }
 
     internal void SelectVersionSettingsForSmoke(bool settings)
@@ -1506,7 +1557,8 @@ public sealed partial class LaunchPage : Page
             var selection = CaptureLaunchSelection();
             var account = await RefreshSelectedAccountForLaunchAsync();
             EnsureLaunchSelection(selection);
-            var command = BuildSelectedLaunchCommand(account);
+            var command = await BuildSelectedLaunchCommandAsync(account);
+            EnsureLaunchSelection(selection);
             var options = VersionSettingsService.LaunchOptionsForVersion(GameDirectoryBox.Text.Trim(), _versionSettings, versionId, _settings.Config.GetBool("GAME", "enable_resource_isolation", true));
             var scriptDir = Path.Combine(GameDirectoryBox.Text.Trim(), "mcgo_scripts");
             Directory.CreateDirectory(scriptDir);
@@ -1585,7 +1637,14 @@ public sealed partial class LaunchPage : Page
         OutputBox.Text = "已打开目录：" + path;
     }
 
-    private List<string> BuildSelectedLaunchCommand(JsonObject? selectedAccount = null)
+    private Task<List<string>> BuildSelectedLaunchCommandAsync(JsonObject? selectedAccount = null,
+        CancellationToken cancellationToken = default)
+    {
+        var options = CaptureSelectedLaunchOptions(selectedAccount);
+        return Task.Run(() => _launcher.BuildLaunchCommand(options), cancellationToken);
+    }
+
+    private LaunchOptions CaptureSelectedLaunchOptions(JsonObject? selectedAccount = null)
     {
         if (SelectedVersionId is not string versionId)
         {
@@ -1604,7 +1663,7 @@ public sealed partial class LaunchPage : Page
         }
 
         extraJvmArgs.AddRange(options.ExtraJvmArgs);
-        return _launcher.BuildLaunchCommand(new LaunchOptions(
+        return new LaunchOptions(
             JavaPathBox.Text.Trim().Length == 0 ? "java" : JavaPathBox.Text.Trim(),
             versionId,
             GameDirectoryBox.Text.Trim(),
@@ -1618,7 +1677,7 @@ public sealed partial class LaunchPage : Page
             MaxMemoryMb: maxMemory,
             WindowWidth: options.WindowWidth,
             WindowHeight: options.WindowHeight,
-            GcStrategy: UiHelpers.ComboText(GcStrategyBox, options.GcStrategy)));
+            GcStrategy: UiHelpers.ComboText(GcStrategyBox, options.GcStrategy));
     }
 
     private async void RefreshQuickPlayWorlds(object sender, RoutedEventArgs e)
@@ -1830,8 +1889,12 @@ public sealed partial class LaunchPage : Page
     private void SetLaunchProgress(int progress, string stage)
     {
         var clamped = Math.Clamp(progress, 0, 100);
+        var visibility = _launchCancellation is not null || (clamped > 0 && clamped < 100)
+            ? Visibility.Visible : Visibility.Collapsed;
+        if (LaunchProgressDetails is not null) LaunchProgressDetails.Visibility = visibility;
         if (LaunchProgressBar is not null)
         {
+            LaunchProgressBar.Visibility = visibility;
             LaunchProgressBar.Value = clamped;
         }
 
@@ -1868,7 +1931,7 @@ public sealed partial class LaunchPage : Page
             _ => "离线",
         };
 
-    private async Task<JsonObject?> RefreshSelectedAccountForLaunchAsync()
+    private async Task<JsonObject?> RefreshSelectedAccountForLaunchAsync(CancellationToken cancellationToken = default)
     {
         var account = SelectedAccount();
         if (account is null)
@@ -1891,7 +1954,7 @@ public sealed partial class LaunchPage : Page
                 return account;
             }
 
-            await _microsoftAuthenticator.RefreshAccessTokenAsync(refreshToken);
+            await _microsoftAuthenticator.RefreshAccessTokenAsync(refreshToken, cancellationToken);
             refreshed = JsonNode.Parse(account.ToJsonString())!.AsObject();
             refreshed["access_token"] = _microsoftAuthenticator.MinecraftAccessToken ?? account["access_token"]?.GetValue<string>() ?? "";
             refreshed["refresh_token"] = _microsoftAuthenticator.RefreshToken ?? refreshToken;
@@ -1899,7 +1962,7 @@ public sealed partial class LaunchPage : Page
         else if (type == "external")
         {
             var service = new ExternalAuthService();
-            refreshed = await service.RefreshExternalAccountAsync(account);
+            refreshed = await service.RefreshExternalAccountAsync(account, cancellationToken);
             refreshed["type"] = "external";
             refreshed["auth_server"] ??= account["auth_server"]?.GetValue<string>() ?? account["server"]?.GetValue<string>() ?? "";
             refreshed["authlib_injector_path"] ??= account["authlib_injector_path"]?.GetValue<string>() ?? "";
@@ -1909,6 +1972,7 @@ public sealed partial class LaunchPage : Page
             return account;
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         refreshed["id"] ??= account["id"]?.GetValue<string>() ?? Guid.NewGuid().ToString();
         ReplaceAccount(account, refreshed);
         _settings.SaveAccounts(_accounts);
@@ -1991,37 +2055,16 @@ public sealed partial class LaunchPage : Page
 
     private sealed record LocalVersionCandidate(string VersionId, string DetectedType, int RequiredJava);
 
-    // 断点必须按页面实际宽度计算：StackPanel 会按内容收缩，
-    // 用它自己的 ActualWidth 会在宽屏上误判成窄屏。
     private void ResponsiveLayoutRoot_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         ApplyResponsiveLayout(ViewportWidth);
     }
 
-    private void ResponsiveLayoutRoot_LayoutUpdated(object? sender, object e)
-    {
-        // XamlRoot.Size 在首次 Loaded 之前可能为 0，这里持续校正到真实视口宽度。
-        ApplyResponsiveLayout(ViewportWidth);
-    }
-
-    /// <summary>视口宽度：Page/容器可能按内容收缩，XamlRoot.Size 才是真实窗口客户区。</summary>
-    private double ViewportWidth
-    {
-        get
-        {
-            var root = XamlRoot?.Size.Width ?? 0;
-            if (root > 0)
-            {
-                return root;
-            }
-
-            return XamlRoot?.Size.Width ?? ResponsiveLayoutRoot.ActualWidth;
-        }
-    }
+    private double ViewportWidth => ActualWidth;
 
     private void ApplyResponsiveLayout(double width)
     {
-        if (width <= 0)
+        if (width <= 0 || LaunchActionColumn is null || LaunchIdentityPanel is null)
         {
             return;
         }
@@ -2034,9 +2077,20 @@ public sealed partial class LaunchPage : Page
 
         _responsiveLayoutInitialized = true;
         _wideLayout = wide;
-        LaunchActionColumn.Width = wide ? new GridLength(5, GridUnitType.Star) : new GridLength(1, GridUnitType.Star);
-        LaunchVersionCenterColumn.Width = wide ? new GridLength(6, GridUnitType.Star) : new GridLength(0);
+        LaunchActionColumn.Width = wide ? new GridLength(320) : new GridLength(1, GridUnitType.Star);
+        LaunchVersionCenterColumn.Width = wide ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
         Grid.SetRow(VersionCenterPanel, wide ? 0 : 1);
         Grid.SetColumn(VersionCenterPanel, wide ? 1 : 0);
+        LaunchIdentityPanel.Orientation = wide ? Orientation.Vertical : Orientation.Horizontal;
+        LaunchIdentityPanel.HorizontalAlignment = wide ? HorizontalAlignment.Center : HorizontalAlignment.Left;
+        LaunchIdentityPanel.Spacing = wide ? 6 : 12;
+        LaunchAvatarBorder.Width = LaunchAvatarBorder.Height = wide ? 76 : 48;
+        LaunchAvatarBorder.CornerRadius = new CornerRadius(wide ? 18 : 8);
+        AvatarText.FontSize = wide ? 32 : 24;
+        AccountNameText.HorizontalAlignment = AccountTypeText.HorizontalAlignment =
+            wide ? HorizontalAlignment.Center : HorizontalAlignment.Left;
+        LaunchIdentityCard.Padding = wide ? new Thickness(20, 22, 20, 22) : new Thickness(16);
+        LaunchIdentityContent.Spacing = wide ? 16 : 10;
+        PrimaryLaunchButton.MinHeight = wide ? 78 : 64;
     }
 }

@@ -27,15 +27,63 @@ public sealed partial class ModpacksPage : Page
     private JsonArray _lastCapsuleFiles = [];
     private string _lastCapsuleRuntimeDir = "";
     private CancellationTokenSource? _capsuleFileHostCts;
+    private bool? _compactLayout;
 
     public ModpacksPage()
     {
         InitializeComponent();
+        SizeChanged += (_, _) => ApplyResponsiveLayout();
+        Loaded += (_, _) => ApplyResponsiveLayout();
         _versionSettingsService = new VersionSettingsService(_launcher);
         _modpacks = new ModpackService(_launcher);
         _capsules = new CapsuleService(_launcher, _versionSettingsService);
         ModpackSectionBar.SelectedItem = ModpackSectionBar.Items[0];
         LoadState();
+    }
+
+    private void ApplyResponsiveLayout()
+    {
+        if (ActualWidth <= 0) return;
+        var compact = ActualWidth < 700;
+        if (_compactLayout == compact) return;
+        _compactLayout = compact;
+
+        CapsuleConnectionGrid.ColumnSpacing = compact ? 0 : 12;
+        CapsuleConnectionGrid.RowDefinitions.Clear();
+        for (var row = 0; row < (compact ? 6 : 3); row++)
+            CapsuleConnectionGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        FrameworkElement[] fields = [RelayHostBox, RelayPortBox, RoomBox, SecretBox, HostPortBox, JoinPortBox];
+        for (var i = 0; i < fields.Length; i++)
+        {
+            Grid.SetRow(fields[i], compact ? i : i / 2);
+            Grid.SetColumn(fields[i], compact ? 0 : i % 2);
+            Grid.SetColumnSpan(fields[i], compact ? 2 : 1);
+        }
+
+        CapsuleActionsGrid.ColumnSpacing = compact ? 0 : 8;
+        CapsuleActionsGrid.RowDefinitions.Clear();
+        for (var row = 0; row < (compact ? 5 : 3); row++)
+            CapsuleActionsGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        for (var i = 0; i < CapsuleActionsGrid.Children.Count; i++)
+        {
+            var button = (FrameworkElement)CapsuleActionsGrid.Children[i];
+            Grid.SetRow(button, compact ? i : i / 2);
+            Grid.SetColumn(button, compact ? 0 : i % 2);
+            Grid.SetColumnSpan(button, compact || i == 4 ? 2 : 1);
+        }
+
+        CapsuleInviteActionsGrid.ColumnSpacing = compact ? 0 : 8;
+        CapsuleInviteActionsGrid.RowSpacing = compact ? 8 : 0;
+        CapsuleInviteActionsGrid.RowDefinitions.Clear();
+        for (var row = 0; row < (compact ? 3 : 1); row++)
+            CapsuleInviteActionsGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        for (var i = 0; i < CapsuleInviteActionsGrid.Children.Count; i++)
+        {
+            var button = (FrameworkElement)CapsuleInviteActionsGrid.Children[i];
+            Grid.SetRow(button, compact ? i : 0);
+            Grid.SetColumn(button, compact ? 0 : i);
+            Grid.SetColumnSpan(button, compact ? 3 : 1);
+        }
     }
 
     private void ModpackSectionChanged(SelectorBar sender, SelectorBarSelectionChangedEventArgs e)
@@ -110,7 +158,7 @@ public sealed partial class ModpacksPage : Page
             SetPackBusy(true, "已加入全局队列，等待导入整合包...");
             ShowPackOutput("已加入全局队列，等待导入整合包...");
             DownloadTaskManager.Current.Enqueue("modpack", $"导入整合包 {Path.GetFileName(packPath)}", (record, token) =>
-                ImportModpackTaskAsync(record, packPath, gameDir, targetVersion, isolation, token));
+                ImportModpackTaskAsync(record, packPath, gameDir, targetVersion, isolation, token), outputDirectory: gameDir);
         }
         catch (Exception exc)
         {
@@ -160,7 +208,7 @@ public sealed partial class ModpacksPage : Page
             ]));
             return $"已导入 {result.Name}，下载 {result.FilesDownloaded} 个文件";
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             ShowPackOutput("整合包导入已取消。");
             PackStatusText.Text = "整合包导入已取消";
@@ -353,7 +401,7 @@ public sealed partial class ModpacksPage : Page
             PullCapsuleFilesButton.IsEnabled = false;
             PackStatusText.Text = "已加入全局队列，等待补齐胶囊文件";
             DownloadTaskManager.Current.Enqueue("capsule", "补齐开黑胶囊文件", (record, token) =>
-                PullCapsuleFilesTaskAsync(record, runtimeDir, files, config, udpEnabled, token));
+                PullCapsuleFilesTaskAsync(record, runtimeDir, files, config, udpEnabled, token), outputDirectory: runtimeDir);
         }
         catch (Exception exc)
         {
@@ -399,7 +447,7 @@ public sealed partial class ModpacksPage : Page
             PackStatusText.Text = "胶囊补包完成";
             return $"胶囊补包完成：下载 {result.Downloaded}/{result.TotalMissing}";
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             ShowPackOutput("胶囊补包已取消。");
             PackStatusText.Text = "胶囊补包已取消";

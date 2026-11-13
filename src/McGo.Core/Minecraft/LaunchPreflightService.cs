@@ -15,8 +15,14 @@ public sealed class LaunchPreflightService
         _javaMajorVersionProvider = javaMajorVersionProvider ?? JavaRuntimeService.GetJavaMajorVersion;
     }
 
-    public LaunchPreflightResult Validate(string gameDirectory, string versionId, string javaPath, bool includeAssets = true)
+    public Task<LaunchPreflightResult> ValidateAsync(string gameDirectory, string versionId, string javaPath,
+        bool includeAssets = true, CancellationToken cancellationToken = default)
+        => Task.Run(() => Validate(gameDirectory, versionId, javaPath, includeAssets, cancellationToken), cancellationToken);
+
+    public LaunchPreflightResult Validate(string gameDirectory, string versionId, string javaPath,
+        bool includeAssets = true, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var issues = new List<LaunchPreflightIssue>();
         if (string.IsNullOrWhiteSpace(versionId))
         {
@@ -32,6 +38,7 @@ public sealed class LaunchPreflightService
         {
             var requiredJava = _launcher.InferRequiredJavaVersion(gameDirectory, versionId);
             var actualJava = _javaMajorVersionProvider(javaPath);
+            cancellationToken.ThrowIfCancellationRequested();
             if (actualJava == 0)
             {
                 issues.Add(new LaunchPreflightIssue("java", $"无法识别 Java 版本：{javaPath}"));
@@ -56,10 +63,11 @@ public sealed class LaunchPreflightService
 
         foreach (var versionJson in chain.AsEnumerable().Reverse())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var currentVersionId = versionJson["id"]?.GetValue<string>() ?? versionId;
             try
             {
-                var missing = DownloaderService.CollectMissingGameFiles(versionJson, gameDirectory, currentVersionId, includeAssets);
+                var missing = DownloaderService.CollectMissingGameFiles(versionJson, gameDirectory, currentVersionId, includeAssets, cancellationToken);
                 foreach (var item in missing.Take(20))
                 {
                     var reason = File.Exists(item.Path) ? "校验失败" : "缺失";
@@ -71,7 +79,7 @@ public sealed class LaunchPreflightService
                     issues.Add(new LaunchPreflightIssue("file", $"{currentVersionId}: 还有 {missing.Count - 20} 个文件未列出"));
                 }
             }
-            catch (Exception exc)
+            catch (Exception exc) when (exc is not OperationCanceledException)
             {
                 issues.Add(new LaunchPreflightIssue("file", $"{currentVersionId}: 完整性检查失败：{exc.Message}"));
             }

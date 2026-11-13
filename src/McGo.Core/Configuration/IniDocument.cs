@@ -1,15 +1,77 @@
+using System.Collections.Concurrent;
 using System.Text;
 
 namespace McGo.Core.Configuration;
 
 public sealed class IniDocument
 {
+    private static readonly ConcurrentDictionary<string, object> FileLocks = new(
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+    private readonly object _sync = new();
     private readonly Dictionary<string, Dictionary<string, string>> _sections = new(StringComparer.OrdinalIgnoreCase);
 
     public IReadOnlyDictionary<string, Dictionary<string, string>> Sections => _sections;
 
     public static IniDocument Load(string path, bool persistChanges = true)
-        => Storage.AtomicStorage.LoadRecoverable(path, Parse, new IniDocument(), persistChanges: persistChanges);
+    {
+        var targetPath = Path.GetFullPath(path);
+        lock (FileLock(targetPath))
+        {
+            return Storage.AtomicStorage.LoadRecoverable(targetPath, Parse, new IniDocument(), persistChanges: persistChanges);
+        }
+    }
+
+    // Recovery and direct INI writes share the read/merge/write transaction lock.
+    internal static object FileLock(string path) => FileLocks.GetOrAdd(Path.GetFullPath(path), _ => new object());
+
+    internal IniDocument Clone()
+    {
+        lock (_sync)
+        {
+            var copy = new IniDocument();
+            foreach (var (section, values) in _sections)
+            {
+                copy._sections[section] = new Dictionary<string, string>(values, StringComparer.OrdinalIgnoreCase);
+            }
+
+            return copy;
+        }
+    }
+
+    internal bool ContentEquals(IniDocument other)
+        => _sections.Count == other._sections.Count && _sections.All(section =>
+            other._sections.TryGetValue(section.Key, out var values) &&
+            section.Value.Count == values.Count && section.Value.All(pair =>
+                values.TryGetValue(pair.Key, out var value) && string.Equals(pair.Value, value, StringComparison.Ordinal)));
+
+    internal void ApplyChangesFrom(IniDocument baseline, IniDocument current)
+    {
+        foreach (var (section, values) in current._sections)
+        {
+            baseline._sections.TryGetValue(section, out var original);
+            foreach (var (key, value) in values)
+            {
+                if (original is null || !original.TryGetValue(key, out var oldValue) ||
+                    !string.Equals(value, oldValue, StringComparison.Ordinal))
+                {
+                    Set(section, key, value);
+                }
+            }
+        }
+
+        // Sections exposes mutable value dictionaries; preserve key removals too.
+        foreach (var (section, values) in baseline._sections)
+        {
+            current._sections.TryGetValue(section, out var updated);
+            foreach (var key in values.Keys)
+            {
+                if ((updated is null || !updated.ContainsKey(key)) && _sections.TryGetValue(section, out var target))
+                {
+                    target.Remove(key);
+                }
+            }
+        }
+    }
 
     private static IniDocument Parse(string text)
     {
@@ -76,38 +138,51 @@ public sealed class IniDocument
 
     public void Save(string path)
     {
-        var builder = new StringBuilder();
-        foreach (var section in _sections.OrderBy(item => item.Key, StringComparer.OrdinalIgnoreCase))
+        var targetPath = Path.GetFullPath(path);
+        lock (FileLock(targetPath))
         {
-            builder.Append('[').Append(section.Key).AppendLine("]");
-            foreach (var pair in section.Value.OrderBy(item => item.Key, StringComparer.OrdinalIgnoreCase))
+            var snapshot = Clone();
+            var builder = new StringBuilder();
+            foreach (var section in snapshot._sections.OrderBy(item => item.Key, StringComparer.OrdinalIgnoreCase))
             {
-                builder.Append(pair.Key).Append(" = ").AppendLine(pair.Value);
+                builder.Append('[').Append(section.Key).AppendLine("]");
+                foreach (var pair in section.Value.OrderBy(item => item.Key, StringComparer.OrdinalIgnoreCase))
+                {
+                    builder.Append(pair.Key).Append(" = ").AppendLine(pair.Value);
+                }
+
+                builder.AppendLine();
             }
 
-            builder.AppendLine();
+            Storage.AtomicStorage.AtomicWriteText(targetPath, builder.ToString());
         }
-
-        Storage.AtomicStorage.AtomicWriteText(path, builder.ToString());
     }
 
     public void EnsureDefaults(IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> defaults)
     {
-        foreach (var (section, values) in defaults)
+        lock (_sync)
         {
-            EnsureSection(section);
-            foreach (var (key, value) in values)
+            foreach (var (section, values) in defaults)
             {
-                if (!_sections[section].ContainsKey(key))
+                EnsureSection(section);
+                foreach (var (key, value) in values)
                 {
-                    _sections[section][key] = value;
+                    if (!_sections[section].ContainsKey(key))
+                    {
+                        _sections[section][key] = value;
+                    }
                 }
             }
         }
     }
 
     public string Get(string section, string key, string fallback = "")
-        => _sections.TryGetValue(section, out var values) && values.TryGetValue(key, out var value) ? value : fallback;
+    {
+        lock (_sync)
+        {
+            return _sections.TryGetValue(section, out var values) && values.TryGetValue(key, out var value) ? value : fallback;
+        }
+    }
 
     public int GetInt(string section, string key, int fallback = 0)
         => int.TryParse(Get(section, key), out var value) ? value : fallback;
@@ -117,8 +192,11 @@ public sealed class IniDocument
 
     public void Set(string section, string key, string value)
     {
-        EnsureSection(section);
-        _sections[section][key] = value;
+        lock (_sync)
+        {
+            EnsureSection(section);
+            _sections[section][key] = value;
+        }
     }
 
     private void EnsureSection(string section)

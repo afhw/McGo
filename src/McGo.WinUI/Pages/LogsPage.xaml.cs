@@ -17,7 +17,20 @@ public sealed partial class LogsPage : Page
     public LogsPage()
     {
         InitializeComponent();
+        SizeChanged += (_, _) => ApplyResponsiveLayout();
+        Loaded += (_, _) => ApplyResponsiveLayout();
         Loaded += LogsPageLoaded;
+    }
+
+    private void ApplyResponsiveLayout()
+    {
+        if (ActualWidth <= 0) return;
+        var compact = ActualWidth < 700;
+        LogToolbar.RowSpacing = compact ? 8 : 0;
+        Grid.SetColumnSpan(LogFilesBox, compact ? 4 : 1);
+        Grid.SetRow(RefreshLogsButton, compact ? 1 : 0);
+        Grid.SetRow(OpenLogsFolderButton, compact ? 1 : 0);
+        Grid.SetRow(ClearLogsButton, compact ? 1 : 0);
     }
 
     private async void LogsPageLoaded(object sender, RoutedEventArgs e)

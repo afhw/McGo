@@ -30,20 +30,23 @@ import {
 import './styles.css';
 import { usePublicStats } from './usePublicStats.js';
 import { formatStatValue } from './publicStats.js';
+import { loadReleaseMetadata } from './releaseMetadata.js';
 
-const previewDownload = {
-  href: '/download/McGo-CSharp-Preview-x64-Setup.exe',
-  name: 'McGo-CSharp-Preview-x64-Setup.exe',
-  size: '81.4 MB',
-  version: '1.0.12 Preview',
-};
-
-const stableDownload = {
-  href: '/download/McGo.exe',
-  name: 'McGo.exe',
-  size: '30.9 MB',
-  version: 'Python 稳定版',
-};
+function useReleaseDownload(path, installer = false) {
+  const [release, setRelease] = useState({ download: null, status: 'loading' });
+  useEffect(() => {
+    const controller = new AbortController();
+    loadReleaseMetadata(path, { installer, signal: controller.signal })
+      .then((download) => {
+        if (!controller.signal.aborted) setRelease({ download, status: 'ready' });
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setRelease({ download: null, status: 'error' });
+      });
+    return () => controller.abort();
+  }, [path, installer]);
+  return release;
+}
 
 const screenshots = [
   { file: '01-home.png', label: '首页', title: '实例、账号与运行环境集中呈现' },
@@ -132,6 +135,9 @@ function useScreenshotRotation() {
 }
 
 function DownloadButton({ download, children, className = '' }) {
+  if (!download) {
+    return <button className={`download-button ${className}`.trim()} disabled><ArrowDownToLine size={20} /><span>{children}</span></button>;
+  }
   return (
     <a className={`download-button ${className}`.trim()} href={download.href} aria-label={children} download>
       <ArrowDownToLine size={20} />
@@ -153,6 +159,8 @@ function StatsDate({ value, empty }) {
 function App() {
   const [active, setActive] = useScreenshotRotation();
   const { stats, status, failed } = usePublicStats();
+  const { download: previewDownload, status: previewStatus } = useReleaseDownload('/update-csharp.json', true);
+  const { download: stableDownload, status: stableStatus } = useReleaseDownload('/update.json');
   const current = screenshots[active];
 
   return (
@@ -284,13 +292,16 @@ function App() {
               <span className="status-badge">测试版</span>
             </div>
             <h3>C# / WinUI 3</h3>
-            <p className="release-version">{previewDownload.version}</p>
+            <p className="release-version" role="status">{previewDownload ? `${previewDownload.version} Preview` : previewStatus === 'error' ? '版本信息暂不可用' : '正在加载版本信息'}</p>
             <ul>
               {previewHighlights.map((item) => <li key={item}><Check size={17} />{item}</li>)}
             </ul>
-            <div className="file-meta"><span>{previewDownload.name}</span><strong>{previewDownload.size}</strong></div>
+            {previewDownload && <div className="file-meta"><span>{previewDownload.name}</span><strong title={`${previewDownload.bytes} bytes`}>{previewDownload.size}</strong></div>}
             <DownloadButton download={previewDownload}>下载 C# 测试版</DownloadButton>
-            <a className="checksum-link" href="/download/McGo-CSharp-Preview-x64-Setup.exe.sha256" download>下载 SHA-256 校验文件</a>
+            {previewDownload && <>
+              <a className="checksum-link" href={previewDownload.checksumHref} download>下载 SHA-256 校验文件</a>
+              <p className="release-hash">SHA-256 <code>{previewDownload.sha256}</code></p>
+            </>}
           </article>
 
           <article className="release-card stable-release">
@@ -299,14 +310,14 @@ function App() {
               <span className="status-badge stable">稳定版</span>
             </div>
             <h3>经典单文件版</h3>
-            <p className="release-version">{stableDownload.version}</p>
+            <p className="release-version" role="status">{stableDownload ? `${stableDownload.version} Python 稳定版` : stableStatus === 'error' ? '版本信息暂不可用' : '正在加载版本信息'}</p>
             <ul>
               <li><Check size={17} />单个 EXE，下载后直接运行</li>
               <li><Check size={17} />保留原有 Python 版成熟工作流</li>
               <li><Check size={17} />适合暂不参与迁移测试的用户</li>
               <li><Check size={17} />Windows x64 桌面环境</li>
             </ul>
-            <div className="file-meta"><span>{stableDownload.name}</span><strong>{stableDownload.size}</strong></div>
+            {stableDownload && <div className="file-meta"><span>{stableDownload.name}</span><strong title={`${stableDownload.bytes} bytes`}>{stableDownload.size}</strong></div>}
             <DownloadButton download={stableDownload} className="stable-button">下载稳定版</DownloadButton>
           </article>
           <p className="signing-note">

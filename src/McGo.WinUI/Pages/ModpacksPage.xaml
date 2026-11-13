@@ -141,7 +141,7 @@
 
                         <Border Style="{StaticResource McgoDividerStyle}" />
 
-                        <Grid ColumnSpacing="8" RowSpacing="8">
+                        <Grid x:Name="CapsuleActionsGrid" ColumnSpacing="8" RowSpacing="8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="*" />
@@ -201,7 +201,7 @@
                 </Border>
 
                 <!--  P2P 细节默认折叠：不影响主流程，需要时再展开  -->
-                <Expander HorizontalAlignment="Stretch" IsExpanded="False">
+                <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="False">
                     <Expander.Header>
                         <Grid ColumnSpacing="10">
                             <Grid.ColumnDefinitions>
@@ -216,7 +216,7 @@
                         </Grid>
                     </Expander.Header>
                     <StackPanel Padding="0,10,0,0" Spacing="12">
-                        <Grid ColumnSpacing="12" RowSpacing="10">
+                        <Grid x:Name="CapsuleConnectionGrid" ColumnSpacing="12" RowSpacing="10">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="*" />
@@ -263,7 +263,7 @@
                                 SmallChange="1"
                                 SpinButtonPlacementMode="Compact" />
                         </Grid>
-                        <Grid ColumnSpacing="8">
+                        <Grid x:Name="CapsuleInviteActionsGrid" ColumnSpacing="8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="*" />
@@ -322,7 +322,7 @@
                     <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="任务状态" />
                     <ProgressBar x:Name="PackProgressBar" Height="6" Maximum="100" Minimum="0" />
                     <TextBlock x:Name="PackStatusText" TextWrapping="Wrap" Text="等待操作" />
-                    <Expander x:Name="PackOutputExpander" HorizontalAlignment="Stretch" IsExpanded="False">
+                    <Expander x:Name="PackOutputExpander" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="False">
                         <Expander.Header>
                             <TextBlock FontSize="13" Text="任务输出" />
                         </Expander.Header>
