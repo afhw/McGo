@@ -7,21 +7,18 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
     <Page.Resources>
-        <Style TargetType="TextBox">
+        <Style TargetType="TextBox" BasedOn="{StaticResource DefaultTextBoxStyle}">
             <Setter Property="MinWidth" Value="0" />
         </Style>
-        <Style TargetType="ComboBox">
+        <Style TargetType="ComboBox" BasedOn="{StaticResource DefaultComboBoxStyle}">
             <Setter Property="MinWidth" Value="0" />
             <Setter Property="HorizontalAlignment" Value="Stretch" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
         </Style>
-        <Style TargetType="NumberBox">
-            <Setter Property="MinWidth" Value="0" />
-        </Style>
         <DataTemplate x:Key="SettingsToggleHeaderTemplate">
             <TextBlock Text="{Binding}" TextWrapping="Wrap" />
         </DataTemplate>
-        <Style TargetType="ToggleSwitch">
+        <Style TargetType="ToggleSwitch" BasedOn="{StaticResource DefaultToggleSwitchStyle}">
             <Setter Property="MinWidth" Value="0" />
             <Setter Property="HorizontalAlignment" Value="Stretch" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
@@ -160,7 +157,7 @@
                             <ComboBoxItem Content="总是下载" Tag="redownload" />
                         </ComboBox>
                     </Grid>
-                    <NumberBox x:Name="SpeedLimitBox" Header="限速 KB/s（0 为不限）" LargeChange="1024" Maximum="1048576" Minimum="0" SmallChange="256" SpinButtonPlacementMode="Compact" />
+                    <NumberBox x:Name="SpeedLimitBox" MinWidth="0" Header="限速 KB/s（0 为不限）" LargeChange="1024" Maximum="1048576" Minimum="0" SmallChange="256" SpinButtonPlacementMode="Compact" />
                     <Expander HorizontalAlignment="Stretch" IsExpanded="False">
                         <Expander.Header>
                             <StackPanel Spacing="1">
@@ -174,8 +171,8 @@
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
-                                <NumberBox x:Name="CoreThreadsBox" Header="核心文件并发" LargeChange="4" Maximum="64" Minimum="1" SmallChange="1" SpinButtonPlacementMode="Compact" />
-                                <NumberBox x:Name="AssetThreadsBox" Grid.Column="1" Header="资源文件并发" LargeChange="8" Maximum="96" Minimum="1" SmallChange="1" SpinButtonPlacementMode="Compact" />
+                                <NumberBox x:Name="CoreThreadsBox" MinWidth="0" Header="核心文件并发" LargeChange="4" Maximum="64" Minimum="1" SmallChange="1" SpinButtonPlacementMode="Compact" />
+                                <NumberBox x:Name="AssetThreadsBox" MinWidth="0" Grid.Column="1" Header="资源文件并发" LargeChange="8" Maximum="96" Minimum="1" SmallChange="1" SpinButtonPlacementMode="Compact" />
                             </Grid>
                             <TextBox x:Name="ModrinthApiBaseBox" Header="Modrinth API Base" PlaceholderText="留空使用官方地址" />
                             <TextBox x:Name="ModrinthCdnBaseBox" Header="Modrinth CDN Base" PlaceholderText="留空不重写下载地址" />
@@ -254,7 +251,7 @@
                         <ToggleSwitch x:Name="MusicEnabledToggleSwitch" Header="启用背景音乐" />
                         <ToggleSwitch x:Name="MusicPauseOnLaunchToggleSwitch" Grid.Column="1" Header="启动游戏后暂停" />
                     </Grid>
-                    <NumberBox x:Name="MusicVolumeBox" Header="音量 %" LargeChange="10" Maximum="100" Minimum="0" SmallChange="1" SpinButtonPlacementMode="Compact" />
+                    <NumberBox x:Name="MusicVolumeBox" MinWidth="0" Header="音量 %" LargeChange="10" Maximum="100" Minimum="0" SmallChange="1" SpinButtonPlacementMode="Compact" />
                     <Grid x:Name="MusicActionsGrid" ColumnSpacing="8" RowSpacing="8" MaxWidth="360" HorizontalAlignment="Stretch">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />

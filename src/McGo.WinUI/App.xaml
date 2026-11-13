@@ -163,7 +163,7 @@
     </Style>
 
     <!-- 快捷入口按钮：左对齐图标 + 文本 -->
-    <Style x:Key="McgoTileButtonStyle" TargetType="Button">
+    <Style x:Key="McgoTileButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="HorizontalContentAlignment" Value="Left" />
         <Setter Property="MinHeight" Value="42" />
@@ -183,7 +183,7 @@
     </Style>
 
     <!-- 次级操作按钮 -->
-    <Style x:Key="McgoSecondaryButtonStyle" TargetType="Button">
+    <Style x:Key="McgoSecondaryButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
         <Setter Property="MinHeight" Value="36" />
         <Setter Property="Padding" Value="14,6" />
         <Setter Property="CornerRadius" Value="8" />
@@ -191,7 +191,7 @@
     </Style>
 
     <!-- 只读输出框 -->
-    <Style x:Key="McgoOutputBoxStyle" TargetType="TextBox">
+    <Style x:Key="McgoOutputBoxStyle" TargetType="TextBox" BasedOn="{StaticResource DefaultTextBoxStyle}">
         <Setter Property="IsReadOnly" Value="True" />
         <Setter Property="AcceptsReturn" Value="True" />
         <Setter Property="TextWrapping" Value="Wrap" />
