@@ -116,25 +116,34 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
-                <Grid Padding="16,8" ColumnSpacing="8" Background="{ThemeResource LayerFillColorDefaultBrush}">
+                <Grid x:Name="DirectoryToolbar" Padding="24,8,24,4" ColumnSpacing="8"
+                      SizeChanged="DirectoryToolbar_SizeChanged">
                     <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" MaxWidth="260" />
+                        <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <ComboBox x:Name="ActiveGameDirectoryBox" MinWidth="0" MaxWidth="440"
+                    <TextBlock x:Name="DirectoryToolbarLabel" Text="游戏目录" VerticalAlignment="Center"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <ComboBox x:Name="ActiveGameDirectoryBox" Grid.Column="1" MinWidth="0" Height="32"
                               HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
-                              DisplayMemberPath="Name" AutomationProperties.Name="当前游戏目录"
+                              AutomationProperties.Name="当前游戏目录"
                               SelectionChanged="ActiveGameDirectoryChanged">
-                        <ComboBox.Header><TextBlock Text="游戏目录" /></ComboBox.Header>
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
                     </ComboBox>
-                    <Button Grid.Column="1" VerticalAlignment="Bottom" Width="36" Height="34" Padding="0"
+                    <Button Grid.Column="2" VerticalAlignment="Center" Width="32" Height="32" MinWidth="0" Padding="0"
                             Click="ManageGameDirectories" ToolTipService.ToolTip="管理游戏目录"
                             AutomationProperties.Name="管理游戏目录">
-                        <SymbolIcon Symbol="Folder" />
+                        <FontIcon Glyph="&#xE8B7;" FontSize="16" />
                     </Button>
-                    <Button x:Name="GlobalDownloadTaskButton" Grid.Column="2" MinWidth="0" Height="34"
-                            VerticalAlignment="Bottom" Click="OpenGlobalDownloadTasks"
+                    <Button x:Name="GlobalDownloadTaskButton" Grid.Column="4" MinWidth="0" Height="32"
+                            VerticalAlignment="Center" Click="OpenGlobalDownloadTasks"
                             Style="{StaticResource McgoSecondaryButtonStyle}"
                             ToolTipService.ToolTip="打开全局下载任务" Visibility="Collapsed">
                         <StackPanel Orientation="Horizontal" Spacing="8">

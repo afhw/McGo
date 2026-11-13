@@ -82,6 +82,14 @@ public sealed partial class MainWindow : Window
 
     private void ManageGameDirectories(object sender, RoutedEventArgs e) => NavigateToTag("settings");
 
+    private void DirectoryToolbar_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        var compact = e.NewSize.Width < 600;
+        DirectoryToolbarLabel.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        GlobalDownloadTaskText.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        DirectoryToolbar.Padding = new Thickness(compact ? 16 : 24, 8, compact ? 16 : 24, 4);
+    }
+
     private async void ActiveGameDirectoryChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_loadingDirectories || ActiveGameDirectoryBox.SelectedItem is not GameDirectoryEntry directory) return;
