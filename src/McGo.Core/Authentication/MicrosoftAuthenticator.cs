@@ -23,13 +23,14 @@ public sealed class MicrosoftAuthenticator
         _httpClient = httpClient ?? new HttpClient();
     }
 
-    public string GetLoginUrl()
+    public string GetLoginUrl(string? state = null)
         => "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize"
            + $"?client_id={Uri.EscapeDataString(ClientId)}"
            + "&response_type=code"
            + $"&redirect_uri={Uri.EscapeDataString(RedirectUri)}"
            + "&response_mode=query"
-           + "&scope=XboxLive.signin%20offline_access";
+           + "&scope=XboxLive.signin%20offline_access"
+           + (state is null ? "" : $"&state={Uri.EscapeDataString(state)}");
 
     public async Task AuthenticateAsync(CancellationToken cancellationToken = default)
     {

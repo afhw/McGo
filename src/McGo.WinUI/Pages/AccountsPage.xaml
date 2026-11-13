@@ -192,9 +192,10 @@
                                 <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="走官方 OAuth 流程；授权完成后保持此窗口，等回调自动保存。" />
                             </StackPanel>
 
-                            <CheckBox x:Name="AutoOpenBrowserCheckBox" Content="生成登录链接后自动打开浏览器" />
+                            <CheckBox x:Name="AutoOpenBrowserCheckBox" Content="开始登录时自动打开浏览器" />
 
                             <Button
+                                x:Name="StartMicrosoftLoginButton"
                                 MinHeight="52"
                                 HorizontalAlignment="Stretch"
                                 HorizontalContentAlignment="Center"
@@ -220,8 +221,10 @@
                                 </Grid.ColumnDefinitions>
                                 <Button
                                     HorizontalAlignment="Stretch"
-                                    Click="WaitMicrosoftCallback"
-                                    Content="等待回调并登录"
+                                    x:Name="CancelMicrosoftLoginButton"
+                                    IsEnabled="False"
+                                    Click="CancelMicrosoftLogin"
+                                    Content="取消登录"
                                     Style="{StaticResource McgoSecondaryButtonStyle}" />
                                 <Button
                                     Grid.Column="1"
@@ -272,6 +275,7 @@
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
                                         <Button
+                                            x:Name="GenerateMicrosoftLoginButton"
                                             HorizontalAlignment="Stretch"
                                             Click="GenerateMicrosoftLogin"
                                             Content="生成登录链接"

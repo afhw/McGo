@@ -4,11 +4,12 @@ param(
   [ValidateRange(10, 600)][int]$TimeoutSeconds = 180,
   [switch]$Resize,
   [switch]$GameDirectories,
+  [switch]$MicrosoftLogin,
   [switch]$AllowUnavailableDesktop
 )
 
 $ErrorActionPreference = 'Stop'
-if ($Resize -and $GameDirectories) { throw 'Choose either Resize or GameDirectories for one smoke run.' }
+if (@($Resize, $GameDirectories, $MicrosoftLogin | Where-Object { $_ }).Count -gt 1) { throw 'Choose only one smoke mode.' }
 $exe = (Resolve-Path -LiteralPath $ExecutablePath).Path
 $report = [IO.Path]::GetFullPath($ReportPath)
 [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($report)) | Out-Null
@@ -25,7 +26,7 @@ if (-not $interactive) {
   return
 }
 
-$mode = if ($Resize) { '--smoke-resize' } elseif ($GameDirectories) { '--smoke-game-directories' } else { '--smoke-pages' }
+$mode = if ($Resize) { '--smoke-resize' } elseif ($GameDirectories) { '--smoke-game-directories' } elseif ($MicrosoftLogin) { '--smoke-microsoft-login' } else { '--smoke-pages' }
 $startInfo = [Diagnostics.ProcessStartInfo]::new($exe)
 $startInfo.UseShellExecute = $false
 $startInfo.CreateNoWindow = $true
@@ -42,6 +43,12 @@ try {
   $lines | Write-Host
   if ($process.ExitCode -ne 0 -or @($lines | Where-Object { $_ -match '^FAIL' }).Count) {
     throw "UI smoke failed (exit $($process.ExitCode))."
+  }
+  if ($MicrosoftLogin) {
+    if (@($lines | Where-Object { $_ -match '^PASS Microsoft login ' }).Count -ne 3) {
+      throw 'Microsoft login smoke did not complete all checks.'
+    }
+    return
   }
   if ($GameDirectories) {
     foreach ($check in @('directory selection', 'running and queued tasks', 'native settings toggles', 'global task entry')) {

@@ -37,6 +37,8 @@ jobs:
         run: ./tests/release/test_winui_smoke.ps1 -ExecutablePath dist/app/McGo.WinUI.exe -Resize -ReportPath artifacts/ci/ui-resize.txt -AllowUnavailableDesktop
       - name: Test game directory switching and task destinations
         run: ./tests/release/test_winui_smoke.ps1 -ExecutablePath dist/app/McGo.WinUI.exe -GameDirectories -ReportPath artifacts/ci/ui-directories.txt -AllowUnavailableDesktop
+      - name: Test Microsoft login callback and cancellation without real credentials
+        run: ./tests/release/test_winui_smoke.ps1 -ExecutablePath dist/app/McGo.WinUI.exe -MicrosoftLogin -ReportPath artifacts/ci/ui-microsoft-login.txt -AllowUnavailableDesktop
       - name: Retain UI smoke report
         if: always()
         uses: actions/upload-artifact@v4

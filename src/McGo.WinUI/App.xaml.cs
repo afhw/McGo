@@ -48,7 +48,8 @@ public partial class App : Application
         var smokeJavaSelection = commandLine.Contains("--smoke-java-selection", StringComparer.OrdinalIgnoreCase);
         var smokeResize = commandLine.Contains("--smoke-resize", StringComparer.OrdinalIgnoreCase);
         var smokeGameDirectories = commandLine.Contains("--smoke-game-directories", StringComparer.OrdinalIgnoreCase);
-        var smokePages = smokeGameDirectories || smokeResize || smokeJavaSelection || smokeLaunchPerformance || commandLine.Contains("--smoke-pages", StringComparer.OrdinalIgnoreCase);
+        var smokeMicrosoftLogin = commandLine.Contains("--smoke-microsoft-login", StringComparer.OrdinalIgnoreCase);
+        var smokePages = smokeMicrosoftLogin || smokeGameDirectories || smokeResize || smokeJavaSelection || smokeLaunchPerformance || commandLine.Contains("--smoke-pages", StringComparer.OrdinalIgnoreCase);
         string? smokeJavaPath = null;
         if (smokePages)
         {
@@ -124,6 +125,11 @@ public partial class App : Application
 
         if (smokePages)
         {
+            if (smokeMicrosoftLogin)
+            {
+                _ = RunMicrosoftLoginSmokeAsync((MainWindow)_window, commandLine.Contains("--smoke-microsoft-browser", StringComparer.OrdinalIgnoreCase));
+                return;
+            }
             if (smokeGameDirectories)
             {
                 _ = RunGameDirectorySmokeAsync((MainWindow)_window);
@@ -164,6 +170,30 @@ public partial class App : Application
         }
 
         MusicPlaybackService.ApplySavedSettings();
+    }
+
+    private static async Task RunMicrosoftLoginSmokeAsync(MainWindow window, bool openRealBrowser)
+    {
+        var results = new List<string>();
+        var failed = false;
+        try
+        {
+            window.NavigateToTag("accounts");
+            await Task.Delay(200);
+            await ((Pages.AccountsPage)window.CurrentPage!).RunMicrosoftLoginSmokeChecksAsync(openRealBrowser);
+            results.Add("PASS Microsoft login starts callback before browser and saves the mock profile");
+            results.Add("PASS Microsoft login reuses sessions and supports cancel and retry");
+            results.Add("PASS Microsoft login handles browser failure, authorization denial and occupied ports");
+            if (openRealBrowser) results.Add("PASS Windows default browser reaches the live loopback callback");
+        }
+        catch (Exception exc)
+        {
+            failed = true;
+            results.Add("FAIL Microsoft login: " + exc);
+        }
+        WriteSmokeReport(results);
+        CleanupSmokeWorkingDirectory();
+        Environment.Exit(failed ? 1 : 0);
     }
 
     private static async Task RunGameDirectorySmokeAsync(MainWindow window)

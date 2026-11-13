@@ -1,5 +1,7 @@
 ﻿using System.Diagnostics;
 using System.Text.Json.Nodes;
+using System.Security.Cryptography;
+using McGo.Core.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using McGo.Core.App;
@@ -16,8 +18,13 @@ namespace McGo.WinUI.Pages;
 public sealed partial class AccountsPage : Page
 {
     private readonly AppSettings _settings = new();
-    private readonly MicrosoftAuthenticator _microsoftAuthenticator = new(AppConstants.ClientId, AppConstants.RedirectUri);
     private readonly OAuthCallbackServer _oauthCallbackServer = new();
+    private string _microsoftCallbackUri = AppConstants.RedirectUri;
+    private Func<string, MicrosoftAuthenticator> _microsoftAuthenticatorFactory = redirectUri => new(AppConstants.ClientId, redirectUri);
+    private Func<Uri, Task<bool>> _openMicrosoftBrowserAsync = async uri => await Windows.System.Launcher.LaunchUriAsync(uri);
+    private CancellationTokenSource? _microsoftLoginCancellation;
+    private Task<string>? _microsoftLoginReady;
+    private Task _microsoftLoginCompletion = Task.CompletedTask;
     private List<JsonObject> _accounts = [];
     private readonly Dictionary<string, JsonObject> _accountsByLabel = [];
     private string _lastMicrosoftLoginUrl = "";
@@ -28,6 +35,7 @@ public sealed partial class AccountsPage : Page
         InitializeComponent();
         SizeChanged += (_, _) => ApplyResponsiveLayout();
         Loaded += (_, _) => ApplyResponsiveLayout();
+        Unloaded += (_, _) => _microsoftLoginCancellation?.Cancel();
         _initialized = true;
         LoginModeBox.SelectedItem = LoginModeBox.Items[0];
         Refresh();
@@ -410,85 +418,115 @@ public sealed partial class AccountsPage : Page
     }
 
     private async void StartMicrosoftLogin(object sender, RoutedEventArgs e)
+        => await BeginMicrosoftLoginAsync(AutoOpenBrowserCheckBox.IsChecked == true);
+
+    private async void GenerateMicrosoftLogin(object sender, RoutedEventArgs e)
+        => await BeginMicrosoftLoginAsync(openBrowser: false);
+
+    private async void OpenMicrosoftLogin(object sender, RoutedEventArgs e)
+        => await BeginMicrosoftLoginAsync(openBrowser: true);
+
+    private async Task BeginMicrosoftLoginAsync(bool openBrowser)
     {
         try
         {
-            GenerateMicrosoftLogin(sender, e);
-            SaveMicrosoftLoginSettings();
-            if (AutoOpenBrowserCheckBox.IsChecked == true)
+            var loginUrl = await EnsureMicrosoftLoginReadyAsync();
+            if (_microsoftLoginCancellation is null || _microsoftLoginCancellation.IsCancellationRequested) return;
+            if (openBrowser)
             {
-                Process.Start(new ProcessStartInfo(_lastMicrosoftLoginUrl) { UseShellExecute = true });
-                MicrosoftOutputBox.Text = LoginHelpText(_lastMicrosoftLoginUrl, "已打开浏览器。完成授权后保持此窗口等待回调。");
+                try
+                {
+                    if (!await _openMicrosoftBrowserAsync(new Uri(loginUrl)))
+                        throw new InvalidOperationException("Windows 未能打开默认浏览器。");
+                    if (_microsoftLoginCancellation is not null)
+                        MicrosoftOutputBox.Text = LoginHelpText(loginUrl, "已打开浏览器，授权完成后将自动保存账号。");
+                }
+                catch (Exception exc)
+                {
+                    AppLog.Warning("MicrosoftLogin", "打开默认浏览器失败：" + exc.Message);
+                    MicrosoftOutputBox.Text = LoginHelpText(loginUrl, "无法打开默认浏览器，请复制链接到浏览器登录；本机回调已就绪。" + Environment.NewLine + exc.Message);
+                }
             }
             else
             {
-                MicrosoftOutputBox.Text = LoginHelpText(_lastMicrosoftLoginUrl, "浏览器自动打开已关闭。请复制链接到外部浏览器完成授权。");
+                MicrosoftOutputBox.Text = LoginHelpText(loginUrl, "本机回调已就绪，请复制链接到浏览器完成授权。");
             }
-
-            await WaitMicrosoftCallbackAsync();
         }
+        catch (OperationCanceledException) { }
         catch (Exception exc)
         {
-            MicrosoftOutputBox.Text = exc.Message;
-            OutputBox.Text = "Microsoft 登录失败。";
+            ReportMicrosoftLoginFailure("准备本机回调", exc);
         }
     }
 
-    private void GenerateMicrosoftLogin(object sender, RoutedEventArgs e)
+    private Task<string> EnsureMicrosoftLoginReadyAsync()
     {
-        _lastMicrosoftLoginUrl = _microsoftAuthenticator.GetLoginUrl();
-        MicrosoftLoginLinkBox.Text = _lastMicrosoftLoginUrl;
+        if (_microsoftLoginCancellation is not null && _microsoftLoginReady is not null)
+            return _microsoftLoginReady;
         SaveMicrosoftLoginSettings();
-        MicrosoftOutputBox.Text = LoginHelpText(_lastMicrosoftLoginUrl, AutoOpenBrowserCheckBox.IsChecked == true
-            ? "可点击“开始登录”自动打开浏览器，也可以手动复制链接。"
-            : "自动打开浏览器已关闭，请复制或手动打开下面的链接。");
-        OutputBox.Text = "Microsoft 登录链接已生成。";
+        var cancellation = new CancellationTokenSource();
+        _microsoftLoginCancellation = cancellation;
+        SetMicrosoftLoginBusy(true);
+        _microsoftLoginReady = CreateMicrosoftLoginSessionAsync(cancellation);
+        return _microsoftLoginReady;
     }
 
-    private void CopyMicrosoftLogin(object sender, RoutedEventArgs e)
-    {
-        var loginUrl = CurrentMicrosoftLoginUrl();
-        if (string.IsNullOrWhiteSpace(loginUrl))
-        {
-            GenerateMicrosoftLogin(sender, e);
-            loginUrl = CurrentMicrosoftLoginUrl();
-        }
-
-        var package = new DataPackage();
-        package.SetText(loginUrl);
-        Clipboard.SetContent(package);
-        MicrosoftOutputBox.Text = LoginHelpText(loginUrl, "登录链接已复制到剪贴板。请在浏览器中打开并完成授权。");
-        OutputBox.Text = "登录链接已复制。";
-    }
-
-    private void OpenMicrosoftLogin(object sender, RoutedEventArgs e)
-    {
-        var loginUrl = CurrentMicrosoftLoginUrl();
-        if (string.IsNullOrWhiteSpace(loginUrl))
-        {
-            GenerateMicrosoftLogin(sender, e);
-            loginUrl = CurrentMicrosoftLoginUrl();
-        }
-
-        Process.Start(new ProcessStartInfo(loginUrl) { UseShellExecute = true });
-        MicrosoftOutputBox.Text = LoginHelpText(loginUrl, "已打开浏览器。完成授权后点击“等待回调并登录”。");
-        OutputBox.Text = "已打开浏览器。";
-    }
-
-    private async void WaitMicrosoftCallback(object sender, RoutedEventArgs e)
-    {
-        await WaitMicrosoftCallbackAsync();
-    }
-
-    private async Task WaitMicrosoftCallbackAsync()
+    private async Task<string> CreateMicrosoftLoginSessionAsync(CancellationTokenSource cancellation)
     {
         try
         {
-            MicrosoftOutputBox.Text = "正在等待浏览器回调...";
-            var callback = await _oauthCallbackServer.WaitForCodeAsync(AppConstants.RedirectUri, TimeSpan.FromMinutes(5));
-            _microsoftAuthenticator.AuthorizationCode = callback.Code;
-            await _microsoftAuthenticator.AuthenticateAsync();
-            var profile = await _microsoftAuthenticator.GetMinecraftProfileAsync();
+            MicrosoftOutputBox.Text = "正在准备本机登录回调...";
+            var state = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+            var authenticator = _microsoftAuthenticatorFactory(_microsoftCallbackUri);
+            var session = await _oauthCallbackServer.StartAsync(_microsoftCallbackUri, TimeSpan.FromMinutes(5), cancellation.Token, state);
+            _lastMicrosoftLoginUrl = authenticator.GetLoginUrl(state);
+            MicrosoftLoginLinkBox.Text = _lastMicrosoftLoginUrl;
+            OutputBox.Text = "正在等待 Microsoft 授权。";
+            AppLog.Info("MicrosoftLogin", "本机回调监听已就绪。");
+            _microsoftLoginCompletion = CompleteMicrosoftLoginAsync(session, authenticator, cancellation);
+            return _lastMicrosoftLoginUrl;
+        }
+        catch
+        {
+            _microsoftLoginCancellation = null;
+            cancellation.Dispose();
+            SetMicrosoftLoginBusy(false);
+            throw;
+        }
+    }
+
+    private async void CopyMicrosoftLogin(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var loginUrl = await EnsureMicrosoftLoginReadyAsync();
+            if (_microsoftLoginCancellation is null || _microsoftLoginCancellation.IsCancellationRequested) return;
+            var package = new DataPackage();
+            package.SetText(loginUrl);
+            Clipboard.SetContent(package);
+            MicrosoftOutputBox.Text = LoginHelpText(loginUrl, "登录链接已复制，授权完成后将自动保存账号。");
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception exc) { ReportMicrosoftLoginFailure("准备或复制登录链接", exc); }
+    }
+
+    private void CancelMicrosoftLogin(object sender, RoutedEventArgs e) => _microsoftLoginCancellation?.Cancel();
+
+    private async Task CompleteMicrosoftLoginAsync(OAuthCallbackSession session, MicrosoftAuthenticator authenticator, CancellationTokenSource cancellation)
+    {
+        var stage = "等待浏览器授权";
+        try
+        {
+            var callback = await session.WaitForCodeAsync();
+            if (!string.IsNullOrWhiteSpace(callback.Error))
+                throw new InvalidOperationException(callback.Error == "access_denied" ? "你取消了 Microsoft 授权，可以重新登录。" : callback.ErrorDescription);
+            stage = "交换 Microsoft / Xbox 登录令牌";
+            MicrosoftOutputBox.Text = "已收到授权，正在登录 Xbox 和 Minecraft...";
+            authenticator.AuthorizationCode = callback.Code;
+            await authenticator.AuthenticateAsync(cancellation.Token);
+            stage = "获取 Minecraft 档案";
+            var profile = await authenticator.GetMinecraftProfileAsync(cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
             var account = new JsonObject
             {
                 ["id"] = Guid.NewGuid().ToString(),
@@ -496,19 +534,46 @@ public sealed partial class AccountsPage : Page
                 ["display_name"] = profile.Name,
                 ["username"] = profile.Name,
                 ["uuid"] = profile.Id,
-                ["access_token"] = _microsoftAuthenticator.MinecraftAccessToken ?? "",
-                ["refresh_token"] = _microsoftAuthenticator.RefreshToken ?? "",
+                ["access_token"] = authenticator.MinecraftAccessToken ?? "",
+                ["refresh_token"] = authenticator.RefreshToken ?? "",
             };
             UpsertAccount(account, findDuplicate: true);
             Refresh(account["id"]?.GetValue<string>());
             MicrosoftOutputBox.Text = $"Microsoft 账号已添加：{profile.Name}";
             OutputBox.Text = "Microsoft 登录完成。";
+            AppLog.Info("MicrosoftLogin", "Microsoft 账号登录完成。");
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            MicrosoftOutputBox.Text = "Microsoft 登录已取消。";
+            OutputBox.Text = "Microsoft 登录已取消。";
         }
         catch (Exception exc)
         {
-            MicrosoftOutputBox.Text = exc.Message;
-            OutputBox.Text = "Microsoft 登录失败。";
+            ReportMicrosoftLoginFailure(stage, exc);
         }
+        finally
+        {
+            try { await session.DisposeAsync(); }
+            catch (Exception exc) { AppLog.Error("MicrosoftLogin", "释放登录回调失败", exc); }
+            _microsoftLoginCancellation = null;
+            cancellation.Dispose();
+            SetMicrosoftLoginBusy(false);
+        }
+    }
+
+    private void SetMicrosoftLoginBusy(bool busy)
+    {
+        StartMicrosoftLoginButton.IsEnabled = !busy;
+        GenerateMicrosoftLoginButton.IsEnabled = !busy;
+        CancelMicrosoftLoginButton.IsEnabled = busy;
+    }
+
+    private void ReportMicrosoftLoginFailure(string stage, Exception exception)
+    {
+        MicrosoftOutputBox.Text = stage + "失败：" + exception.Message;
+        OutputBox.Text = "Microsoft 登录失败。";
+        AppLog.Error("MicrosoftLogin", stage + "失败", exception);
     }
 
     private async void LoginExternalAccount(object sender, RoutedEventArgs e)
@@ -657,22 +722,10 @@ public sealed partial class AccountsPage : Page
         Grid.SetColumnSpan(OfflineNameBox, advanced ? 1 : 2);
     }
 
-    private string CurrentMicrosoftLoginUrl()
-    {
-        var loginUrl = MicrosoftLoginLinkBox.Text.Trim();
-        if (loginUrl.Length > 0)
-        {
-            _lastMicrosoftLoginUrl = loginUrl;
-        }
-
-        return _lastMicrosoftLoginUrl;
-    }
-
-    private static string LoginHelpText(string loginUrl, string hint)
+    private string LoginHelpText(string loginUrl, string hint)
         => string.Join(Environment.NewLine, [
             hint,
-            "回调地址：http://localhost:5000/login/callback",
-            "如果浏览器无法跳回启动器，请确认本机端口 5000 未被占用，然后重新生成链接。",
+            "回调地址：" + _microsoftCallbackUri,
             "",
             loginUrl,
         ]);

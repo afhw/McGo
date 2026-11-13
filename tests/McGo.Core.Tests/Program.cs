@@ -2845,6 +2845,7 @@ runner.Add("Resource market removes corrupt file when checksum mismatches", () =
 LaunchWorkflowTests.Register(runner);
 ConfigurationRegressionTests.Register(runner);
 GameDirectoryTests.Register(runner);
+OAuthCallbackTests.Register(runner);
 TaskManagementRegressionTests.Register(runner);
 DownloadReliabilityTests.Register(runner);
 return runner.Run();
