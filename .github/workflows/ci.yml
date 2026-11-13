@@ -62,3 +62,6 @@ jobs:
       - name: Test website release metadata
         run: node --test src/releaseMetadata.test.js
         working-directory: webside
+      - name: Test website initial render without loaded metadata
+        run: node --test src/App.test.js
+        working-directory: webside
