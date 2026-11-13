@@ -198,6 +198,9 @@ main, section, article, figure { min-width: 0; }
 .file-meta strong { color: var(--text); white-space: nowrap; }
 .release-card .download-button { width: 100%; }
 .stable-button { color: var(--on-brand); background: var(--brand); }
+.download-sources { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 12px; margin-top: 10px; color: var(--muted); font-size: 12px; }
+.github-download-link { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; max-width: 100%; padding: 4px 0; color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.github-download-link:hover { color: var(--text); }
 .checksum-link { margin-top: 13px; color: var(--muted); font-size: 12px; text-align: center; text-decoration: underline; text-underline-offset: 3px; }
 .checksum-link:hover { color: var(--text); }
 .signing-note { display: flex; grid-column: 1 / -1; gap: 10px; align-items: flex-start; margin: 4px 0 0; padding: 15px 0 0; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; line-height: 1.65; }

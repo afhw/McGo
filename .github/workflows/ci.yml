@@ -24,12 +24,12 @@ jobs:
       - run: dotnet build McGo.slnx -c Release
       - run: dotnet run --project tests/McGo.Core.Tests/McGo.Core.Tests.csproj -c Release
       - name: Package Release x64 installer and website manifest
-        run: ./scripts/build_csharp_installer.ps1
+        run: ./scripts/build_csharp_installer.ps1 -OutputDirectory artifacts/ci/release
       - name: Verify final installer, payload and manifest
         run: >-
           ./scripts/verify_release.ps1
-          -ArtifactPath webside/public/download/McGo-CSharp-Preview-x64-Setup.exe
-          -ManifestPath webside/public/update-csharp.json
+          -ArtifactPath artifacts/ci/release/McGo-CSharp-Preview-x64-Setup.exe
+          -ManifestPath artifacts/ci/release/update-csharp.json
           -AppDirectory dist/app
       - name: Smoke test WinUI on the available Windows desktop
         run: ./tests/release/test_winui_smoke.ps1 -ExecutablePath dist/app/McGo.WinUI.exe -AllowUnavailableDesktop
@@ -61,6 +61,9 @@ jobs:
         working-directory: webside
       - name: Test website release metadata
         run: node --test src/releaseMetadata.test.js
+        working-directory: webside
+      - name: Test GitHub download redirect targets
+        run: node --test src/downloadRoutes.test.js
         working-directory: webside
       - name: Test website initial render without loaded metadata
         run: node --test src/App.test.js

@@ -1,3 +1,17 @@
+function parseGithubHref(value, filename) {
+  if (typeof value !== 'string') return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.host !== 'github.com'
+      || url.username || url.password || url.search || url.hash) return undefined;
+    const asset = url.pathname.match(/^\/[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+\/releases\/download\/[^/]+\/([^/]+)$/);
+    if (!asset || /[/\\]/.test(filename) || decodeURIComponent(asset[1]) !== filename) return undefined;
+    return url.href;
+  } catch {
+    return undefined;
+  }
+}
+
 export function parseReleaseMetadata(manifest, manifestUrl, { installer = false } = {}) {
   if (!manifest || typeof manifest.version !== 'string' || !manifest.version.trim()
     || !Number.isSafeInteger(manifest.size) || manifest.size <= 0
@@ -12,14 +26,17 @@ export function parseReleaseMetadata(manifest, manifestUrl, { installer = false 
   }
   const checksumUrl = new URL(url);
   checksumUrl.pathname += '.sha256';
+  const name = decodeURIComponent(url.pathname.split('/').at(-1));
+  const githubHref = parseGithubHref(manifest.github_url, name);
   return {
     href: url.href,
-    name: decodeURIComponent(url.pathname.split('/').at(-1)),
+    name,
     size: `${(manifest.size / 1024 / 1024).toFixed(1)} MiB`,
     bytes: manifest.size,
     version: manifest.version.trim(),
     sha256: manifest.sha256,
     checksumHref: checksumUrl.href,
+    ...(githubHref ? { githubHref } : {}),
   };
 }
 

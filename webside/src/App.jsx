@@ -305,6 +305,12 @@ export default function App() {
             </ul>
             {previewDownload && <div className="file-meta"><span>{previewDownload.name}</span><strong title={`${previewDownload.bytes} bytes`}>{previewDownload.size}</strong></div>}
             <DownloadButton download={previewDownload}>下载 C# 测试版</DownloadButton>
+            {previewDownload?.githubHref && <div className="download-sources">
+              <span>主入口：镜像下载</span>
+              <a className="github-download-link" href={previewDownload.githubHref} target="_blank" rel="noopener noreferrer">
+                <Github size={15} aria-hidden="true" /><span>GitHub 直连</span>
+              </a>
+            </div>}
             {previewDownload && <>
               <a className="checksum-link" href={previewDownload.checksumHref} download>下载 SHA-256 校验文件</a>
               <p className="release-hash">SHA-256 <code>{previewDownload.sha256}</code></p>
@@ -326,6 +332,12 @@ export default function App() {
             </ul>
             {stableDownload && <div className="file-meta"><span>{stableDownload.name}</span><strong title={`${stableDownload.bytes} bytes`}>{stableDownload.size}</strong></div>}
             <DownloadButton download={stableDownload} className="stable-button">下载稳定版</DownloadButton>
+            {stableDownload?.githubHref && <div className="download-sources">
+              <span>主入口：镜像下载</span>
+              <a className="github-download-link" href={stableDownload.githubHref} target="_blank" rel="noopener noreferrer">
+                <Github size={15} aria-hidden="true" /><span>GitHub 直连</span>
+              </a>
+            </div>}
           </article>
           <p className="signing-note">
             <ShieldCheck size={19} />
