@@ -7,7 +7,7 @@ public static class AppConstants
     public const string DefaultGameDirectory = ".minecraft";
     public const string ConfigFile = "launcher_config.ini";
     public const string AccountsFile = "accounts.json";
-    public const string AppVersion = "1.1.2";
+    public const string AppVersion = "1.1.3";
     public const string LegacyUpdateManifestUrl = "https://mcgo.flyliq.cn/update.json";
     public const string DefaultUpdateManifestUrl = "https://mcgo.flyliq.cn/update-csharp.json";
 }

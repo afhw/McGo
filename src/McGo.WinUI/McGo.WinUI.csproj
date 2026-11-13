@@ -15,12 +15,13 @@
     <WindowsPackageType>None</WindowsPackageType>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>1.1.2</Version>
+    <DefaultLanguage>zh-CN</DefaultLanguage>
+    <Version>1.1.3</Version>
     <!-- 显式指定：仅设 Version 不会把 FileVersion/AssemblyVersion 带进 exe 属性 -->
-    <AssemblyVersion>1.1.2.0</AssemblyVersion>
-    <FileVersion>1.1.2.0</FileVersion>
-    <ProductVersion>1.1.2</ProductVersion>
-    <InformationalVersion>1.1.2</InformationalVersion>
+    <AssemblyVersion>1.1.3.0</AssemblyVersion>
+    <FileVersion>1.1.3.0</FileVersion>
+    <ProductVersion>1.1.3</ProductVersion>
+    <InformationalVersion>1.1.3</InformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>
