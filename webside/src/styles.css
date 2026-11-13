@@ -160,7 +160,7 @@ main, section, article, figure { min-width: 0; }
 .gallery-tabs button:active { background: var(--control-pressed); border-color: var(--text); }
 .gallery-frame { margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
 .gallery-image-picture { display: block; }
-.gallery-image { display: block; width: 100%; aspect-ratio: 16 / 10; border-radius: 4px; object-fit: cover; object-position: top; }
+.gallery-image { display: block; width: 100%; height: auto; aspect-ratio: var(--screenshot-medium-aspect); border-radius: 4px; object-fit: contain; object-position: top; }
 .gallery-frame figcaption { display: flex; align-items: center; gap: 8px; padding: 13px 4px 4px; color: var(--muted); font-size: 13px; }
 .gallery-frame figcaption svg { color: var(--success); }
 
@@ -243,7 +243,7 @@ main, section, article, figure { min-width: 0; }
   .nav-download span { display: none; }
   .hero { min-height: 560px; }
   .hero-image { object-position: center top; }
-  .gallery-image { aspect-ratio: 820 / 720; }
+  .gallery-image { aspect-ratio: var(--screenshot-small-aspect); }
   .hero-content, .release-bar, .product-section, .gallery-section, .download-section, .start-section, .footer { width: min(100% - 28px, 1200px); }
   .hero-content { padding: 62px 0 46px; }
   .hero h1 { font-size: 66px; }
@@ -266,7 +266,7 @@ main, section, article, figure { min-width: 0; }
 }
 
 @media (min-width: 1500px) {
-  .gallery-image { aspect-ratio: 16 / 9; }
+  .gallery-image { aspect-ratio: var(--screenshot-large-aspect); }
 }
 
 .release-hash { font-size: 12px; color: var(--muted); min-width: 0; }

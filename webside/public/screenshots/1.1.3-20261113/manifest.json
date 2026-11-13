@@ -1,0 +1,156 @@
+{
+  "version": "1.1.3",
+  "capturedAt": "2026-11-13T02:26:11.595Z",
+  "prefix": "/screenshots/1.1.3-20261113",
+  "variants": {
+    "small": {
+      "directory": "1208x1069",
+      "width": 1208,
+      "height": 1069,
+      "windowSize": "820x720"
+    },
+    "medium": {
+      "directory": "2160x1333",
+      "width": 2160,
+      "height": 1333,
+      "windowSize": "1440x888"
+    },
+    "large": {
+      "directory": "2560x1333",
+      "width": 2560,
+      "height": 1333,
+      "windowSize": "1706x888"
+    }
+  },
+  "sourceProductVersion": "1.1.3+9c3dbb9d9a9cb3fccb5509a7b9d77fe6d7a1835c",
+  "sourceDllSha256": "19f27443b5b8dfd4fcecefb3abe33336ef8a268248c81915d335211524ae7e6a",
+  "captureMethod": "Native WinUI 3 window, PrintWindow PW_RENDERFULLCONTENT, unmodified PNG",
+  "files": [
+    {
+      "url": "/screenshots/1.1.3-20261113/1208x1069/01-home.png",
+      "source": "820x720-home.png",
+      "sha256": "3970c5ebff6fbe08313dc95c956b6b01973abc60765e580d1856d59520fb956a",
+      "width": 1208,
+      "height": 1069
+    },
+    {
+      "url": "/screenshots/1.1.3-20261113/1208x1069/02-launch.png",
+      "source": "820x720-launch.png",
+      "sha256": "363c0868758bba3dc7b961302da7a72b8a85e5e6f4779c88647a95ab4103604b",
+      "width": 1208,
+      "height": 1069
+    },
+    {
+      "url": "/screenshots/1.1.3-20261113/1208x1069/03-download.png",
+      "source": "820x720-download-addons.png",
+      "sha256": "8138a2f8acb9b41ee97016e6f9790ac9d89d3788f594a1856e902eb9fe3983a0",
+      "width": 1208,
+      "height": 1069
+    },
+    {
+      "url": "/screenshots/1.1.3-20261113/1208x1069/04-resources.png",
+      "source": "820x720-resources.png",
+      "sha256": "db236a534b6914f91be8ce94c331a3fb3968ff2e72caf20a932f9c269078522c",
+      "width": 1208,
+      "height": 1069
+    },
+    {
+      "url": "/screenshots/1.1.3-20261113/1208x1069/05-accounts.png",
+      "source": "820x720-accounts.png",
+      "sha256": "f4f016b8686f99fbae43b773b9d336e7a4398970975fe5c8bd22d31f39a622ba",
+      "width": 1208,
+      "height": 1069
+    },
+    {
+      "url": "/screenshots/1.1.3-20261113/1208x1069/06-online.png",
+      "source": "820x720-online.png",
+      "sha256": "4cec3ac71902bf7e84d47e0411f8b3ce7eedd31197c509b116439b3b1b170481",
+      "width": 1208,
+      "height": 1069
+    },
+    {
+      "url": "/screenshots/1.1.3-20261113/2160x1333/01-home.png",
+      "source": "1440x888-home.png",
+      "sha256": "2ed098d398c65799998d926d402d3c635ad9db573c11c0da334ebd82ca922834",
+      "width": 2160,
+      "height": 1333
+    },
+    {
+      "url": "/screenshots/1.1.3-20261113/2160x1333/02-launch.png",
+      "source": "1440x888-launch.png",
+      "sha256": "1b5d88f3c2ca86ea8470d66e55dcd927c84f6f625dee216e5b2dbe3bc26ee092",
+      "width": 2160,
+      "height": 1333
+    },
+    {
+      "url": "/screenshots/1.1.3-20261113/2160x1333/03-download.png",
+      "source": "1440x888-download-addons.png",
+      "sha256": "e0051871d4c568fbf6fe034002d49aef93ec6db05a260d13ee9d48f72374e437",
+      "width": 2160,
+      "height": 1333
+    },
+    {
+      "url": "/screenshots/1.1.3-20261113/2160x1333/04-resources.png",
+      "source": "1440x888-resources.png",
+      "sha256": "60978239d00c5108368fda820140100d2e0be2a827996fa3aa9b11d14365bf35",
+      "width": 2160,
+      "height": 1333
+    },
+    {
+      "url": "/screenshots/1.1.3-20261113/2160x1333/05-accounts.png",
+      "source": "1440x888-accounts.png",
+      "sha256": "9880d0344cea1deb64ceb7e7e2772e8df4dfb3244a3ba30c8aa2ee9b110f3459",
+      "width": 2160,
+      "height": 1333
+    },
+    {
+      "url": "/screenshots/1.1.3-20261113/2160x1333/06-online.png",
+      "source": "1440x888-online.png",
+      "sha256": "710aa2b66cfce3cf594780077c3e8bbdbda5be4cfa869482cbee47c739af680d",
+      "width": 2160,
+      "height": 1333
+    },
+    {
+      "url": "/screenshots/1.1.3-20261113/2560x1333/01-home.png",
+      "source": "1706x888-home.png",
+      "sha256": "0e8365bbb1c32e1734f4933d30d9c0c71c2c4719fbd9790742638aa902208045",
+      "width": 2560,
+      "height": 1333
+    },
+    {
+      "url": "/screenshots/1.1.3-20261113/2560x1333/02-launch.png",
+      "source": "1706x888-launch.png",
+      "sha256": "33c39b8ef34e22c55adfc8e7ff3ac2cca9440bb18ef314d17493835e14d77e19",
+      "width": 2560,
+      "height": 1333
+    },
+    {
+      "url": "/screenshots/1.1.3-20261113/2560x1333/03-download.png",
+      "source": "1706x888-download-addons.png",
+      "sha256": "24e8db4f5d091fc7ed63fbc2f03c9b57744ad6286021512d77fcb2cf689b85f7",
+      "width": 2560,
+      "height": 1333
+    },
+    {
+      "url": "/screenshots/1.1.3-20261113/2560x1333/04-resources.png",
+      "source": "1706x888-resources.png",
+      "sha256": "33e3d6efd051dfdeeb484896ca5561f28dbd0905659c0702008d06fdf5e30dd4",
+      "width": 2560,
+      "height": 1333
+    },
+    {
+      "url": "/screenshots/1.1.3-20261113/2560x1333/05-accounts.png",
+      "source": "1706x888-accounts.png",
+      "sha256": "5d31313d76ee4cf145d4cf7c3addf4849441c9b64d496bbdddc2da71778833f0",
+      "width": 2560,
+      "height": 1333
+    },
+    {
+      "url": "/screenshots/1.1.3-20261113/2560x1333/06-online.png",
+      "source": "1706x888-online.png",
+      "sha256": "78b64415c42334e06bac97ed53883e231fb544beedda0cfece6035ceca3d47a6",
+      "width": 2560,
+      "height": 1333
+    }
+  ]
+}

@@ -30,6 +30,7 @@ import './styles.css';
 import { usePublicStats } from './usePublicStats.js';
 import { formatStatValue } from './publicStats.js';
 import { loadReleaseMetadata } from './releaseMetadata.js';
+import screenshotSet from './screenshotSet.json';
 
 function useReleaseDownload(path, installer = false) {
   const [release, setRelease] = useState({ download: null, status: 'loading' });
@@ -50,20 +51,27 @@ function useReleaseDownload(path, installer = false) {
 const screenshots = [
   { file: '01-home.png', label: '首页', title: '实例、账号与运行环境集中呈现' },
   { file: '02-launch.png', label: '启动', title: '版本选择、启动参数与状态检查' },
-  { file: '03-download.png', label: '下载', title: '原版、加载器与全局任务队列' },
+  { file: '03-download.png', label: '下载', title: '加载器安装与任务进度集中管理' },
   { file: '04-resources.png', label: '资源', title: 'Modrinth 资源搜索与依赖安装' },
   { file: '05-accounts.png', label: '账号', title: '离线、Microsoft 与外置登录' },
   { file: '06-online.png', label: '联机', title: 'P2P 房间、NAT 检测与胶囊补包' },
 ];
 
-const screenshotUrl = (size, file) => `/screenshots/${size}/${file}`;
+const screenshotUrl = (variant, file) => `${screenshotSet.prefix}/${screenshotSet.variants[variant].directory}/${file}`;
+const screenshotWindowWidths = Object.values(screenshotSet.variants)
+  .map(({ windowSize }) => windowSize.split('x')[0]).join(' / ');
 
 function ResponsiveScreenshot({ screenshot, className, alt }) {
   return (
-    <picture className={`${className}-picture`}>
-      <source media="(max-width: 700px)" srcSet={screenshotUrl('820x720', screenshot.file)} />
-      <source media="(min-width: 1500px)" srcSet={screenshotUrl('1920x1080', screenshot.file)} />
-      <img className={className} src={screenshotUrl('1440x900', screenshot.file)} alt={alt} />
+    <picture className={`${className}-picture`} style={{
+      '--screenshot-small-aspect': `${screenshotSet.variants.small.width} / ${screenshotSet.variants.small.height}`,
+      '--screenshot-medium-aspect': `${screenshotSet.variants.medium.width} / ${screenshotSet.variants.medium.height}`,
+      '--screenshot-large-aspect': `${screenshotSet.variants.large.width} / ${screenshotSet.variants.large.height}`,
+    }}>
+      <source media="(max-width: 700px)" srcSet={screenshotUrl('small', screenshot.file)} />
+      <source media="(min-width: 1500px)" srcSet={screenshotUrl('large', screenshot.file)} />
+      <img className={className} src={screenshotUrl('medium', screenshot.file)} alt={alt}
+        width={screenshotSet.variants.medium.width} height={screenshotSet.variants.medium.height} />
     </picture>
   );
 }
@@ -251,7 +259,7 @@ export default function App() {
         </div>
         <figure className="gallery-frame">
           <ResponsiveScreenshot screenshot={current} className="gallery-image" alt={current.title} />
-          <figcaption><BadgeCheck size={17} /> 由当前 C# 客户端自动生成，按视口提供 820 / 1440 / 1920 三种宽度</figcaption>
+          <figcaption><BadgeCheck size={17} /><span>McGo {screenshotSet.version} 实拍 · <time dateTime={screenshotSet.capturedAt}>{screenshotSet.capturedAt.slice(0, 10)}</time> · 窗口宽度 {screenshotWindowWidths}</span></figcaption>
         </figure>
       </section>
 
