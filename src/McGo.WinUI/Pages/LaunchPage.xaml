@@ -165,9 +165,10 @@
                                         HorizontalAlignment="Stretch"
                                         SelectionChanged="AccountSelectionChanged" />
                                 </StackPanel>
-                                <TextBox x:Name="GameDirectoryBox" Header="游戏目录" />
-                                <CheckBox x:Name="AutoJavaCheckBox" Content="自动选择适合版本的 Java"
-                                          Checked="AutoJavaChanged" Unchecked="AutoJavaChanged" />
+                                <TextBox x:Name="GameDirectoryBox" Header="游戏目录" IsReadOnly="True" />
+                                <ToggleSwitch x:Name="AutoJavaCheckBox" Toggled="AutoJavaChanged">
+                                    <ToggleSwitch.Header><TextBlock Text="自动选择适合版本的 Java" TextWrapping="Wrap" /></ToggleSwitch.Header>
+                                </ToggleSwitch>
                                 <TextBox x:Name="JavaPathBox" Header="Java 路径" />
                                 <StackPanel Spacing="5">
                                     <TextBlock Style="{StaticResource McgoFieldLabelStyle}" Text="检测到的 Java" />

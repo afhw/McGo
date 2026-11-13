@@ -6,6 +6,8 @@ using McGo.Core.App;
 using McGo.Core.Configuration;
 using McGo.Core.Downloads;
 using McGo.WinUI.Pages;
+using McGo.WinUI.Dialogs;
+using Microsoft.UI.Xaml.Navigation;
 using Windows.UI;
 
 namespace McGo.WinUI;
@@ -26,6 +28,7 @@ public sealed partial class MainWindow : Window
 
     private bool _syncingNavigationSelection;
     private bool _showDownload = true;
+    private bool _loadingDirectories;
     internal Page? CurrentPage => NavFrame.Content as Page;
     internal FrameworkElement SmokeCaptureRoot => RootGrid;
     internal void SetNavigationPaneForSmoke(bool open) => NavView.IsPaneOpen = open;
@@ -47,9 +50,73 @@ public sealed partial class MainWindow : Window
         RootGrid.ActualThemeChanged += (_, _) => ApplyTitleBarButtonColors();
         ApplySavedAppearance();
         ApplySavedFeatureVisibility();
+        RefreshGameDirectories();
         DownloadTaskManager.Current.StateChanged += DownloadTasksStateChanged;
         UpdateGlobalDownloadTaskEntry();
         NavFrame.Navigate(typeof(HomePage));
+    }
+
+    private void RefreshGameDirectories()
+    {
+        _loadingDirectories = true;
+        try
+        {
+            var settings = new AppSettings();
+            settings.LoadConfig(persistChanges: false);
+            var directories = GameDirectoryCatalog.Read(settings.Config);
+            var current = settings.Config.Get("GAME", "directory", AppConstants.DefaultGameDirectory);
+            ActiveGameDirectoryBox.ItemsSource = directories;
+            ActiveGameDirectoryBox.SelectedItem = directories.FirstOrDefault(item => GameDirectoryCatalog.SamePath(item.Path, current));
+            ToolTipService.SetToolTip(ActiveGameDirectoryBox, current);
+        }
+        finally { _loadingDirectories = false; }
+    }
+
+    public void OnGameDirectoryChanged()
+    {
+        RefreshGameDirectories();
+        // Back navigation must not restore controls bound to the previous directory.
+        NavFrame.BackStack.Clear();
+        NavFrame.ForwardStack.Clear();
+    }
+
+    private void ManageGameDirectories(object sender, RoutedEventArgs e) => NavigateToTag("settings");
+
+    private async void ActiveGameDirectoryChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingDirectories || ActiveGameDirectoryBox.SelectedItem is not GameDirectoryEntry directory) return;
+        try
+        {
+            if (CurrentPage is LaunchPage { IsLaunching: true } || CurrentPage is OnlinePage { IsCapsuleBusy: true })
+            {
+                RefreshGameDirectories();
+                await AppDialog.Create(RootGrid, "暂时无法切换目录", "请等待当前启动或胶囊操作完成。", "确定", "").ShowAsync();
+                return;
+            }
+            var settings = new AppSettings();
+            settings.LoadConfig(persistChanges: false);
+            if (GameDirectoryCatalog.SamePath(directory.Path, settings.Config.Get("GAME", "directory", AppConstants.DefaultGameDirectory))) return;
+            GameDirectoryCatalog.Select(settings.Config, directory.Path);
+            settings.SaveConfig();
+            var pageType = NavFrame.CurrentSourcePageType ?? typeof(HomePage);
+            OnGameDirectoryChanged();
+            NavFrame.Navigate(pageType);
+            NavFrame.BackStack.Clear();
+        }
+        catch (Exception exc)
+        {
+            RefreshGameDirectories();
+            await AppDialog.Create(RootGrid, "切换目录失败", exc.Message, "确定", "").ShowAsync();
+        }
+    }
+
+    private void NavFrame_Navigated(object sender, NavigationEventArgs e)
+    {
+        var pageTag = e.SourcePageType.Name.Replace("Page", "", StringComparison.Ordinal).ToLowerInvariant();
+        SyncNavigationSelection(pageTag);
+        // Settings owns a staged directory list until the user saves the form.
+        ActiveGameDirectoryBox.IsEnabled = e.Content is not SettingsPage;
+        RefreshGameDirectories();
     }
 
     public void NavigateToTag(string tag)

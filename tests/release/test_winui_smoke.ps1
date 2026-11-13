@@ -3,10 +3,12 @@ param(
   [string]$ReportPath = (Join-Path $PSScriptRoot '../../artifacts/ci/ui-smoke.txt'),
   [ValidateRange(10, 600)][int]$TimeoutSeconds = 180,
   [switch]$Resize,
+  [switch]$GameDirectories,
   [switch]$AllowUnavailableDesktop
 )
 
 $ErrorActionPreference = 'Stop'
+if ($Resize -and $GameDirectories) { throw 'Choose either Resize or GameDirectories for one smoke run.' }
 $exe = (Resolve-Path -LiteralPath $ExecutablePath).Path
 $report = [IO.Path]::GetFullPath($ReportPath)
 [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($report)) | Out-Null
@@ -23,9 +25,16 @@ if (-not $interactive) {
   return
 }
 
-$mode = if ($Resize) { '--smoke-resize' } else { '--smoke-pages' }
-$process = Start-Process -FilePath $exe -ArgumentList @($mode, ('--smoke-report="' + $report + '"')) `
-  -WorkingDirectory (Split-Path -Parent $exe) -WindowStyle Hidden -PassThru
+$mode = if ($Resize) { '--smoke-resize' } elseif ($GameDirectories) { '--smoke-game-directories' } else { '--smoke-pages' }
+$startInfo = [Diagnostics.ProcessStartInfo]::new($exe)
+$startInfo.UseShellExecute = $false
+$startInfo.CreateNoWindow = $true
+$startInfo.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
+$startInfo.WorkingDirectory = Split-Path -Parent $exe
+$startInfo.ArgumentList.Add($mode)
+$startInfo.ArgumentList.Add('--smoke-pages')
+$startInfo.ArgumentList.Add('--smoke-report=' + $report)
+$process = [Diagnostics.Process]::Start($startInfo)
 try {
   if (-not $process.WaitForExit($TimeoutSeconds * 1000)) { throw "UI smoke timed out after $TimeoutSeconds seconds." }
   if (-not (Test-Path -LiteralPath $report)) { throw "UI smoke produced no report (exit $($process.ExitCode))." }
@@ -33,6 +42,14 @@ try {
   $lines | Write-Host
   if ($process.ExitCode -ne 0 -or @($lines | Where-Object { $_ -match '^FAIL' }).Count) {
     throw "UI smoke failed (exit $($process.ExitCode))."
+  }
+  if ($GameDirectories) {
+    foreach ($check in @('directory selection', 'running and queued tasks', 'native settings toggles', 'global task entry')) {
+      if (-not ($lines -match ('^PASS ' + [regex]::Escape($check)))) {
+        throw "Game directory smoke did not complete: $check."
+      }
+    }
+    return
   }
   foreach ($page in @('home', 'launch', 'download', 'resources', 'modpacks', 'online', 'accounts', 'settings', 'logs', 'about')) {
     $pattern = if ($Resize) { "^PASS resize $page step=" } else { "^PASS \d+x\d+ $page$" }

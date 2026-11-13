@@ -1,6 +1,7 @@
 ﻿using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Navigation;
 using Microsoft.UI.Xaml.Media;
 using System.Text.Json.Nodes;
 using McGo.Core.Capsules;
@@ -33,6 +34,8 @@ public sealed partial class OnlinePage : Page
     private bool _loadingP2PRole;
     private bool _natRunning;
     private bool _capsulePackageBusy;
+    internal bool IsCapsuleBusy => _capsulePackageBusy;
+    private string _activeGameDirectory = "";
     private int _capsuleVersionScanRequest;
     private bool? _compactLayout;
 
@@ -82,6 +85,22 @@ public sealed partial class OnlinePage : Page
         await RefreshCapsuleVersionChoicesAsync();
     }
 
+    protected override async void OnNavigatedTo(NavigationEventArgs e)
+    {
+        base.OnNavigatedTo(e);
+        await SyncGameDirectoryAsync();
+    }
+
+    private async Task SyncGameDirectoryAsync()
+    {
+        _settings.LoadConfig(persistChanges: false);
+        var directory = _settings.Config.Get("GAME", "directory", McGo.Core.App.AppConstants.DefaultGameDirectory);
+        if (_capsulePackageBusy || GameDirectoryCatalog.SamePath(directory, _activeGameDirectory)) return;
+        _activeGameDirectory = directory;
+        CapsuleGameDirBox.Text = directory;
+        await RefreshCapsuleVersionChoicesAsync();
+    }
+
     private void OnlineSectionChanged(SelectorBar sender, SelectorBarSelectionChangedEventArgs e)
     {
         var section = (sender.SelectedItem as SelectorBarItem)?.Tag?.ToString() ?? "p2p";
@@ -103,7 +122,8 @@ public sealed partial class OnlinePage : Page
         JoinPortBox.Value = ClampPort(_settings.Config.GetInt("P2P", "join_port", 25565), 25565);
         UdpEnabledBox.IsChecked = _settings.Config.GetBool("P2P", "udp_enabled", true);
         CapsuleGameDirBox.Text = _settings.Config.Get("GAME", "directory", McGo.Core.App.AppConstants.DefaultGameDirectory);
-        _versionSettings = _versionSettingsService.LoadVersionSettings();
+        _activeGameDirectory = CapsuleGameDirBox.Text;
+        _versionSettings = _versionSettingsService.LoadForGameDirectory(CapsuleGameDirBox.Text);
         _loadingCapsuleVersions = true;
         CapsuleVersionBox.ItemsSource = new[] { "正在扫描本地版本..." };
         CapsuleVersionBox.SelectedIndex = 0;
@@ -584,7 +604,7 @@ public sealed partial class OnlinePage : Page
         try
         {
             var result = await Task.Run(() => (
-                Settings: _versionSettingsService.LoadVersionSettings(),
+                Settings: _versionSettingsService.LoadForGameDirectory(gameDirectory),
                 Versions: (IReadOnlyList<string>)_launcher.GetLocalVersions(gameDirectory).ToList()));
             versionSettings = result.Settings;
             versions = result.Versions;
@@ -699,8 +719,9 @@ public sealed partial class OnlinePage : Page
             var globalIsolation = _settings.Config.GetBool("GAME", "enable_resource_isolation", true);
             var result = await Task.Run(() =>
             {
-                var imported = _capsules.ImportCapsule(capsulePath, gameDir, _versionSettings, globalIsolation: globalIsolation);
-                _versionSettingsService.SaveVersionSettings(_versionSettings);
+                var taskSettings = _versionSettingsService.LoadForGameDirectory(gameDir);
+                var imported = _capsules.ImportCapsule(capsulePath, gameDir, taskSettings, globalIsolation: globalIsolation);
+                _versionSettingsService.SaveForGameDirectory(taskSettings, gameDir);
                 return imported;
             });
             ApplyP2PInvitePayload(result.P2P);
@@ -716,6 +737,7 @@ public sealed partial class OnlinePage : Page
         finally
         {
             SetCapsulePackageBusy(false);
+            await SyncGameDirectoryAsync();
         }
     }
 
@@ -767,6 +789,7 @@ public sealed partial class OnlinePage : Page
         finally
         {
             SetCapsulePackageBusy(false);
+            await SyncGameDirectoryAsync();
         }
     }
 

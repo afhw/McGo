@@ -98,7 +98,7 @@ public sealed partial class ModpacksPage : Page
     private void LoadState()
     {
         _settings.LoadConfig();
-        _versionSettings = _versionSettingsService.LoadVersionSettings();
+        _versionSettings = _versionSettingsService.LoadForGameDirectory(GameDir());
         var versions = _launcher.GetLocalVersions(GameDir()).ToList();
         PackVersionBox.ItemsSource = versions;
         if (versions.Count > 0)
@@ -179,10 +179,11 @@ public sealed partial class ModpacksPage : Page
         try
         {
             PackOutputBox.Text = "正在导入整合包...";
+            var taskSettings = _versionSettingsService.LoadForGameDirectory(gameDir);
             var result = await _modpacks.ImportModpackAsync(
                 packPath,
                 gameDir,
-                _versionSettings,
+                taskSettings,
                 targetVersion,
                 isolation,
                 message =>
@@ -192,7 +193,7 @@ public sealed partial class ModpacksPage : Page
                     DownloadTaskManager.Current.Update(record, item => item.Detail = message);
                 },
                 cancellationToken);
-            _versionSettingsService.SaveVersionSettings(_versionSettings);
+            _versionSettingsService.SaveForGameDirectory(taskSettings, gameDir);
             LoadState();
             PackVersionBox.SelectedItem = result.Version;
             ShowPackOutput(string.Join(Environment.NewLine, [
@@ -236,7 +237,7 @@ public sealed partial class ModpacksPage : Page
                 _versionSettings,
                 CapsuleTargetVersionBox.Text.Trim(),
                 _settings.Config.GetBool("GAME", "enable_resource_isolation", true));
-            _versionSettingsService.SaveVersionSettings(_versionSettings);
+            _versionSettingsService.SaveForGameDirectory(_versionSettings, GameDir());
             ApplyCapsuleP2P(result.P2P);
             _lastCapsuleFiles = result.Files;
             _lastCapsuleRuntimeDir = result.RuntimeDir;

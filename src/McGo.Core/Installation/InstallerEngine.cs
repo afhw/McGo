@@ -21,7 +21,7 @@ public sealed class InstallerEngine
     public Action<string>? StatusCallback { get; }
     public IProgress<DownloadSnapshot>? ProgressCallback { get; }
 
-    public InstallerEngine(string minecraftVersion, string mirrorSource, string gameDir, string javaPath, Action<string>? statusCallback = null, IProgress<DownloadSnapshot>? progressCallback = null, bool globalIsolation = true, InstallServices? services = null, LauncherService? launcher = null)
+    public InstallerEngine(string minecraftVersion, string mirrorSource, string gameDir, string javaPath, Action<string>? statusCallback = null, IProgress<DownloadSnapshot>? progressCallback = null, bool globalIsolation = true, InstallServices? services = null, LauncherService? launcher = null, VersionSettingsService? versionSettings = null)
     {
         MinecraftVersion = minecraftVersion;
         MirrorSource = mirrorSource;
@@ -32,12 +32,12 @@ public sealed class InstallerEngine
         GlobalIsolation = globalIsolation;
         _services = services ?? new InstallServices();
         _launcher = launcher ?? new LauncherService();
-        _versionSettings = new VersionSettingsService(_launcher);
+        _versionSettings = versionSettings ?? new VersionSettingsService(_launcher);
     }
 
     public string RuntimeDirectoryFor(string versionId)
     {
-        var settings = _versionSettings.LoadVersionSettings();
+        var settings = _versionSettings.LoadForGameDirectory(GameDir);
         return VersionSettingsService.RuntimeDirectoryForVersion(GameDir, settings, versionId, GlobalIsolation);
     }
 

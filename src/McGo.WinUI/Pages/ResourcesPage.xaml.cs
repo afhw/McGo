@@ -142,7 +142,7 @@ public sealed partial class ResourcesPage : Page
     private void LoadState()
     {
         _settings.LoadConfig();
-        _versionSettings = _versionSettingsService.LoadVersionSettings();
+        _versionSettings = _versionSettingsService.LoadForGameDirectory(_settings.Config.Get("GAME", "directory", AppConstants.DefaultGameDirectory));
         _resourceMarket.ModrinthApiBase = _settings.Config.Get("DOWNLOAD", "modrinth_api_base", "");
         if (string.IsNullOrWhiteSpace(_resourceMarket.ModrinthApiBase))
         {

@@ -111,27 +111,41 @@
                 </NavigationViewItem>
             </NavigationView.FooterMenuItems>
 
-            <Frame x:Name="NavFrame" />
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <Grid Padding="16,8" ColumnSpacing="8" Background="{ThemeResource LayerFillColorDefaultBrush}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <ComboBox x:Name="ActiveGameDirectoryBox" MinWidth="0" MaxWidth="440"
+                              HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                              DisplayMemberPath="Name" AutomationProperties.Name="当前游戏目录"
+                              SelectionChanged="ActiveGameDirectoryChanged">
+                        <ComboBox.Header><TextBlock Text="游戏目录" /></ComboBox.Header>
+                    </ComboBox>
+                    <Button Grid.Column="1" VerticalAlignment="Bottom" Width="36" Height="34" Padding="0"
+                            Click="ManageGameDirectories" ToolTipService.ToolTip="管理游戏目录"
+                            AutomationProperties.Name="管理游戏目录">
+                        <SymbolIcon Symbol="Folder" />
+                    </Button>
+                    <Button x:Name="GlobalDownloadTaskButton" Grid.Column="2" MinWidth="0" Height="34"
+                            VerticalAlignment="Bottom" Click="OpenGlobalDownloadTasks"
+                            Style="{StaticResource McgoSecondaryButtonStyle}"
+                            ToolTipService.ToolTip="打开全局下载任务" Visibility="Collapsed">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <SymbolIcon Symbol="Download" />
+                            <TextBlock x:Name="GlobalDownloadTaskText" MaxWidth="150" VerticalAlignment="Center"
+                                       Text="下载任务" TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                    </Button>
+                </Grid>
+                <Frame x:Name="NavFrame" Grid.Row="1" Navigated="NavFrame_Navigated" />
+            </Grid>
         </NavigationView>
-
-        <Button
-            x:Name="GlobalDownloadTaskButton"
-            Grid.Row="1"
-            MinWidth="150"
-            Height="38"
-            Margin="0,0,24,18"
-            HorizontalAlignment="Right"
-            VerticalAlignment="Bottom"
-            Canvas.ZIndex="20"
-            Click="OpenGlobalDownloadTasks"
-            CornerRadius="19"
-            Style="{StaticResource McgoPrimaryButtonStyle}"
-            ToolTipService.ToolTip="打开全局下载任务"
-            Visibility="Collapsed">
-            <StackPanel Orientation="Horizontal" Spacing="8">
-                <SymbolIcon Symbol="Download" />
-                <TextBlock x:Name="GlobalDownloadTaskText" VerticalAlignment="Center" Text="下载任务" />
-            </StackPanel>
-        </Button>
     </Grid>
 </Window>

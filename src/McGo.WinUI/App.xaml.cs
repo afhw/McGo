@@ -47,7 +47,8 @@ public partial class App : Application
         var smokeLaunchPerformance = commandLine.Contains("--smoke-launch-performance", StringComparer.OrdinalIgnoreCase);
         var smokeJavaSelection = commandLine.Contains("--smoke-java-selection", StringComparer.OrdinalIgnoreCase);
         var smokeResize = commandLine.Contains("--smoke-resize", StringComparer.OrdinalIgnoreCase);
-        var smokePages = smokeResize || smokeJavaSelection || smokeLaunchPerformance || commandLine.Contains("--smoke-pages", StringComparer.OrdinalIgnoreCase);
+        var smokeGameDirectories = commandLine.Contains("--smoke-game-directories", StringComparer.OrdinalIgnoreCase);
+        var smokePages = smokeGameDirectories || smokeResize || smokeJavaSelection || smokeLaunchPerformance || commandLine.Contains("--smoke-pages", StringComparer.OrdinalIgnoreCase);
         string? smokeJavaPath = null;
         if (smokePages)
         {
@@ -123,6 +124,11 @@ public partial class App : Application
 
         if (smokePages)
         {
+            if (smokeGameDirectories)
+            {
+                _ = RunGameDirectorySmokeAsync((MainWindow)_window);
+                return;
+            }
             if (smokeResize)
             {
                 _ = RunResizeSmokeAsync((MainWindow)_window);
@@ -158,6 +164,33 @@ public partial class App : Application
         }
 
         MusicPlaybackService.ApplySavedSettings();
+    }
+
+    private static async Task RunGameDirectorySmokeAsync(MainWindow window)
+    {
+        var results = new List<string>();
+        var failed = false;
+        try
+        {
+            var size = FitToScreen(window, new Windows.Graphics.SizeInt32(820, 720));
+            ResizeToClientSize(window, size);
+            await WaitForLayoutAsync(window, size);
+            await window.RunGameDirectorySmokeChecksAsync();
+            results.Add("PASS directory selection refreshes launch, cached downloads, resources and cached online pages");
+            results.Add("PASS running and queued tasks retain their original directories");
+            results.Add("PASS native settings toggles and staged directory management");
+            results.Add("PASS global task entry does not cover settings save button");
+            if (!string.IsNullOrWhiteSpace(_smokeScreenshotDirectory))
+                await CaptureSmokeScreenshotAsync(window, size, "directories-settings");
+        }
+        catch (Exception exc)
+        {
+            failed = true;
+            results.Add("FAIL game directories: " + exc);
+        }
+        WriteSmokeReport(results);
+        CleanupSmokeWorkingDirectory();
+        Environment.Exit(failed ? 1 : 0);
     }
 
     private static async Task RunJavaSelectionSmokeAsync(MainWindow window)

@@ -21,18 +21,20 @@ public sealed partial class SettingsPage : Page
     private readonly AppSettings _settings = new();
     private readonly HomeContentService _homeContent = new();
     private readonly UpdaterService _updater = new();
+    private IniDocument _directoryDraft = new();
+    private string _editingDirectoryPath = "";
+    private bool _loadingDirectories;
     private JsonObject? _lastUpdateManifest;
     private string? _lastUpdateManifestUrl;
     private string? _lastUpdatePath;
     private bool _loadingJavaCandidates;
-    private bool _loadingSettings;
+    private bool _loadingSettings = true;
     private int _javaScanRequest;
 
     public SettingsPage()
     {
         InitializeComponent();
         SettingsSectionBar.SelectedItem = SettingsSectionBar.Items[0];
-        _loadingSettings = true;
         LoadSettings();
         _loadingSettings = false;
         ApplyAdvancedVisibility();
@@ -116,47 +118,138 @@ public sealed partial class SettingsPage : Page
 
     internal void RunSmokeChecks()
     {
-        var automatic = AutoJavaCheckBox.IsChecked;
-        AutoJavaCheckBox.IsChecked = true;
-        if (JavaPathBox.IsEnabled || JavaCandidatesBox.IsEnabled || ChooseJavaButton.IsEnabled)
-            throw new InvalidOperationException("自动 Java 模式仍允许编辑手动路径。");
-        AutoJavaCheckBox.IsChecked = false;
-        if (!JavaPathBox.IsEnabled || !JavaCandidatesBox.IsEnabled || !ChooseJavaButton.IsEnabled)
-            throw new InvalidOperationException("手动 Java 模式无法编辑路径。");
-        AutoJavaCheckBox.IsChecked = automatic;
-        var originalAdvanced = AdvancedModeCheckBox.IsChecked;
-        AdvancedModeCheckBox.IsChecked = false;
-        if (CoreThreadsBox.Visibility != Visibility.Collapsed || ModrinthApiBaseBox.Visibility != Visibility.Collapsed)
+        var automatic = AutoJavaToggleSwitch.IsOn;
+        var originalAdvanced = AdvancedModeToggleSwitch.IsOn;
+        var originalSection = SettingsSectionBar.SelectedItem;
+        var originalStatus = StatusText.Text;
+        var originalConfig = JsonSerializer.Serialize(_settings.Config.Sections);
+        var originalFile = File.Exists(_settings.ConfigPath) ? File.ReadAllText(_settings.ConfigPath) : null;
+        try
         {
-            throw new InvalidOperationException("关闭高级模式后下载调优控件仍然可见。");
-        }
+            AutoJavaToggleSwitch.IsOn = true;
+            if (JavaPathBox.IsEnabled || JavaCandidatesBox.IsEnabled || ChooseJavaButton.IsEnabled)
+                throw new InvalidOperationException("自动 Java 模式仍允许编辑手动路径。");
+            AutoJavaToggleSwitch.IsOn = false;
+            if (!JavaPathBox.IsEnabled || !JavaCandidatesBox.IsEnabled || !ChooseJavaButton.IsEnabled)
+                throw new InvalidOperationException("手动 Java 模式无法编辑路径。");
+            AdvancedModeToggleSwitch.IsOn = false;
+            if (CoreThreadsBox.Visibility != Visibility.Collapsed || ModrinthApiBaseBox.Visibility != Visibility.Collapsed)
+                throw new InvalidOperationException("关闭高级模式后下载调优控件仍然可见。");
+            AdvancedModeToggleSwitch.IsOn = true;
+            if (CoreThreadsBox.Visibility != Visibility.Visible || ModrinthApiBaseBox.Visibility != Visibility.Visible)
+                throw new InvalidOperationException("开启高级模式后下载调优控件没有显示。");
 
-        AdvancedModeCheckBox.IsChecked = true;
-        if (CoreThreadsBox.Visibility != Visibility.Visible || ModrinthApiBaseBox.Visibility != Visibility.Visible)
+            RunDirectorySmokeChecks();
+            if (JsonSerializer.Serialize(_settings.Config.Sections) != originalConfig ||
+                (File.Exists(_settings.ConfigPath) ? File.ReadAllText(_settings.ConfigPath) : null) != originalFile)
+                throw new InvalidOperationException("设置烟测修改了已保存的配置。");
+        }
+        finally
         {
-            throw new InvalidOperationException("开启高级模式后下载调优控件没有显示。");
+            AutoJavaToggleSwitch.IsOn = automatic;
+            AdvancedModeToggleSwitch.IsOn = originalAdvanced;
+            SettingsSectionBar.SelectedItem = originalSection;
+            StatusText.Text = originalStatus;
         }
+    }
 
-        AdvancedModeCheckBox.IsChecked = originalAdvanced;
+    private void RunDirectorySmokeChecks()
+    {
+        var originalDraft = _directoryDraft;
+        var originalName = GameDirectoryNameBox.Text;
+        var originalPath = GameDirectoryBox.Text;
+        var originalWidth = SettingsLayoutRoot.Width;
+        var originalSaveWidth = SettingsSaveGrid.Width;
+        var originalOffset = SettingsLayoutRoot.VerticalOffset;
+        var smokeRoot = Path.Combine(Path.GetTempPath(), "mcgo-directory-ui-" + Guid.NewGuid().ToString("N"));
+        var firstPath = Path.Combine(smokeRoot, "first");
+        var secondPath = Path.Combine(smokeRoot, new string('d', 90));
+        try
+        {
+            _directoryDraft = new IniDocument();
+            _directoryDraft.Set("GAME", "directory", firstPath);
+            GameDirectoryCatalog.Add(_directoryDraft, firstPath, "目录烟测");
+            RefreshGameDirectories();
+            StageAddedGameDirectory(secondPath);
+            if (!GameDirectoryCatalog.SamePath(GameDirectoryBox.Text, secondPath) || GameDirectoriesBox.Items.Count != 2)
+                throw new InvalidOperationException("添加目录后未选中新记录。");
+
+            GameDirectoriesBox.SelectedIndex = 0;
+            if (!GameDirectoryCatalog.SamePath(GameDirectoryBox.Text, firstPath))
+                throw new InvalidOperationException("选择已保存目录后路径未更新。");
+            GameDirectoryNameBox.Text = new string('N', 100);
+            RenameGameDirectory(RenameGameDirectoryButton, new RoutedEventArgs());
+            if ((GameDirectoriesBox.SelectedItem as GameDirectoryEntry)?.Name != GameDirectoryNameBox.Text)
+                throw new InvalidOperationException("重命名未更新目录列表。");
+
+            GameDirectoryBox.Text = Path.Combine(smokeRoot, "edited");
+            var edited = PrepareDirectoryEdits();
+            if (!GameDirectoryCatalog.SamePath(edited.Get("GAME", "directory"), GameDirectoryBox.Text) ||
+                GameDirectoryCatalog.Read(edited).Any(entry => GameDirectoryCatalog.SamePath(entry.Path, firstPath)))
+                throw new InvalidOperationException("编辑目录路径未替换所选记录。");
+            _directoryDraft = edited;
+            RefreshGameDirectories();
+            RunNarrowLayoutSmokeChecks();
+
+            RemoveGameDirectory(RemoveGameDirectoryButton, new RoutedEventArgs());
+            if (GameDirectoriesBox.Items.Count != 1 || RemoveGameDirectoryButton.IsEnabled ||
+                !GameDirectoryCatalog.SamePath(GameDirectoryBox.Text, secondPath))
+                throw new InvalidOperationException("移除目录后未选择剩余记录或未保护最后一项。");
+            RemoveGameDirectory(RemoveGameDirectoryButton, new RoutedEventArgs());
+            if (GameDirectoriesBox.Items.Count != 1 || Directory.Exists(smokeRoot))
+                throw new InvalidOperationException("目录烟测移除了最后一项或触碰了文件系统。");
+        }
+        finally
+        {
+            _directoryDraft = originalDraft;
+            RefreshGameDirectories();
+            GameDirectoryNameBox.Text = originalName;
+            GameDirectoryBox.Text = originalPath;
+            SettingsLayoutRoot.Width = originalWidth;
+            SettingsSaveGrid.Width = originalSaveWidth;
+            UpdateLayout();
+            ApplyResponsiveLayout(SettingsLayoutRoot.ActualWidth);
+            SettingsLayoutRoot.ChangeView(null, originalOffset, null, disableAnimation: true);
+        }
+    }
+
+    private void RunNarrowLayoutSmokeChecks()
+    {
+        SettingsLayoutRoot.Width = 320;
+        SettingsSaveGrid.Width = 320;
+        ApplyResponsiveLayout(320);
         foreach (var item in SettingsSectionBar.Items.OfType<SelectorBarItem>())
         {
             SettingsSectionBar.SelectedItem = item;
-            var section = item.Tag?.ToString() ?? "";
-            var visiblePanels = new[]
+            UpdateLayout();
+            var panels = new[]
             {
-                EnvironmentSettingsPanel.Visibility,
-                DownloadSettingsPanel.Visibility,
-                AppearanceSettingsPanel.Visibility,
-                MusicSettingsPanel.Visibility,
-                UpdateSettingsPanel.Visibility,
-            }.Count(value => value == Visibility.Visible);
-            if (visiblePanels != 1)
+                EnvironmentSettingsPanel, DownloadSettingsPanel, AppearanceSettingsPanel,
+                MusicSettingsPanel, UpdateSettingsPanel,
+            };
+            if (panels.Count(panel => panel.Visibility == Visibility.Visible) != 1)
+                throw new InvalidOperationException($"设置分段 {item.Tag} 没有只显示一个面板。");
+
+            var controls = item.Tag?.ToString() switch
             {
-                throw new InvalidOperationException($"设置分段 {section} 没有只显示一个面板。");
+                "environment" => new FrameworkElement[] { GameDirectoriesBox, GameDirectoryNameBox, GameDirectoryBox,
+                    AddGameDirectoryButton, RenameGameDirectoryButton, RemoveGameDirectoryButton, AutoJavaToggleSwitch },
+                "appearance" => [HomeNetworkToggleSwitch, AdvancedModeToggleSwitch, ResourceIsolationToggleSwitch, ShowDownloadToggleSwitch],
+                "music" => [MusicEnabledToggleSwitch, MusicPauseOnLaunchToggleSwitch],
+                "update" => [UpdateAutoCheckToggleSwitch],
+                _ => [],
+            };
+            foreach (var control in controls)
+            {
+                var bounds = control.TransformToVisual(SettingsLayoutRoot).TransformBounds(
+                    new Windows.Foundation.Rect(0, 0, control.ActualWidth, control.ActualHeight));
+                if (control.ActualWidth <= 0 || bounds.Left < -1 || bounds.Right > SettingsLayoutRoot.ActualWidth + 1)
+                    throw new InvalidOperationException($"窄屏设置控件溢出：{control.Name}");
             }
         }
-
-        SettingsSectionBar.SelectedItem = SettingsSectionBar.Items[0];
+        if (GameDirectoryPickerGrid.ColumnDefinitions.Count != 1 || FeatureOptionsGrid.ColumnDefinitions.Count != 1 ||
+            SettingsSaveGrid.ColumnDefinitions.Count != 1)
+            throw new InvalidOperationException("窄屏设置布局未切换为单列。");
     }
 
     internal void SelectSettingsSectionForSmoke(string section)
@@ -168,10 +261,11 @@ public sealed partial class SettingsPage : Page
 
     private void LoadSettings()
     {
-        _settings.LoadConfig();
-        GameDirectoryBox.Text = _settings.Config.Get("GAME", "directory", AppConstants.DefaultGameDirectory);
+        _settings.LoadConfig(persistChanges: false);
+        _directoryDraft = CopyDirectoryConfig(_settings.Config);
+        RefreshGameDirectories();
         JavaPathBox.Text = _settings.Config.Get("JAVA", "path", "java");
-        AutoJavaCheckBox.IsChecked = _settings.Config.GetBool("JAVA", "auto_select", true);
+        AutoJavaToggleSwitch.IsOn = _settings.Config.GetBool("JAVA", "auto_select", true);
         _loadingJavaCandidates = true;
         try
         {
@@ -189,16 +283,16 @@ public sealed partial class SettingsPage : Page
         ModrinthCdnBaseBox.Text = _settings.Config.Get("DOWNLOAD", "modrinth_cdn_base", "");
         ThemeImageBox.Text = _settings.Config.Get("UI", "theme_image", "");
         HomeContentSourceBox.Text = _settings.Config.Get("HOME", "content_source", "");
-        HomeNetworkCheckBox.IsChecked = _settings.Config.GetBool("HOME", "allow_network", false);
-        AdvancedModeCheckBox.IsChecked = _settings.Config.GetBool("UI", "advanced_mode", false);
-        ResourceIsolationCheckBox.IsChecked = _settings.Config.GetBool("GAME", "enable_resource_isolation", true);
-        ShowDownloadCheckBox.IsChecked = _settings.Config.GetBool("FEATURES", "show_download", true);
+        HomeNetworkToggleSwitch.IsOn = _settings.Config.GetBool("HOME", "allow_network", false);
+        AdvancedModeToggleSwitch.IsOn = _settings.Config.GetBool("UI", "advanced_mode", false);
+        ResourceIsolationToggleSwitch.IsOn = _settings.Config.GetBool("GAME", "enable_resource_isolation", true);
+        ShowDownloadToggleSwitch.IsOn = _settings.Config.GetBool("FEATURES", "show_download", true);
         MusicPathBox.Text = _settings.Config.Get("MUSIC", "path", "");
-        MusicEnabledBox.IsChecked = _settings.Config.GetBool("MUSIC", "enabled", false);
+        MusicEnabledToggleSwitch.IsOn = _settings.Config.GetBool("MUSIC", "enabled", false);
         MusicVolumeBox.Value = UiHelpers.ClampDouble(_settings.Config.GetInt("MUSIC", "volume", 35), 0, 100);
-        MusicPauseOnLaunchBox.IsChecked = _settings.Config.GetBool("MUSIC", "pause_on_launch", true);
+        MusicPauseOnLaunchToggleSwitch.IsOn = _settings.Config.GetBool("MUSIC", "pause_on_launch", true);
         UpdateManifestBox.Text = _settings.Config.Get("UPDATE", "manifest_url", AppConstants.DefaultUpdateManifestUrl);
-        UpdateAutoCheckBox.IsChecked = _settings.Config.GetBool("UPDATE", "auto_check", true);
+        UpdateAutoCheckToggleSwitch.IsOn = _settings.Config.GetBool("UPDATE", "auto_check", true);
         SetUpdateStatus($"当前 McGo 版本：{AppConstants.AppVersion}");
         SetComboValue(MirrorBox, _settings.Config.Get("DOWNLOAD", "mirror_source", "official"));
         SetComboValue(CacheStrategyBox, _settings.Config.Get("DOWNLOAD", "cache_strategy", "reuse"));
@@ -207,20 +301,18 @@ public sealed partial class SettingsPage : Page
 
     private void AdvancedModeChanged(object sender, RoutedEventArgs e)
     {
-        ApplyAdvancedVisibility();
         if (_loadingSettings)
         {
             return;
         }
 
-        _settings.Config.Set("UI", "advanced_mode", (AdvancedModeCheckBox.IsChecked == true).ToString());
-        _settings.SaveConfig();
-        StatusText.Text = AdvancedModeCheckBox.IsChecked == true ? "高级选项已显示。" : "高级选项已隐藏。";
+        ApplyAdvancedVisibility();
+        StatusText.Text = "高级选项显示已调整，保存全部设置后生效。";
     }
 
     private void ApplyAdvancedVisibility()
     {
-        var visibility = AdvancedModeCheckBox.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        var visibility = AdvancedModeToggleSwitch.IsOn ? Visibility.Visible : Visibility.Collapsed;
         CacheStrategyBox.Visibility = visibility;
         CoreThreadsBox.Visibility = visibility;
         AssetThreadsBox.Visibility = visibility;
@@ -232,8 +324,9 @@ public sealed partial class SettingsPage : Page
     {
         try
         {
-            SaveAllSettings();
+            SaveAllSettings(commitDirectories: true);
             ApplyAppearance();
+            ((MainWindow)App.MainWindow!).OnGameDirectoryChanged();
             StatusText.Text = "设置已保存。";
             _ = RefreshHomeContentAsync(showFeedback: false);
         }
@@ -243,13 +336,13 @@ public sealed partial class SettingsPage : Page
         }
     }
 
-    private void SaveAllSettings()
+    private void SaveAllSettings(bool commitDirectories = false)
     {
         var modrinthApiBase = NormalizeOptionalHttpBase(ModrinthApiBaseBox.Text, "Modrinth API");
         var modrinthCdnBase = NormalizeOptionalHttpBase(ModrinthCdnBaseBox.Text, "Modrinth CDN");
-        _settings.Config.Set("GAME", "directory", GameDirectoryBox.Text.Trim());
+        var directories = commitDirectories ? PrepareDirectoryEdits() : null;
         _settings.Config.Set("JAVA", "path", JavaPathBox.Text.Trim());
-        _settings.Config.Set("JAVA", "auto_select", (AutoJavaCheckBox.IsChecked == true).ToString());
+        _settings.Config.Set("JAVA", "auto_select", AutoJavaToggleSwitch.IsOn.ToString());
         _settings.Config.Set("DOWNLOAD", "max_core_threads", UiHelpers.NumberValue(CoreThreadsBox, 1, 64, 12).ToString());
         _settings.Config.Set("DOWNLOAD", "max_asset_threads", UiHelpers.NumberValue(AssetThreadsBox, 1, 96, 24).ToString());
         _settings.Config.Set("DOWNLOAD", "speed_limit_kbps", UiHelpers.NumberValue(SpeedLimitBox, 0, 1_048_576, 0).ToString());
@@ -259,15 +352,33 @@ public sealed partial class SettingsPage : Page
         _settings.Config.Set("DOWNLOAD", "modrinth_cdn_base", modrinthCdnBase);
         _settings.Config.Set("UI", "theme", ComboValue(ThemeBox, "dark"));
         _settings.Config.Set("UI", "theme_image", ThemeImageBox.Text.Trim());
-        _settings.Config.Set("UI", "advanced_mode", (AdvancedModeCheckBox.IsChecked == true).ToString());
-        _settings.Config.Set("GAME", "enable_resource_isolation", (ResourceIsolationCheckBox.IsChecked == true).ToString());
-        _settings.Config.Set("FEATURES", "show_download", (ShowDownloadCheckBox.IsChecked == true).ToString());
+        _settings.Config.Set("UI", "advanced_mode", AdvancedModeToggleSwitch.IsOn.ToString());
+        _settings.Config.Set("GAME", "enable_resource_isolation", ResourceIsolationToggleSwitch.IsOn.ToString());
+        _settings.Config.Set("FEATURES", "show_download", ShowDownloadToggleSwitch.IsOn.ToString());
         _settings.Config.Set("HOME", "content_source", HomeContentSourceBox.Text.Trim());
-        _settings.Config.Set("HOME", "allow_network", (HomeNetworkCheckBox.IsChecked == true).ToString());
+        _settings.Config.Set("HOME", "allow_network", HomeNetworkToggleSwitch.IsOn.ToString());
         SaveMusicConfig();
         _settings.Config.Set("UPDATE", "manifest_url", UpdateManifestBox.Text.Trim());
-        _settings.Config.Set("UPDATE", "auto_check", (UpdateAutoCheckBox.IsChecked == true).ToString());
-        _settings.SaveConfig();
+        _settings.Config.Set("UPDATE", "auto_check", UpdateAutoCheckToggleSwitch.IsOn.ToString());
+        var savedDirectories = CopyDirectoryConfig(_settings.Config);
+        try
+        {
+            if (directories is not null)
+                CopyDirectoryValues(directories, _settings.Config);
+            _settings.SaveConfig();
+        }
+        catch
+        {
+            // Keep a failed directory save out of unrelated music/preview saves.
+            CopyDirectoryValues(savedDirectories, _settings.Config);
+            throw;
+        }
+
+        if (directories is not null)
+        {
+            _directoryDraft = directories;
+            RefreshGameDirectories();
+        }
 
         CoreThreadsBox.Value = UiHelpers.ClampDouble(_settings.Config.GetInt("DOWNLOAD", "max_core_threads", 12), 1, 64);
         AssetThreadsBox.Value = UiHelpers.ClampDouble(_settings.Config.GetInt("DOWNLOAD", "max_asset_threads", 24), 1, 96);
@@ -278,13 +389,161 @@ public sealed partial class SettingsPage : Page
 
     private async void ChooseGameDirectory(object sender, RoutedEventArgs e)
     {
-        var picker = new FolderPicker();
-        InitializePicker(picker);
-        picker.FileTypeFilter.Add("*");
-        var folder = await picker.PickSingleFolderAsync();
-        if (folder is not null)
+        AddGameDirectoryButton.IsEnabled = false;
+        try
         {
-            GameDirectoryBox.Text = folder.Path;
+            var picker = new FolderPicker();
+            InitializePicker(picker);
+            picker.FileTypeFilter.Add("*");
+            var folder = await picker.PickSingleFolderAsync();
+            if (folder is null) return;
+
+            StageAddedGameDirectory(folder.Path);
+            StatusText.Text = "目录已添加并选中，尚未保存。";
+        }
+        catch (Exception exc)
+        {
+            StatusText.Text = "添加目录失败：" + exc.Message;
+        }
+        finally
+        {
+            AddGameDirectoryButton.IsEnabled = true;
+        }
+    }
+
+    private static IniDocument CopyDirectoryConfig(IniDocument source)
+    {
+        var copy = new IniDocument();
+        CopyDirectoryValues(source, copy);
+        return copy;
+    }
+
+    private static void CopyDirectoryValues(IniDocument source, IniDocument target)
+    {
+        target.Set("GAME", "directory", source.Get("GAME", "directory", AppConstants.DefaultGameDirectory));
+        foreach (var key in new[] { "directories", "legacy_settings_directory" })
+        {
+            if (source.Sections.TryGetValue("GAME", out var values) && values.TryGetValue(key, out var value))
+                target.Set("GAME", key, value);
+            else if (target.Sections.TryGetValue("GAME", out var targetValues))
+                targetValues.Remove(key);
+        }
+    }
+
+    private void StageAddedGameDirectory(string path)
+    {
+        var draft = PrepareDirectoryEdits();
+        var entry = GameDirectoryCatalog.Add(draft, path);
+        GameDirectoryCatalog.Select(draft, entry.Path);
+        _directoryDraft = draft;
+        RefreshGameDirectories();
+    }
+
+    private IniDocument PrepareDirectoryEdits()
+    {
+        var path = GameDirectoryBox.Text.Trim();
+        var name = GameDirectoryNameBox.Text.Trim();
+        if (path.Length == 0) throw new InvalidOperationException("请填写游戏目录路径。");
+        if (name.Length == 0) throw new InvalidOperationException("请填写目录显示名称。");
+
+        var draft = CopyDirectoryConfig(_directoryDraft);
+        var entry = GameDirectoryCatalog.Add(draft, path, name);
+        GameDirectoryCatalog.Rename(draft, entry.Path, name);
+        GameDirectoryCatalog.Select(draft, entry.Path);
+        if (_editingDirectoryPath.Length > 0 && !GameDirectoryCatalog.SamePath(_editingDirectoryPath, entry.Path))
+            GameDirectoryCatalog.Remove(draft, _editingDirectoryPath);
+        return draft;
+    }
+
+    private void RefreshGameDirectories()
+    {
+        _loadingDirectories = true;
+        try
+        {
+            var entries = GameDirectoryCatalog.Read(_directoryDraft);
+            var current = _directoryDraft.Get("GAME", "directory", AppConstants.DefaultGameDirectory);
+            var selected = entries.FirstOrDefault(entry => GameDirectoryCatalog.SamePath(entry.Path, current)) ?? entries[0];
+            GameDirectoriesBox.ItemsSource = entries;
+            GameDirectoriesBox.SelectedItem = selected;
+            _editingDirectoryPath = selected.Path;
+            GameDirectoryNameBox.Text = selected.Name;
+            GameDirectoryBox.Text = selected.Path;
+            RemoveGameDirectoryButton.IsEnabled = entries.Count > 1;
+        }
+        finally
+        {
+            _loadingDirectories = false;
+        }
+    }
+
+    private void GameDirectorySelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingSettings || _loadingDirectories || GameDirectoriesBox.SelectedItem is not GameDirectoryEntry selected)
+            return;
+
+        try
+        {
+            var draft = PrepareDirectoryEdits();
+            GameDirectoryCatalog.Select(draft, selected.Path);
+            _directoryDraft = draft;
+            RefreshGameDirectories();
+            StatusText.Text = "目录选择已修改，尚未保存；保存全部设置后切换。";
+        }
+        catch (Exception exc)
+        {
+            _loadingDirectories = true;
+            try
+            {
+                GameDirectoriesBox.SelectedItem = GameDirectoriesBox.Items.OfType<GameDirectoryEntry>()
+                    .FirstOrDefault(entry => GameDirectoryCatalog.SamePath(entry.Path, _editingDirectoryPath));
+            }
+            finally
+            {
+                _loadingDirectories = false;
+            }
+            StatusText.Text = "选择目录失败：" + exc.Message;
+        }
+    }
+
+    private void GameDirectoryDetailsChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_loadingSettings && !_loadingDirectories)
+            StatusText.Text = "目录信息已修改，尚未保存。";
+    }
+
+    private void RenameGameDirectory(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var name = GameDirectoryNameBox.Text.Trim();
+            if (name.Length == 0) throw new InvalidOperationException("请填写目录显示名称。");
+            var draft = CopyDirectoryConfig(_directoryDraft);
+            GameDirectoryCatalog.Rename(draft, _editingDirectoryPath, name);
+            var editedPath = GameDirectoryBox.Text;
+            _directoryDraft = draft;
+            RefreshGameDirectories();
+            GameDirectoryBox.Text = editedPath;
+            StatusText.Text = "目录名称已修改，尚未保存。";
+        }
+        catch (Exception exc)
+        {
+            StatusText.Text = "重命名目录失败：" + exc.Message;
+        }
+    }
+
+    private void RemoveGameDirectory(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var draft = CopyDirectoryConfig(_directoryDraft);
+            GameDirectoryCatalog.Remove(draft, _editingDirectoryPath);
+            _directoryDraft = draft;
+            RefreshGameDirectories();
+            StatusText.Text = "目录记录已移除，尚未保存；不会删除文件。";
+        }
+        catch (Exception exc)
+        {
+            StatusText.Text = "移除目录失败：" + exc.Message;
         }
     }
 
@@ -295,7 +554,7 @@ public sealed partial class SettingsPage : Page
 
     private void ApplyJavaMode()
     {
-        var manual = AutoJavaCheckBox.IsChecked != true;
+        var manual = !AutoJavaToggleSwitch.IsOn;
         JavaPathBox.IsEnabled = manual;
         JavaCandidatesBox.IsEnabled = manual;
         ChooseJavaButton.IsEnabled = manual;
@@ -410,7 +669,7 @@ public sealed partial class SettingsPage : Page
     {
         try
         {
-            var result = await _homeContent.LoadContentAsync(HomeContentSourceBox.Text.Trim(), HomeNetworkCheckBox.IsChecked == true);
+            var result = await _homeContent.LoadContentAsync(HomeContentSourceBox.Text.Trim(), HomeNetworkToggleSwitch.IsOn);
             HomePreviewBox.Text = result.Text;
             if (showFeedback)
             {
@@ -433,7 +692,7 @@ public sealed partial class SettingsPage : Page
         if (file is not null)
         {
             MusicPathBox.Text = file.Path;
-            MusicEnabledBox.IsChecked = true;
+            MusicEnabledToggleSwitch.IsOn = true;
             ApplyMusicSettings(showFeedback: true);
         }
     }
@@ -448,7 +707,7 @@ public sealed partial class SettingsPage : Page
             _settings.SaveConfig();
             var played = MusicPlaybackService.Apply(
                 MusicPathBox.Text.Trim(),
-                MusicEnabledBox.IsChecked == true,
+                MusicEnabledToggleSwitch.IsOn,
                 UiHelpers.NumberValue(MusicVolumeBox, 0, 100, 35));
             if (played)
             {
@@ -462,7 +721,7 @@ public sealed partial class SettingsPage : Page
 
             if (showFeedback)
             {
-                StatusText.Text = MusicEnabledBox.IsChecked == true ? "音乐文件不存在。" : "背景音乐已关闭。";
+                StatusText.Text = MusicEnabledToggleSwitch.IsOn ? "音乐文件不存在。" : "背景音乐已关闭。";
             }
         }
         catch (Exception exc)
@@ -477,7 +736,7 @@ public sealed partial class SettingsPage : Page
     private void StopMusic(object sender, RoutedEventArgs e)
     {
         MusicPlaybackService.Stop();
-        MusicEnabledBox.IsChecked = false;
+        MusicEnabledToggleSwitch.IsOn = false;
         SaveMusicConfig();
         _settings.SaveConfig();
         StatusText.Text = "背景音乐已停止。";
@@ -486,9 +745,9 @@ public sealed partial class SettingsPage : Page
     private void SaveMusicConfig()
     {
         _settings.Config.Set("MUSIC", "path", MusicPathBox.Text.Trim());
-        _settings.Config.Set("MUSIC", "enabled", (MusicEnabledBox.IsChecked == true).ToString());
+        _settings.Config.Set("MUSIC", "enabled", MusicEnabledToggleSwitch.IsOn.ToString());
         _settings.Config.Set("MUSIC", "volume", UiHelpers.NumberValue(MusicVolumeBox, 0, 100, 35).ToString());
-        _settings.Config.Set("MUSIC", "pause_on_launch", (MusicPauseOnLaunchBox.IsChecked == true).ToString());
+        _settings.Config.Set("MUSIC", "pause_on_launch", MusicPauseOnLaunchToggleSwitch.IsOn.ToString());
     }
 
     private async void CheckUpdates(object sender, RoutedEventArgs e)
@@ -700,7 +959,7 @@ public sealed partial class SettingsPage : Page
         if (App.MainWindow is MainWindow mainWindow)
         {
             mainWindow.ApplyAppearance(ComboValue(ThemeBox, "dark"), ThemeImageBox.Text.Trim());
-            mainWindow.ApplyFeatureVisibility(ShowDownloadCheckBox.IsChecked == true);
+            mainWindow.ApplyFeatureVisibility(ShowDownloadToggleSwitch.IsOn);
         }
     }
 

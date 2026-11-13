@@ -18,13 +18,14 @@
         <Style TargetType="NumberBox">
             <Setter Property="MinWidth" Value="0" />
         </Style>
-        <DataTemplate x:Key="SettingsCheckBoxContentTemplate">
+        <DataTemplate x:Key="SettingsToggleHeaderTemplate">
             <TextBlock Text="{Binding}" TextWrapping="Wrap" />
         </DataTemplate>
-        <Style TargetType="CheckBox">
+        <Style TargetType="ToggleSwitch">
             <Setter Property="MinWidth" Value="0" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-            <Setter Property="ContentTemplate" Value="{StaticResource SettingsCheckBoxContentTemplate}" />
+            <Setter Property="HeaderTemplate" Value="{StaticResource SettingsToggleHeaderTemplate}" />
         </Style>
     </Page.Resources>
     <Grid>
@@ -76,11 +77,42 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <TextBox x:Name="GameDirectoryBox" Header="游戏目录" />
-                        <Button Grid.Column="1" VerticalAlignment="Bottom" Click="ChooseGameDirectory" Content="选择目录" Style="{StaticResource McgoSecondaryButtonStyle}" />
+                        <ComboBox x:Name="GameDirectoriesBox" Header="保存的目录" SelectionChanged="GameDirectorySelectionChanged"
+                                  ToolTipService.ToolTip="{Binding SelectedItem.Path, ElementName=GameDirectoriesBox}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Spacing="2">
+                                        <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Text="{Binding Path}" TextTrimming="CharacterEllipsis" FontSize="12"
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Bottom">
+                            <Button x:Name="AddGameDirectoryButton" Width="36" Height="36" MinWidth="0" Padding="0"
+                                    Click="ChooseGameDirectory" ToolTipService.ToolTip="添加目录并选中（保存后生效）"
+                                    AutomationProperties.Name="添加游戏目录" Style="{StaticResource McgoSecondaryButtonStyle}">
+                                <SymbolIcon Symbol="Add" />
+                            </Button>
+                            <Button x:Name="RenameGameDirectoryButton" Width="36" Height="36" MinWidth="0" Padding="0"
+                                    Click="RenameGameDirectory" ToolTipService.ToolTip="应用显示名称（保存后生效）"
+                                    AutomationProperties.Name="重命名游戏目录" Style="{StaticResource McgoSecondaryButtonStyle}">
+                                <SymbolIcon Symbol="Rename" />
+                            </Button>
+                            <Button x:Name="RemoveGameDirectoryButton" Width="36" Height="36" MinWidth="0" Padding="0"
+                                    Click="RemoveGameDirectory" ToolTipService.ToolTip="移除目录记录，不删除文件（至少保留一项）"
+                                    AutomationProperties.Name="移除游戏目录记录" Style="{StaticResource McgoSecondaryButtonStyle}">
+                                <SymbolIcon Symbol="Remove" />
+                            </Button>
+                        </StackPanel>
                     </Grid>
-                    <CheckBox x:Name="AutoJavaCheckBox" Content="自动选择适合版本的 Java"
-                              Checked="AutoJavaChanged" Unchecked="AutoJavaChanged" />
+                    <TextBox x:Name="GameDirectoryNameBox" Header="目录显示名称" TextChanged="GameDirectoryDetailsChanged" />
+                    <TextBox x:Name="GameDirectoryBox" Header="目录路径" TextChanged="GameDirectoryDetailsChanged" />
+                    <TextBlock Text="目录变更将在保存全部设置后生效；移除仅删除记录，不删除文件。"
+                               TextWrapping="Wrap" Style="{StaticResource McgoCardSubtitleStyle}" />
+                    <ToggleSwitch x:Name="AutoJavaToggleSwitch" Header="自动选择适合版本的 Java"
+                                  Toggled="AutoJavaChanged" />
                     <Grid x:Name="JavaPathPickerGrid" ColumnSpacing="8" RowSpacing="8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
@@ -190,10 +222,10 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
-                        <CheckBox x:Name="HomeNetworkCheckBox" Content="允许联网主页" />
-                        <CheckBox x:Name="AdvancedModeCheckBox" Grid.Column="1" Checked="AdvancedModeChanged" Content="显示高级选项" Unchecked="AdvancedModeChanged" />
-                        <CheckBox x:Name="ResourceIsolationCheckBox" Grid.Row="1" Content="启用版本资源隔离" />
-                        <CheckBox x:Name="ShowDownloadCheckBox" Grid.Row="1" Grid.Column="1" Content="显示下载页" />
+                        <ToggleSwitch x:Name="HomeNetworkToggleSwitch" Header="允许联网主页" />
+                        <ToggleSwitch x:Name="AdvancedModeToggleSwitch" Grid.Column="1" Toggled="AdvancedModeChanged" Header="显示高级选项" />
+                        <ToggleSwitch x:Name="ResourceIsolationToggleSwitch" Grid.Row="1" Header="启用版本资源隔离" />
+                        <ToggleSwitch x:Name="ShowDownloadToggleSwitch" Grid.Row="1" Grid.Column="1" Header="显示下载页" />
                     </Grid>
                     <Button HorizontalAlignment="Left" Click="RefreshHomeContent" Content="刷新主页预览" Style="{StaticResource McgoSecondaryButtonStyle}" />
                     <TextBox x:Name="HomePreviewBox" MinWidth="0" MinHeight="150" Style="{StaticResource McgoOutputBoxStyle}" />
@@ -219,8 +251,8 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <CheckBox x:Name="MusicEnabledBox" Content="启用背景音乐" />
-                        <CheckBox x:Name="MusicPauseOnLaunchBox" Grid.Column="1" Content="启动游戏后暂停" />
+                        <ToggleSwitch x:Name="MusicEnabledToggleSwitch" Header="启用背景音乐" />
+                        <ToggleSwitch x:Name="MusicPauseOnLaunchToggleSwitch" Grid.Column="1" Header="启动游戏后暂停" />
                     </Grid>
                     <NumberBox x:Name="MusicVolumeBox" Header="音量 %" LargeChange="10" Maximum="100" Minimum="0" SmallChange="1" SpinButtonPlacementMode="Compact" />
                     <Grid x:Name="MusicActionsGrid" ColumnSpacing="8" RowSpacing="8" MaxWidth="360" HorizontalAlignment="Stretch">
@@ -240,7 +272,7 @@
                         <TextBlock Style="{StaticResource McgoCardTitleStyle}" Text="McGo 更新" />
                         <TextBlock Style="{StaticResource McgoCardSubtitleStyle}" Text="检查更新清单，下载并应用新版本。" />
                     </StackPanel>
-                    <CheckBox x:Name="UpdateAutoCheckBox" Content="启动时自动检查更新" />
+                    <ToggleSwitch x:Name="UpdateAutoCheckToggleSwitch" Header="启动时自动检查更新" />
                     <TextBlock x:Name="UpdateStatusText" Style="{StaticResource McgoCardSubtitleStyle}" TextWrapping="Wrap" />
                     <ProgressBar x:Name="UpdateProgressBar" Height="6" Maximum="100" Minimum="0" />
                     <Grid x:Name="UpdateActionsGrid" ColumnSpacing="8" RowSpacing="8" MaxWidth="540" HorizontalAlignment="Stretch">

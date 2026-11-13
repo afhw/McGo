@@ -93,6 +93,7 @@ public sealed partial class LaunchPage : Page
     private bool _wideLayout;
     private bool _unloaded;
     private CancellationTokenSource? _launchCancellation;
+    internal bool IsLaunching => _launchCancellation is not null;
     private int _javaEnvironmentRequest;
     private int _javaSelectionRequest;
     private Task<IReadOnlyList<string>>? _javaCandidatesTask;
@@ -135,7 +136,7 @@ public sealed partial class LaunchPage : Page
             var state = await Task.Run(() =>
             {
                 _settings.LoadConfig(persistChanges: false);
-                return (Versions: _versionSettingsService.LoadVersionSettings(), Accounts: _settings.LoadAccounts(persistChanges: false));
+                return (Versions: _versionSettingsService.LoadForGameDirectory(_settings.Config.Get("GAME", "directory", AppConstants.DefaultGameDirectory)), Accounts: _settings.LoadAccounts(persistChanges: false));
             });
             if (_unloaded)
             {
@@ -183,7 +184,7 @@ public sealed partial class LaunchPage : Page
         _resourceMarket.ModrinthCdnBase = _settings.Config.Get("DOWNLOAD", "modrinth_cdn_base", "");
         GameDirectoryBox.Text = _settings.Config.Get("GAME", "directory", AppConstants.DefaultGameDirectory);
         JavaPathBox.Text = _settings.Config.Get("JAVA", "path", "java");
-        AutoJavaCheckBox.IsChecked = _settings.Config.GetBool("JAVA", "auto_select", true);
+        AutoJavaCheckBox.IsOn = _settings.Config.GetBool("JAVA", "auto_select", true);
         UpdateJavaModeControls();
         MemorySlider.Value = UiHelpers.ClampDouble(AppSettings.RecommendedMemoryMb(), 1024, 65536);
         UpdateMemoryControls();
@@ -374,7 +375,7 @@ public sealed partial class LaunchPage : Page
         RefreshVersionMods();
         UpdateLaunchStatus("已选择版本，等待启动", 0, "当前步骤：等待启动");
         _loadingVersion = false;
-        if (AutoJavaCheckBox.IsChecked == true)
+        if (AutoJavaCheckBox.IsOn)
         {
             _javaSelectionTask = SelectJavaForVersionAsync();
         }
@@ -383,10 +384,9 @@ public sealed partial class LaunchPage : Page
 
     private async void SaveSettings(object sender, RoutedEventArgs e)
     {
-        _settings.Config.Set("GAME", "directory", GameDirectoryBox.Text.Trim());
         _settings.Config.Set("USER", "username", SelectedAccountName() ?? "");
         _settings.Config.Set("JAVA", "path", JavaPathBox.Text.Trim());
-        _settings.Config.Set("JAVA", "auto_select", AutoJavaCheckBox.IsChecked == true ? "True" : "False");
+        _settings.Config.Set("JAVA", "auto_select", AutoJavaCheckBox.IsOn ? "True" : "False");
         _settings.SaveConfig();
         await RefreshVersionListAsync();
         await RefreshJavaEnvironmentAsync(JavaPathBox.Text, showFeedback: false);
@@ -440,7 +440,7 @@ public sealed partial class LaunchPage : Page
             }
 
             SetJavaCandidates(candidates, javaPath);
-            if (AutoJavaCheckBox.IsChecked == true && SelectedVersionId is not null)
+            if (AutoJavaCheckBox.IsOn && SelectedVersionId is not null)
             {
                 _javaSelectionTask = SelectJavaForVersionAsync();
                 await _javaSelectionTask;
@@ -449,7 +449,7 @@ public sealed partial class LaunchPage : Page
             {
                 var major = await ProbeJavaAsync(javaPath);
                 if (request == _javaEnvironmentRequest && SamePathOrText(javaPath, JavaPathBox.Text.Trim())
-                    && (AutoJavaCheckBox.IsChecked != true || SelectedVersionId is null))
+                    && (!AutoJavaCheckBox.IsOn || SelectedVersionId is null))
                 {
                     UpdateJavaVersionStatus(javaPath, major);
                 }
@@ -499,7 +499,7 @@ public sealed partial class LaunchPage : Page
 
     private void UpdateJavaModeControls()
     {
-        var automatic = AutoJavaCheckBox.IsChecked == true;
+        var automatic = AutoJavaCheckBox.IsOn;
         JavaPathBox.IsEnabled = !automatic;
         JavaCandidatesBox.IsEnabled = !automatic;
     }
@@ -510,7 +510,7 @@ public sealed partial class LaunchPage : Page
         ++_javaSelectionRequest;
         ++_javaEnvironmentRequest;
         UpdateJavaModeControls();
-        if (AutoJavaCheckBox.IsChecked == true)
+        if (AutoJavaCheckBox.IsOn)
         {
             _javaCandidatesTask = null;
             _javaSelectionTask = SelectJavaForVersionAsync();
@@ -529,7 +529,7 @@ public sealed partial class LaunchPage : Page
         var directory = GameDirectoryBox.Text.Trim();
         var required = versionId is null ? 0 : KnownVersion(versionId)?.RequiredJava ?? 0;
         bool IsCurrent() => !_unloaded && request == _javaSelectionRequest
-            && AutoJavaCheckBox.IsChecked == true && SelectedVersionId == versionId
+            && AutoJavaCheckBox.IsOn && SelectedVersionId == versionId
             && SamePathOrText(directory, GameDirectoryBox.Text.Trim());
         if (required <= 0 || !IsCurrent())
         {
@@ -634,7 +634,7 @@ public sealed partial class LaunchPage : Page
         entry["icon"] = UiHelpers.ComboText(VersionIconBox, "自动");
         entry["runtime_directory"] = RuntimeDirectoryBox.Text.Trim();
         entry["mods_directory"] = CustomModsDirectoryBox.Text.Trim();
-        _versionSettingsService.SaveVersionSettings(_versionSettings);
+        _versionSettingsService.SaveForGameDirectory(_versionSettings, GameDirectoryBox.Text.Trim());
         await RefreshVersionListAsync();
         UpdateVersionSummary(versionId);
         UpdateLaunchStatus("版本设置已保存。", 0, "当前步骤：保存设置");
@@ -643,7 +643,7 @@ public sealed partial class LaunchPage : Page
 
     private async void CheckJavaRuntime(object sender, RoutedEventArgs e)
     {
-        if (AutoJavaCheckBox.IsChecked == true && SelectedVersionId is not null)
+        if (AutoJavaCheckBox.IsOn && SelectedVersionId is not null)
         {
             _javaSelectionTask = SelectJavaForVersionAsync();
             await _javaSelectionTask;
@@ -964,7 +964,7 @@ public sealed partial class LaunchPage : Page
 
     private async Task<bool> PrepareJavaForLaunchAsync(CancellationToken cancellationToken = default)
     {
-        if (AutoJavaCheckBox.IsChecked != true) return true;
+        if (!AutoJavaCheckBox.IsOn) return true;
         _javaSelectionTask = SelectJavaForVersionAsync();
         if (await _javaSelectionTask.WaitAsync(cancellationToken)) return true;
         if (!_unloaded)
@@ -1346,7 +1346,7 @@ public sealed partial class LaunchPage : Page
         var versions = _localVersions.Values.Select(v => new VersionListItem(v.VersionId, v.DetectedType, null, false)).ToList();
         VersionsList.ItemsSource = versions;
         JavaPathBox.Text = paths[0];
-        AutoJavaCheckBox.IsChecked = true;
+        AutoJavaCheckBox.IsOn = true;
         foreach (var required in new[] { 8, 17, 21 })
         {
             VersionsList.SelectedItem = versions.Single(v => v.VersionId == $"smoke-{required}");
@@ -1372,7 +1372,7 @@ public sealed partial class LaunchPage : Page
         if (await _javaSelectionTask || !JavaVersionText.Text.Contains("99"))
             throw new InvalidOperationException("Missing Java was not reported.");
 
-        AutoJavaCheckBox.IsChecked = false;
+        AutoJavaCheckBox.IsOn = false;
         JavaPathBox.Text = paths[0];
         VersionsList.SelectedItem = versions.Single(v => v.VersionId == "smoke-8");
         if (JavaPathBox.Text != paths[0] || !JavaPathBox.IsEnabled || !JavaCandidatesBox.IsEnabled)
@@ -1454,7 +1454,7 @@ public sealed partial class LaunchPage : Page
         await File.WriteAllTextAsync(Path.Combine(versionDir, "smoke-forge.json"),
             "{\"id\":\"smoke-forge\",\"mainClass\":\"net.minecraftforge.Main\",\"javaVersion\":{\"majorVersion\":8},\"libraries\":[]}");
         GameDirectoryBox.Text = gameDir;
-        AutoJavaCheckBox.IsChecked = false;
+        AutoJavaCheckBox.IsOn = false;
         JavaPathBox.Text = Path.Combine(gameDir, "no-game-should-start.exe");
         _launchPreflight = new LaunchPreflightService(javaMajorVersionProvider: _ => 8);
         await RefreshVersionListAsync();
@@ -1592,7 +1592,7 @@ public sealed partial class LaunchPage : Page
         {
             var result = VersionManagementService.DeleteVersion(GameDirectoryBox.Text.Trim(), versionId);
             _versionSettings.Remove(versionId);
-            _versionSettingsService.SaveVersionSettings(_versionSettings);
+            _versionSettingsService.SaveForGameDirectory(_versionSettings, GameDirectoryBox.Text.Trim());
             await RefreshVersionListAsync();
             UpdateLaunchStatus("版本已删除。", 0, "当前步骤：删除版本");
             OutputBox.Text = $"版本已删除：{result.DeletedPath}";

@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using System.Diagnostics;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Navigation;
 using McGo.Core.App;
 using McGo.Core.Configuration;
 using McGo.Core.Downloads;
@@ -52,7 +53,7 @@ public sealed partial class DownloadPage : Page
     /// 而且规则层已经覆盖了「确定不支持」的硬事实。
     /// </summary>
     private static bool IsSmokeMode
-        => Environment.GetCommandLineArgs().Contains("--smoke-pages", StringComparer.OrdinalIgnoreCase);
+        => Environment.GetCommandLineArgs().Any(argument => argument is "--smoke-pages" or "--smoke-game-directories");
 
     private static readonly IReadOnlyDictionary<string, DownloadPreset> DownloadPresets = new Dictionary<string, DownloadPreset>
     {
@@ -83,6 +84,23 @@ public sealed partial class DownloadPage : Page
         Loaded -= DownloadPage_Loaded;
         await RefreshLocalInstallTargetsAsync();
         await AutoLoadRemoteVersionsAsync();
+    }
+
+    protected override async void OnNavigatedTo(NavigationEventArgs e)
+    {
+        base.OnNavigatedTo(e);
+        _settings.LoadConfig(persistChanges: false);
+        var directory = _settings.Config.Get("GAME", "directory", AppConstants.DefaultGameDirectory);
+        if (GameDirectoryCatalog.SamePath(directory, GameDirectoryBox.Text)) return;
+        ++_localVersionScanRequest;
+        ++_loaderProbeRequest;
+        GameDirectoryBox.Text = directory;
+        _localInstallVersions = [];
+        _loaderSupportSignatures.Clear();
+        ResetAddonInstallVersionChoices("点击刷新安装器版本");
+        UpdateDownloadButtonState();
+        UpdateSettingsSummary();
+        await RefreshLocalInstallTargetsAsync();
     }
 
     /// <summary>
@@ -909,7 +927,6 @@ public sealed partial class DownloadPage : Page
             return;
         }
 
-        _settings.Config.Set("GAME", "directory", gameDir);
         _settings.Config.Set("JAVA", "path", javaPath);
         _settings.Config.Set("DOWNLOAD", "mirror_source", mirror);
         _settings.Config.Set("DOWNLOAD", "download_preset", UiHelpers.ComboText(DownloadPresetBox, "均衡"));
@@ -1309,6 +1326,11 @@ public sealed partial class DownloadPage : Page
         var targetVersion = InstallTargetVersionBox.SelectedItem?.ToString() ?? "";
         var gameDir = GameDirectoryBox.Text.Trim();
         var minecraftVersion = NormalizeInstallTargetVersion(gameDir, installType, targetVersion);
+        var directoryRequest = _localVersionScanRequest;
+        bool IsCurrentTarget() => directoryRequest == _localVersionScanRequest
+            && GameDirectoryCatalog.SamePath(gameDir, GameDirectoryBox.Text.Trim())
+            && targetVersion == InstallTargetVersionBox.SelectedItem?.ToString()
+            && installType == UiHelpers.ComboText(AddonInstallTypeBox, "fabric");
         if (string.IsNullOrWhiteSpace(minecraftVersion))
         {
             AppendDownload("请先同步并选择本地目标版本。");
@@ -1329,6 +1351,7 @@ public sealed partial class DownloadPage : Page
             UpdateInstallStatus($"正在刷新 {InstallTypeLabel(installType)} 安装器版本", $"目标 Minecraft：{minecraftVersion}");
             var mirror = UiHelpers.ComboText(MirrorBox, "official");
             var versions = await LoadInstallVersionsAsync(installType, minecraftVersion, mirror);
+            if (!IsCurrentTarget()) return;
             AddonInstallVersionBox.ItemsSource = new[] { "自动选择最新" }.Concat(versions).ToList();
             AddonInstallVersionBox.SelectedIndex = 0;
             UpdateInstallStatus("安装器版本已刷新", versions.Count == 0 ? "未找到可选版本，将使用自动选择" : $"已获取 {versions.Count} 个版本");
@@ -1339,6 +1362,7 @@ public sealed partial class DownloadPage : Page
         }
         catch (Exception exc)
         {
+            if (!IsCurrentTarget()) return;
             ResetAddonInstallVersionChoices("自动选择最新");
             var message = AppSettings.ConciseDownloadError(exc.Message);
             UpdateInstallStatus("刷新安装器版本失败", message);
@@ -1367,7 +1391,6 @@ public sealed partial class DownloadPage : Page
             return;
         }
 
-        _settings.Config.Set("GAME", "directory", gameDir);
         _settings.Config.Set("JAVA", "path", javaPath);
         _settings.Config.Set("DOWNLOAD", "mirror_source", UiHelpers.ComboText(MirrorBox, "official"));
         _settings.SaveConfig();

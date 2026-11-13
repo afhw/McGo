@@ -1,5 +1,7 @@
 ﻿using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using McGo.Core.App;
+using McGo.Core.Configuration;
 using McGo.Core.Storage;
 
 namespace McGo.Core.Minecraft;
@@ -8,29 +10,59 @@ public sealed class VersionSettingsService
 {
     public const string VersionSettingsFile = "version_settings.json";
     private readonly LauncherService _launcher;
+    private readonly IniDocument? _config;
+    private readonly string _legacySettingsPath;
 
-    public VersionSettingsService(LauncherService? launcher = null)
+    public VersionSettingsService(LauncherService? launcher = null, IniDocument? config = null, string legacySettingsPath = VersionSettingsFile)
     {
         _launcher = launcher ?? new LauncherService();
+        _config = config;
+        _legacySettingsPath = legacySettingsPath;
     }
 
     public JsonObject LoadVersionSettings(string path = VersionSettingsFile)
     {
-        if (File.Exists(path))
-        {
-            var node = JsonNode.Parse(File.ReadAllText(path)) as JsonObject;
-            if (node is not null)
-            {
-                node["_meta"] ??= new JsonObject();
-                return node;
-            }
-        }
-
-        return new JsonObject { ["_meta"] = new JsonObject { ["last_launched_version"] = "" } };
+        var settings = AtomicStorage.LoadRecoverable(path,
+            text => JsonNode.Parse(text) as JsonObject ?? throw new InvalidDataException("Version settings must be a JSON object."),
+            EmptySettings());
+        settings["_meta"] ??= new JsonObject();
+        return settings;
     }
 
     public void SaveVersionSettings(JsonObject settings, string path = VersionSettingsFile)
         => AtomicStorage.SaveJsonAtomic(path, settings, indented: true);
+
+    public JsonObject LoadForGameDirectory(string gameDirectory)
+    {
+        var path = SettingsPath(gameDirectory);
+        if (File.Exists(path) || File.Exists(AtomicStorage.BackupPath(path)))
+        {
+            var settings = LoadVersionSettings(path);
+            // Keep corrupt local settings from falling back to legacy settings on the next load.
+            if (!File.Exists(path)) SaveVersionSettings(settings, path);
+            return settings;
+        }
+
+        var config = _config ?? IniDocument.Load(AppConstants.ConfigFile, persistChanges: false);
+        var legacyDirectory = config.Get("GAME", "legacy_settings_directory");
+        if (string.IsNullOrWhiteSpace(legacyDirectory))
+        {
+            legacyDirectory = config.Get("GAME", "directory", AppConstants.DefaultGameDirectory);
+        }
+
+        return GameDirectoryCatalog.SamePath(gameDirectory, legacyDirectory)
+            ? LoadVersionSettings(_legacySettingsPath)
+            : EmptySettings();
+    }
+
+    public void SaveForGameDirectory(JsonObject settings, string gameDirectory)
+        => SaveVersionSettings(settings, SettingsPath(gameDirectory));
+
+    private static string SettingsPath(string gameDirectory)
+        => Path.Combine(GameDirectoryCatalog.NormalizePath(gameDirectory), ".mcgo", VersionSettingsFile);
+
+    private static JsonObject EmptySettings()
+        => new() { ["_meta"] = new JsonObject { ["last_launched_version"] = "" } };
 
     public static JsonObject VersionSettingsEntry(JsonObject settings, string versionId)
     {

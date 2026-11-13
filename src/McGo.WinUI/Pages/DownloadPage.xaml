@@ -220,7 +220,7 @@
                                 </ComboBox>
                             </StackPanel>
                         </Grid>
-                        <TextBox x:Name="GameDirectoryBox" Header="游戏目录" />
+                        <TextBox x:Name="GameDirectoryBox" Header="游戏目录" IsReadOnly="True" />
                         <TextBox x:Name="JavaPathBox" Header="Java 路径" />
 
                         <StackPanel x:Name="AdvancedDownloadSettingsPanel" Spacing="10" Visibility="Collapsed">

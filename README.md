@@ -49,6 +49,7 @@ node --test webside/src/releaseMetadata.test.js
 .\scripts\verify_release.ps1 -ArtifactPath webside/public/download/McGo-CSharp-Preview-x64-Setup.exe -ManifestPath webside/public/update-csharp.json -AppDirectory dist/app
 .\tests\release\test_winui_smoke.ps1 -ExecutablePath dist/app/McGo.WinUI.exe
 .\tests\release\test_winui_smoke.ps1 -ExecutablePath dist/app/McGo.WinUI.exe -Resize -ReportPath artifacts/ci/ui-resize.txt
+.\tests\release\test_winui_smoke.ps1 -ExecutablePath dist/app/McGo.WinUI.exe -GameDirectories -ReportPath artifacts/ci/ui-directories.txt
 ```
 
 CI 使用支持 `.slnx` 的 SDK 与 .NET 8 运行时，执行 Release x64 安装器打包、完整负载逐文件哈希校验及网站测试。UI 烟测使用实际桌面尺寸，并检查同一页面连续缩放、导航栏开合及子选项卡的控件边界；Windows runner 没有交互桌面时明确记录 SKIP，已有桌面时的启动失败、超时或页面失败均使 CI 失败，报告保留为 CI artifact。完整 UI 检查需在有交互桌面的 Windows x64 runner 上执行。
